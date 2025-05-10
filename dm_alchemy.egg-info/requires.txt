@@ -1,0 +1,17 @@
+absl-py
+dataclasses
+dm-env
+dm-env-rpc>=1.0.4
+dm-tree
+docker
+grpcio
+numpy
+scipy>=1.4.0
+portpicker
+frozendict
+
+[examples]
+pygame
+ipykernel
+matplotlib
+seaborn

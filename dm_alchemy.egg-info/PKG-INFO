@@ -1,0 +1,35 @@
+Metadata-Version: 2.1
+Name: dm-alchemy
+Version: 1.0.0
+Summary: DeepMind Alchemy environment, a meta-reinforcement learningbenchmark environment for deep RL agents.
+Author: DeepMind
+License: Apache License, Version 2.0
+Keywords: reinforcement-learning python machine learning
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Operating System :: Microsoft :: Windows
+Classifier: Operating System :: MacOS :: MacOS X
+Classifier: Programming Language :: Python :: 3.6
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Requires-Python: >=3.6.1
+License-File: LICENSE
+Requires-Dist: absl-py
+Requires-Dist: dataclasses
+Requires-Dist: dm-env
+Requires-Dist: dm-env-rpc>=1.0.4
+Requires-Dist: dm-tree
+Requires-Dist: docker
+Requires-Dist: grpcio
+Requires-Dist: numpy
+Requires-Dist: scipy>=1.4.0
+Requires-Dist: portpicker
+Requires-Dist: frozendict
+Provides-Extra: examples
+Requires-Dist: pygame; extra == "examples"
+Requires-Dist: ipykernel; extra == "examples"
+Requires-Dist: matplotlib; extra == "examples"
+Requires-Dist: seaborn; extra == "examples"

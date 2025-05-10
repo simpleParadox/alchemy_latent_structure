@@ -1,0 +1,762 @@
+{
+    "0": {
+        "graph": {
+            "Node 0([-1, -1, -1])": {
+                "current_stone_description": "{color: blue, size: small, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 1([1, -1, -1])": {
+                "current_stone_description": "{color: red, size: small, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 2([-1, 1, -1])": {
+                "current_stone_description": "{color: blue, size: large, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 3([1, 1, -1])": {
+                "current_stone_description": "{color: red, size: large, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 4([-1, -1, 1])": {
+                "current_stone_description": "{color: blue, size: small, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            },
+            "Node 5([1, -1, 1])": {
+                "current_stone_description": "{color: red, size: small, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            },
+            "Node 6([-1, 1, 1])": {
+                "current_stone_description": "{color: blue, size: large, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            },
+            "Node 7([1, 1, 1])": {
+                "current_stone_description": "{color: red, size: large, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            }
+        },
+        "is_complete": true,
+        "is_unique": true
+    },
+    "2": {
+        "graph": {
+            "Node 0([-1, -1, -1])": {
+                "current_stone_description": "{color: blue, size: large, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 1([1, -1, -1])": {
+                "current_stone_description": "{color: red, size: large, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 2([-1, 1, -1])": {
+                "current_stone_description": "{color: blue, size: small, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 3([1, 1, -1])": {
+                "current_stone_description": "{color: red, size: small, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 4([-1, -1, 1])": {
+                "current_stone_description": "{color: blue, size: large, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            },
+            "Node 5([1, -1, 1])": {
+                "current_stone_description": "{color: red, size: large, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            },
+            "Node 6([-1, 1, 1])": {
+                "current_stone_description": "{color: blue, size: small, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            },
+            "Node 7([1, 1, 1])": {
+                "current_stone_description": "{color: red, size: small, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            }
+        },
+        "is_complete": true,
+        "is_unique": true
+    },
+    "4": {
+        "graph": {
+            "Node 0([-1, -1, -1])": {
+                "current_stone_description": "{color: blue, size: large, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 1([1, -1, -1])": {
+                "current_stone_description": "{color: red, size: large, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 2([-1, 1, -1])": {
+                "current_stone_description": "{color: blue, size: small, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 3([1, 1, -1])": {
+                "current_stone_description": "{color: red, size: small, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 5,
+                        "potion_color": "CYAN",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 4([-1, -1, 1])": {
+                "current_stone_description": "{color: blue, size: large, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            },
+            "Node 5([1, -1, 1])": {
+                "current_stone_description": "{color: red, size: large, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 3,
+                        "potion_color": "YELLOW",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            },
+            "Node 6([-1, 1, 1])": {
+                "current_stone_description": "{color: blue, size: small, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 1,
+                        "potion_color": "GREEN",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            },
+            "Node 7([1, 1, 1])": {
+                "current_stone_description": "{color: red, size: small, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": 0,
+                        "potion_color": "RED",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": 2,
+                        "potion_color": "ORANGE",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": 4,
+                        "potion_color": "PINK",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(2,-1)"
+                    }
+                ]
+            }
+        },
+        "is_complete": true,
+        "is_unique": true
+    },
+    "7": {
+        "graph": {
+            "Node 0([-1, -1, -1])": {
+                "current_stone_description": "{color: blue, size: small, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 1([1, -1, -1])": {
+                "current_stone_description": "{color: red, size: small, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(1,1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 2([-1, 1, -1])": {
+                "current_stone_description": "{color: blue, size: large, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 3([1, 1, -1])": {
+                "current_stone_description": "{color: red, size: large, roundness: pointy}",
+                "transitions": [
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(2,1)"
+                    }
+                ]
+            },
+            "Node 4([-1, -1, 1])": {
+                "current_stone_description": "{color: blue, size: small, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 0([-1, -1, -1])",
+                        "potion_details": "(2,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(0,1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(1,1)"
+                    }
+                ]
+            },
+            "Node 5([1, -1, 1])": {
+                "current_stone_description": "{color: red, size: small, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 1([1, -1, -1])",
+                        "potion_details": "(2,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(0,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(1,1)"
+                    }
+                ]
+            },
+            "Node 6([-1, 1, 1])": {
+                "current_stone_description": "{color: blue, size: large, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 2([-1, 1, -1])",
+                        "potion_details": "(2,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 4([-1, -1, 1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 7([1, 1, 1])",
+                        "potion_details": "(0,1)"
+                    }
+                ]
+            },
+            "Node 7([1, 1, 1])": {
+                "current_stone_description": "{color: red, size: large, roundness: round}",
+                "transitions": [
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 3([1, 1, -1])",
+                        "potion_details": "(2,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 5([1, -1, 1])",
+                        "potion_details": "(1,-1)"
+                    },
+                    {
+                        "potion_index": -1,
+                        "potion_color": "INVALID_INDEX",
+                        "next_node_str": "Node 6([-1, 1, 1])",
+                        "potion_details": "(0,-1)"
+                    }
+                ]
+            }
+        },
+        "is_complete": true,
+        "is_unique": true
+    }
+}
