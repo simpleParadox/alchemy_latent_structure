@@ -287,11 +287,11 @@ def calculate_max_unique_samples(graph: Dict, max_steps: int) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate samples from chemistry graph")
-    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/chemistry_graph.json",
+    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/train_chemistry_graph.json",
                         help="Path to the chemistry graph JSON file")
     parser.add_argument("--output", default="chemistry_samples.json",
                         help="Output JSON file path for generated samples")
-    parser.add_argument("--samples-per-episode", type=int, default=100,
+    parser.add_argument("--samples-per-episode", type=int, default=20,
                         help="Number of samples to generate for each episode")
     parser.add_argument("--support_steps", type=int, default=3,
                         help="Minimum number of transformation steps in each sample")
@@ -301,6 +301,9 @@ def main():
                         help="Random seed for reproducibility")
     parser.add_argument("--allow-reverse-trajectories", action="store_true",
                         help="Allow trajectories that are reverses of each other (e.g., A→B and B→A)", default=False)
+    parser.add_argument("--create_val_from_train", action="store_true",
+                        help="Create a validation set from the training set", default=False)
+
     
     args = parser.parse_args()
     
@@ -319,87 +322,200 @@ def main():
     chemistry_graphs = load_chemistry_graph(args.input)
     num_episodes = len(chemistry_graphs)
     print(f"Loaded data for {num_episodes} episodes")
+
+    # Split episodes into training and validation sets if requested
+    if args.create_val_from_train:
+        # Determine the number of episodes for validation (10%)
+        num_val_episodes = max(1, int(num_episodes * 0.1))
+        num_train_episodes = num_episodes - num_val_episodes
+        
+        # Randomly select episodes for validation
+        episode_ids = list(chemistry_graphs.keys())
+        random.shuffle(episode_ids)
+        val_episode_ids = set(episode_ids[:num_val_episodes])
+        train_episode_ids = set(episode_ids[num_val_episodes:])
+        
+        # Create separate dictionaries for training and validation
+        train_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in train_episode_ids}
+        val_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in val_episode_ids}
+        
+        # Prepare the output file paths
+        base_name, ext = os.path.splitext(args.output)
+        if base_name.startswith("chemistry_samples"):
+            train_output_file = f"train_support_and_query_samples{ext}"
+            val_output_file = f"eval_support_and_query_samples{ext}"
+        else:
+            # For cases with custom output names
+            if not base_name.startswith("train_"):
+                train_output_file = f"train_{base_name}{ext}"
+            else:
+                train_output_file = output_file
+                
+            if base_name.startswith("train_"):
+                val_output_file = f"eval_{base_name[6:]}{ext}"
+            else:
+                val_output_file = f"eval_{base_name}{ext}"
+            
+        print(f"Creating separate training ({num_train_episodes} episodes) and validation ({num_val_episodes} episodes) sets")
+        print(f"Training data will be saved to: {train_output_file}")
+        print(f"Validation data will be saved to: {val_output_file}")
+    else:
+        # Use all episodes for training
+        train_graphs = chemistry_graphs
+        val_graphs = {}
+        train_output_file = output_file
     
-    # Initialize output structure
-    output_data = {
-        "metadata": {
-            "num_episodes": num_episodes,
-            "samples_requested_per_episode": args.samples_per_episode,
-            "support-steps": args.support_steps,
-            "query-steps": args.query_steps,
-            "seed": args.seed,
-            "allow_reverse_trajectories": args.allow_reverse_trajectories
-        },
-        "episodes": {}
-    }
-    
-    # Process each episode
-    total_samples = 0
-    for episode_id, episode_data in chemistry_graphs.items():
-        print(f"\nProcessing Episode {episode_id}...")
-        
-        # Extract the graph for this episode
-        graph = episode_data["graph"]
-        
-        # Estimate maximum unique samples for this episode
-        max_unique_support = calculate_max_unique_samples(graph, args.support_steps)
-        print(f"  Estimated maximum unique samples for episode {episode_id}: ~{max_unique_support}")
-        
-        if args.samples_per_episode > max_unique_support:
-            print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
-        
-        print(f"  {'Allowing' if args.allow_reverse_trajectories else 'Excluding'} reverse trajectories")
-        
-        
-        
-        support_and_query_samples = generate_support_and_query_examples(
-            graph, 
-            args.samples_per_episode,
-            args.support_steps,
-            args.query_steps,
-            args.allow_reverse_trajectories
-        )
-        
-        
-        # Store the episode samples
-        output_data["episodes"][episode_id] = {
-            "support": support_and_query_samples["support"],
-            "query": support_and_query_samples["query"],
-            "support_num_generated": support_and_query_samples["support_num_generated"],
-            "query_num_generated": support_and_query_samples["query_num_generated"],
-            "support_samples_info": support_and_query_samples["support_samples_info"],
-            "query_samples_info": support_and_query_samples["query_samples_info"]
+    # Process training episodes
+    if train_graphs:
+        # Initialize output structure for training
+        train_output_data = {
+            "metadata": {
+                "num_episodes": len(train_graphs),
+                "samples_requested_per_episode": args.samples_per_episode,
+                "support-steps": args.support_steps,
+                "query-steps": args.query_steps,
+                "seed": args.seed,
+                "allow_reverse_trajectories": args.allow_reverse_trajectories,
+                "dataset_type": "train"
+            },
+            "episodes": {}
         }
         
-        print(f"  Generated {support_and_query_samples['support_num_generated']} support samples and {support_and_query_samples['query_num_generated']} query samples")
-        # Update total samples
-        support_num_generated = support_and_query_samples["support_num_generated"]
-        query_num_generated = support_and_query_samples["query_num_generated"]
-        # Update total samples
-        total_samples += support_num_generated + query_num_generated
+        # Process each training episode
+        total_train_samples = 0
+        print("\nProcessing training episodes...")
+        for episode_id, episode_data in train_graphs.items():
+            print(f"Processing Training Episode {episode_id}...")
+            
+            # Extract the graph for this episode
+            graph = episode_data["graph"]
+            
+            # Estimate maximum unique samples for this episode
+            max_unique_support = calculate_max_unique_samples(graph, args.support_steps)
+            print(f"  Estimated maximum unique samples for episode {episode_id}: ~{max_unique_support}")
+            
+            if args.samples_per_episode > max_unique_support:
+                print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
+            
+            print(f"  {'Allowing' if args.allow_reverse_trajectories else 'Excluding'} reverse trajectories")
+            
+            support_and_query_samples = generate_support_and_query_examples(
+                graph, 
+                args.samples_per_episode,
+                args.support_steps,
+                args.query_steps,
+                args.allow_reverse_trajectories
+            )
+            
+            # Store the episode samples
+            train_output_data["episodes"][episode_id] = {
+                "support": support_and_query_samples["support"],
+                "query": support_and_query_samples["query"],
+                "support_num_generated": support_and_query_samples["support_num_generated"],
+                "query_num_generated": support_and_query_samples["query_num_generated"],
+                "support_samples_info": support_and_query_samples["support_samples_info"],
+                "query_samples_info": support_and_query_samples["query_samples_info"]
+            }
+            
+            print(f"  Generated {support_and_query_samples['support_num_generated']} support samples and {support_and_query_samples['query_num_generated']} query samples")
+            # Update total samples
+            support_num_generated = support_and_query_samples["support_num_generated"]
+            query_num_generated = support_and_query_samples["query_num_generated"]
+            total_train_samples += support_num_generated + query_num_generated
         
+        # Write training output to JSON file
+        with open(train_output_file, 'w') as f:
+            json.dump(train_output_data, f, indent=2)
+        
+        print(f"\nGenerated a total of {total_train_samples} unique training samples across {len(train_graphs)} episodes")
+        print(f"Training output saved to {train_output_file}")
     
-    # Write output to JSON file
-    with open(output_file, 'w') as f:
-        json.dump(output_data, f, indent=2)
+    # Process validation episodes if requested
+    if args.create_val_from_train and val_graphs:
+        # Initialize output structure for validation
+        val_output_data = {
+            "metadata": {
+                "num_episodes": len(val_graphs),
+                "samples_requested_per_episode": args.samples_per_episode,
+                "support-steps": args.support_steps,
+                "query-steps": args.query_steps,
+                "seed": args.seed,
+                "allow_reverse_trajectories": args.allow_reverse_trajectories,
+                "dataset_type": "val"
+            },
+            "episodes": {}
+        }
+        
+        # Process each validation episode
+        total_val_samples = 0
+        print("\nProcessing validation episodes...")
+        for episode_id, episode_data in val_graphs.items():
+            print(f"Processing Validation Episode {episode_id}...")
+            
+            # Extract the graph for this episode
+            graph = episode_data["graph"]
+            
+            # Estimate maximum unique samples for this episode
+            max_unique_support = calculate_max_unique_samples(graph, args.support_steps)
+            print(f"  Estimated maximum unique samples for episode {episode_id}: ~{max_unique_support}")
+            
+            if args.samples_per_episode > max_unique_support:
+                print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
+            
+            print(f"  {'Allowing' if args.allow_reverse_trajectories else 'Excluding'} reverse trajectories")
+            
+            support_and_query_samples = generate_support_and_query_examples(
+                graph, 
+                args.samples_per_episode,
+                args.support_steps,
+                args.query_steps,
+                args.allow_reverse_trajectories
+            )
+            
+            # Store the episode samples
+            val_output_data["episodes"][episode_id] = {
+                "support": support_and_query_samples["support"],
+                "query": support_and_query_samples["query"],
+                "support_num_generated": support_and_query_samples["support_num_generated"],
+                "query_num_generated": support_and_query_samples["query_num_generated"],
+                "support_samples_info": support_and_query_samples["support_samples_info"],
+                "query_samples_info": support_and_query_samples["query_samples_info"]
+            }
+            
+            print(f"  Generated {support_and_query_samples['support_num_generated']} support samples and {support_and_query_samples['query_num_generated']} query samples")
+            # Update total samples
+            support_num_generated = support_and_query_samples["support_num_generated"]
+            query_num_generated = support_and_query_samples["query_num_generated"]
+            total_val_samples += support_num_generated + query_num_generated
+        
+        # Write validation output to JSON file
+        with open(val_output_file, 'w') as f:
+            json.dump(val_output_data, f, indent=2)
+        
+        print(f"\nGenerated a total of {total_val_samples} unique validation samples across {len(val_graphs)} episodes")
+        print(f"Validation output saved to {val_output_file}")
     
-    print(f"\nGenerated a total of {total_samples} unique samples across {num_episodes} episodes")
-    print(f"Output saved to {output_file}")
+    # Use the appropriate output data for printing examples
+    output_data = train_output_data if args.create_val_from_train else train_output_data
     
     # Print a few example samples
     print("\nExample samples:")
     example_count = 0
     for episode_id, episode_data in output_data["episodes"].items():
-        samples = episode_data["samples"]
-        if samples:
-            for i in range(min(2, len(samples))):
-                print(f"  Episode {episode_id}, Sample {i+1}: {samples[i]}")
+        support_samples = episode_data['support']
+        query_samples = episode_data['query']
+        if support_samples:
+            for i in range(min(2, len(support_samples))):
+                print(f"  Episode {episode_id}, support sample {i+1}: {support_samples[i]}")
                 example_count += 1
                 if example_count >= 5:
                     break
-            if example_count >= 5:
-                break
-
+        if query_samples:
+            for i in range(min(2, len(query_samples))):
+                print(f"  Episode {episode_id}, query sample {i+1}: {query_samples[i]}")
+                example_count += 1
+                if example_count >= 5:
+                    break
 
 if __name__ == "__main__":
     main()
