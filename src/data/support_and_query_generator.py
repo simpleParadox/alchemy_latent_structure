@@ -10,6 +10,7 @@ import random
 import argparse
 import os
 from typing import Dict, List, Tuple, Set, Any, Union
+from tqdm import tqdm
 
 
 def load_chemistry_graph(file_path: str) -> Dict[str, Dict]:
@@ -125,7 +126,13 @@ def generate_multi_step_sample(
         for transition in node_data["transitions"]:
             next_node_id = transition["next_node_str"]
             
-            # Prevent cycles within the current path being built
+            # Explicitly prevent the path from immediately reversing to the previous node
+            # path_nodes[-1] is the current node (curr_id), path_nodes[-2] is the node before it.
+            if len(path_nodes) > 1 and next_node_id == path_nodes[-2]:
+                continue
+
+            # Prevent cycles within the current path being built (original check)
+            # This original check would also catch the immediate reversal if the explicit check above wasn't present.
             if next_node_id in path_nodes:
                 continue
             
@@ -170,7 +177,6 @@ def generate_support_and_query_examples(
     num_samples: int, 
     support_hop_length: int = 1, 
     query_hop_length: int = 1,
-    allow_reverse_trajectories: bool = False
 ) -> Dict[str, Any]: # Corrected return type hint
     """Generate a set of random samples from a single episode's chemistry graph."""
     samples = []
@@ -182,7 +188,7 @@ def generate_support_and_query_examples(
     query_generated_samples = set()  # Tracks unique sample strings for query
 
     node_ids_available = list(graph.keys())
-    random.shuffle(node_ids_available) # Shuffle to process nodes in a varied order
+    random.shuffle(node_ids_available) # Shuffle to process nodes in a varied order: NOTE: We are shuffling because we want to ensure that the samples are not biased towards any particular node.
 
     processed_nodes_count = 0 # To ensure we don't loop indefinitely if nodes are exhausted
 
@@ -195,13 +201,14 @@ def generate_support_and_query_examples(
         processed_nodes_count += 1
 
         if not graph.get(start_node_id) or not graph[start_node_id].get("transitions"):
+            print(f"Skipping node {start_node_id} as it has no transitions or is invalid.")
             continue # Skip if node is invalid or has no transitions
 
         # --- Generate Support Samples from current start_node_id ---
         if len(samples) < num_samples:
             potential_support_trajectories = []
             if support_hop_length == 1:
-                potential_support_trajectories = generate_single_step_sample(graph, start_node_id, generate_all_edges=True)
+                potential_support_trajectories = generate_single_step_sample(graph, start_node_id, generate_all_edges=True) # For this case, the reverse edge really does not matter because all the nodes are processed separately.
             else:
                 potential_support_trajectories = generate_multi_step_sample(graph, start_node_id, support_hop_length)
             
@@ -212,11 +219,11 @@ def generate_support_and_query_examples(
                     break 
                 
                 is_duplicate = s_str in generated_samples
-                if not is_duplicate and not allow_reverse_trajectories:
-                    for existing_info in samples_info: # Check against existing support samples
-                        if is_reverse_trajectory(existing_info, s_info):
-                            is_duplicate = True
-                            break
+                # if not is_duplicate:
+                #     for existing_info in samples_info: # Check against existing support samples
+                #         # if is_reverse_trajectory(existing_info, s_info):
+                #         is_duplicate = True
+                #         break
                 
                 if not is_duplicate:
                     samples.append(s_str)
@@ -238,16 +245,21 @@ def generate_support_and_query_examples(
                     break
 
                 # Check uniqueness against both support and existing query samples
-                is_dup_in_support = q_str in generated_samples
-                is_dup_in_query = q_str in query_generated_samples
-                is_duplicate = is_dup_in_support or is_dup_in_query
+                if query_hop_length == 1:
+                    is_dup_in_query = q_str in query_generated_samples
+                else:
+                    is_dup_in_support = q_str in generated_samples
+                    is_dup_in_query = q_str in query_generated_samples
+                # is_dup_in_support = q_str in generated_samples if query_hop_length == 1 else False
+                # is_dup_in_query = q_str in query_generated_samples if query_hop_length == 1 else False
+                is_duplicate = is_dup_in_support or is_dup_in_query if query_hop_length != 1 else is_dup_in_query 
 
-                if not is_duplicate and not allow_reverse_trajectories:
+                # if not is_duplicate:
                     # Check against all collected samples (support + query) for reverse
-                    for existing_info in samples_info + query_samples_info:
-                        if is_reverse_trajectory(existing_info, q_info):
-                            is_duplicate = True
-                            break
+                    # for existing_info in samples_info + query_samples_info:
+                    #     # if is_reverse_trajectory(existing_info, q_info):
+                    #     is_duplicate = True
+                    #     break
                 
                 if not is_duplicate:
                     query_samples.append(q_str)
@@ -278,7 +290,7 @@ def calculate_max_unique_samples(graph: Dict, max_steps: int) -> int:
     
     # For multi-step samples (rough estimation)
     multi_step_estimate = 0
-    for steps in range(2, max_steps + 1):
+    for steps in range(max_steps, max_steps + 1):
         # This is a simplified upper bound estimation
         multi_step_estimate += num_nodes * (max_transitions_per_node ** steps)
     
@@ -287,32 +299,24 @@ def calculate_max_unique_samples(graph: Dict, max_steps: int) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate samples from chemistry graph")
-    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/train_chemistry_graph.json",
+    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/deterministic_chemistries.json",
                         help="Path to the chemistry graph JSON file")
     parser.add_argument("--output", default="chemistry_samples.json",
                         help="Output JSON file path for generated samples")
-    parser.add_argument("--samples-per-episode", type=int, default=20,
+    parser.add_argument("--samples_per_episode", type=int, default=50,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=3,
+    parser.add_argument("--support_steps", type=int, default=1,
                         help="Minimum number of transformation steps in each sample")
-    parser.add_argument("--query_steps", type=int, default=1,
+    parser.add_argument("--query_steps", type=int, default=2,
                         help="Maximum number of transformation steps in each sample")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
-    parser.add_argument("--allow-reverse-trajectories", action="store_true",
-                        help="Allow trajectories that are reverses of each other (e.g., A→B and B→A)", default=False)
     parser.add_argument("--create_val_from_train", action="store_true",
                         help="Create a validation set from the training set", default=False)
-
     
     args = parser.parse_args()
     
-    # Modify output filename if allowing reverse trajectories
-    if args.allow_reverse_trajectories:
-        base_name, ext = os.path.splitext(args.output)
-        output_file = f"{base_name}_reverse_trajectories_included{ext}"
-    else:
-        output_file = args.output
+    output_file = args.output
     
     # Set random seed for reproducibility
     random.seed(args.seed)
@@ -339,26 +343,20 @@ def main():
         train_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in train_episode_ids}
         val_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in val_episode_ids}
         
-        # Prepare the output file paths
-        base_name, ext = os.path.splitext(args.output)
-        if base_name.startswith("chemistry_samples"):
-            train_output_file = f"train_support_and_query_samples{ext}"
-            val_output_file = f"eval_support_and_query_samples{ext}"
-        else:
-            # For cases with custom output names
-            if not base_name.startswith("train_"):
-                train_output_file = f"train_{base_name}{ext}"
-            else:
-                train_output_file = output_file
-                
-            if base_name.startswith("train_"):
-                val_output_file = f"eval_{base_name[6:]}{ext}"
-            else:
-                val_output_file = f"eval_{base_name}{ext}"
-            
+        # Output file names
+        support_hop = args.support_steps
+        query_hop = args.query_steps
+        train_output_file = os.path.splitext(output_file)[0] + "_train_" + f"shop_{support_hop}_qhop_{query_hop}.json"
+        # Validation output file
+        val_output_file = os.path.splitext(output_file)[0] + "_val_" + f"shop_{support_hop}_qhop_{query_hop}.json"
+        
+        # Change prefix based on support and query steps.
+        prefix = "compositional_" if args.support_steps <= args.query_steps else "decompositional_"
+        train_output_file, val_output_file = [os.path.join(os.path.dirname(f), prefix + os.path.basename(f)) for f in [train_output_file, val_output_file]]
+        
         print(f"Creating separate training ({num_train_episodes} episodes) and validation ({num_val_episodes} episodes) sets")
         print(f"Training data will be saved to: {train_output_file}")
-        print(f"Validation data will be saved to: {val_output_file}")
+        print(f"Validation data will be saved to: {output_file}")
     else:
         # Use all episodes for training
         train_graphs = chemistry_graphs
@@ -375,7 +373,6 @@ def main():
                 "support-steps": args.support_steps,
                 "query-steps": args.query_steps,
                 "seed": args.seed,
-                "allow_reverse_trajectories": args.allow_reverse_trajectories,
                 "dataset_type": "train"
             },
             "episodes": {}
@@ -384,8 +381,7 @@ def main():
         # Process each training episode
         total_train_samples = 0
         print("\nProcessing training episodes...")
-        for episode_id, episode_data in train_graphs.items():
-            print(f"Processing Training Episode {episode_id}...")
+        for episode_id, episode_data in tqdm(train_graphs.items(), desc="Processing Training Episodes"):
             
             # Extract the graph for this episode
             graph = episode_data["graph"]
@@ -397,14 +393,12 @@ def main():
             if args.samples_per_episode > max_unique_support:
                 print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
             
-            print(f"  {'Allowing' if args.allow_reverse_trajectories else 'Excluding'} reverse trajectories")
             
             support_and_query_samples = generate_support_and_query_examples(
                 graph, 
                 args.samples_per_episode,
                 args.support_steps,
                 args.query_steps,
-                args.allow_reverse_trajectories
             )
             
             # Store the episode samples
@@ -440,7 +434,6 @@ def main():
                 "support-steps": args.support_steps,
                 "query-steps": args.query_steps,
                 "seed": args.seed,
-                "allow_reverse_trajectories": args.allow_reverse_trajectories,
                 "dataset_type": "val"
             },
             "episodes": {}
@@ -462,14 +455,12 @@ def main():
             if args.samples_per_episode > max_unique_support:
                 print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
             
-            print(f"  {'Allowing' if args.allow_reverse_trajectories else 'Excluding'} reverse trajectories")
             
             support_and_query_samples = generate_support_and_query_examples(
                 graph, 
                 args.samples_per_episode,
                 args.support_steps,
                 args.query_steps,
-                args.allow_reverse_trajectories
             )
             
             # Store the episode samples

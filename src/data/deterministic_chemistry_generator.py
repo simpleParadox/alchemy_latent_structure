@@ -188,6 +188,12 @@ def main():
         default=1000,
         help="How often to save intermediate results (number of combinations processed)."
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Limit the number of combinations to process (0 for no limit)."
+    )
     args = parser.parse_args()
 
     print("Generating all PotionMap components...")
@@ -217,7 +223,7 @@ def main():
     combination_iterator = itertools.product(
         all_potion_maps, all_stone_maps, all_graphs_with_constraints, all_rotations
     )
-
+    
     for i, (potion_map, stone_map, graph_info, rotation) in enumerate(combination_iterator):
         current_graph = graph_info["graph"]
         constraint_str = graph_info["constraint_str"] # For logging
@@ -307,6 +313,10 @@ def main():
             with open(args.output_file, 'w') as f:
                 json.dump(generated_chemistries_data, f, indent=4)
             print(f"Saved to {args.output_file}")
+        
+        if args.limit > 0 and (i + 1) >= args.limit:
+            print(f"\nReached limit of {args.limit} combinations. Stopping early.")
+            break
 
     pbar.close()
     print(f"\nProcessed all {total_combinations} combinations.")
