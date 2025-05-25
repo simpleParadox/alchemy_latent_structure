@@ -305,9 +305,9 @@ def main():
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=50,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=1,
+    parser.add_argument("--support_steps", type=int, default=2,
                         help="Minimum number of transformation steps in each sample")
-    parser.add_argument("--query_steps", type=int, default=2,
+    parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")

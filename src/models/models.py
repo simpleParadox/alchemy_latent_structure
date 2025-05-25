@@ -105,6 +105,74 @@ class Seq2SeqTransformer(nn.Module):
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
+class StoneStateClassifier(nn.Module):
+    """
+    A Transformer-based encoder model for classifying the entire next stone state.
+    """
+    def __init__(self, num_encoder_layers: int, emb_size: int, nhead: int,
+                 src_vocab_size: int, num_classes: int,
+                 dim_feedforward: int = 512, dropout: float = 0.1,
+                 max_len: int = 5000): # Added max_len for PositionalEncoding consistency
+        super(StoneStateClassifier, self).__init__()
+        self.emb_size = emb_size
+        self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
+        # Assuming PositionalEncoding class is available in the scope
+        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_len)
+
+        encoder_layer = nn.TransformerEncoderLayer(d_model=emb_size, nhead=nhead,
+                                                   dim_feedforward=dim_feedforward, dropout=dropout,
+                                                   batch_first=True) # batch_first=True is crucial
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+
+        self.classification_head = nn.Linear(emb_size, num_classes)
+
+    def forward(self, src: torch.Tensor, src_padding_mask: torch.Tensor = None) -> torch.Tensor:
+        """
+        Forward pass for the StoneStateClassifier.
+        Args:
+            src: source sequence, shape (batch_size, src_seq_len)
+            src_padding_mask: the ByteTensor mask for src keys per batch, shape (batch_size, src_seq_len)
+                              True values indicate padding.
+        Returns:
+            Output tensor of shape (batch_size, num_classes) representing logits for each class.
+        """
+        # Embed source tokens
+        # src: (batch_size, src_seq_len)
+        src_emb = self.src_tok_emb(src) * math.sqrt(self.emb_size) # (batch_size, src_seq_len, emb_size)
+        
+        # Apply positional encoding - PositionalEncoding class expects (seq_len, batch_size, emb_size)
+        src_emb_permuted = src_emb.permute(1, 0, 2)  # (src_seq_len, batch_size, emb_size)
+        src_emb_pe = self.positional_encoding(src_emb_permuted) # (src_seq_len, batch_size, emb_size)
+        src_emb = src_emb_pe.permute(1, 0, 2)  # (batch_size, src_seq_len, emb_size)
+
+        # Pass through Transformer encoder
+        # src_key_padding_mask needs to be (batch_size, src_seq_len) where True means pad
+        transformer_output = self.transformer_encoder(src_emb, src_key_padding_mask=src_padding_mask)
+        # transformer_output: (batch_size, src_seq_len, emb_size)
+
+        # Mean pooling over the sequence length, considering padding
+        if src_padding_mask is not None:
+            # Create a mask to zero out padded tokens in transformer_output
+            # expanded_padding_mask: (batch_size, src_seq_len, 1), True for pad
+            expanded_padding_mask = src_padding_mask.unsqueeze(-1).expand_as(transformer_output)
+            masked_transformer_output = transformer_output.masked_fill(expanded_padding_mask, 0.0)
+            
+            # Sum the embeddings of non-padded tokens
+            summed_output = masked_transformer_output.sum(dim=1) # (batch_size, emb_size)
+            
+            # Count the number of non-padded tokens for each sequence
+            # actual_lengths: (batch_size, 1)
+            actual_lengths = (~src_padding_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)
+            
+            pooled_output = summed_output / actual_lengths # (batch_size, emb_size)
+        else:
+            # No padding mask provided, so perform a simple mean pool
+            pooled_output = transformer_output.mean(dim=1) # (batch_size, emb_size)
+
+        # Pass pooled output through classification head
+        logits = self.classification_head(pooled_output) # (batch_size, num_classes)
+        return logits
+
 def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_size: int, device="cpu"):
     """
     Creates a Seq2SeqTransformer model based on a configuration name.
@@ -126,6 +194,10 @@ def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_si
     # Configurations designed to be between 10M and 100M parameters
     # (assuming vocab_size around 32k)
     configs = {
+        "tiny": { # Approx. 10M params with 32k vocab
+            "num_encoder_layers": 2, "num_decoder_layers": 2, "emb_size": 128, 
+            "nhead": 4, "dim_feedforward": 256, "dropout": 0.1
+        },
         "xsmall": { 
             "num_encoder_layers": 4, "num_decoder_layers": 4, "emb_size": 256, 
             "nhead": 4, "dim_feedforward": 512, "dropout": 0.1
@@ -162,8 +234,71 @@ def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_si
     model.to(device)
     
     # You can uncomment this to check parameter counts when creating a model:
-    # total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    # print(f"Model '{config_name}' (src_vocab={src_vocab_size}, tgt_vocab={tgt_vocab_size}) on {device} has {total_params/1e6:.2f}M parameters.")
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model '{config_name}' (Seq2Seq: src_vocab={src_vocab_size}, tgt_vocab={tgt_vocab_size}) on {device} has {total_params/1e6:.2f}M parameters.")
+    
+    return model
+
+def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048):
+    """
+    Creates a StoneStateClassifier model based on a configuration name.
+    Uses similar encoder configurations as create_transformer_model.
+
+    Args:
+        config_name (str): Name of the configuration ('tiny', 'xsmall', 'small', 'medium', 'large').
+        src_vocab_size (int): Source vocabulary size (for input features/potions).
+        num_classes (int): Number of unique stone states to classify.
+        device (str): Device to move the model to ('cpu', 'cuda').
+        max_len (int): Maximum sequence length for positional encoding.
+
+    Returns:
+        StoneStateClassifier: The instantiated classification model.
+    
+    Raises:
+        ValueError: If config_name is not one of the defined configurations.
+    """
+    configs = {
+        "tiny": { 
+            "num_encoder_layers": 2, "emb_size": 128, "nhead": 4, 
+            "dim_feedforward": 256, "dropout": 0.1
+        },
+        "xsmall": { 
+            "num_encoder_layers": 4, "emb_size": 256, "nhead": 4, 
+            "dim_feedforward": 512, "dropout": 0.1
+        },
+        "small": { 
+            "num_encoder_layers": 3, "emb_size": 256, "nhead": 4, 
+            "dim_feedforward": 1024, "dropout": 0.1
+        },
+        "medium": { 
+            "num_encoder_layers": 4, "emb_size": 512, "nhead": 8, 
+            "dim_feedforward": 2048, "dropout": 0.1
+        },
+        "large": { 
+            "num_encoder_layers": 6, "emb_size": 512, "nhead": 8, 
+            "dim_feedforward": 2048, "dropout": 0.1
+        }
+    }
+
+    if config_name not in configs:
+        raise ValueError(f"Unknown configuration name: {config_name}. Choose from {list(configs.keys())}")
+
+    config = configs[config_name]
+    model = StoneStateClassifier(
+        num_encoder_layers=config["num_encoder_layers"],
+        emb_size=config["emb_size"],
+        nhead=config["nhead"],
+        src_vocab_size=src_vocab_size,
+        num_classes=num_classes,
+        dim_feedforward=config["dim_feedforward"],
+        dropout=config["dropout"],
+        max_len=max_len
+    )
+    
+    model.to(device)
+    
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model '{config_name}' (Classifier: src_vocab={src_vocab_size}, num_classes={num_classes}) on {device} has {total_params/1e6:.2f}M parameters.")
     
     return model
 
@@ -250,3 +385,26 @@ if __name__ == '__main__':
         print(f"Error during encode/decode test: {e}")
 
     print("\nModel setup and basic tests complete.")
+
+    print("\n--- Creating Classifier Models ---")
+    NUM_CLASSES = 50 # Example number of classes
+    print("\n--- Creating Small Classifier Model ---")
+    small_classifier = create_classifier_model("small", SRC_VOCAB_SIZE, NUM_CLASSES, DEVICE)
+
+    print("\n--- Creating Medium Classifier Model ---")
+    medium_classifier = create_classifier_model("medium", SRC_VOCAB_SIZE, NUM_CLASSES, DEVICE)
+
+    # Dummy input for a forward pass example with the small classifier model
+    # src_tokens from previous example: (BATCH_SIZE, SRC_SEQ_LEN)
+    # src_pad_mask from previous example: (BATCH_SIZE, SRC_SEQ_LEN)
+    print(f"\n--- Running Forward Pass (Small Classifier Model) ---")
+    print(f"src_tokens shape: {src_tokens.shape}")
+    print(f"src_pad_mask shape: {src_pad_mask.shape if src_pad_mask is not None else 'None'}")
+    
+    try:
+        classifier_output = small_classifier(src=src_tokens, src_padding_mask=src_pad_mask)
+        print(f"Classifier output shape: {classifier_output.shape}") # Expected: (BATCH_SIZE, NUM_CLASSES)
+    except Exception as e:
+        print(f"Error during classifier forward pass: {e}")
+
+    print("\nClassifier model tests complete.")

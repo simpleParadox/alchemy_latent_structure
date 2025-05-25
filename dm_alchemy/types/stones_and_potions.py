@@ -596,8 +596,7 @@ class LatentPotion:
 
 
 def latent_potion_from_index(ind: LatentPotionIndex) -> LatentPotion:
-  latent_dim, latent_dir = np.unravel_index(
-      ind, (len(_POSS_AXES), len(_POSS_DIRS)))
+  latent_dim, latent_dir = np.unravel_index(ind, (len(_POSS_AXES), len(_POSS_DIRS)))
   return LatentPotion(int(latent_dim), index_to_dir(int(latent_dir)))
 
 

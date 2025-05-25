@@ -1,1 +1,4 @@
 alchemy_env/
+*.json
+wandb/
+checkpoints/

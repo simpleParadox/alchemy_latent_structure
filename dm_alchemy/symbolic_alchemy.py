@@ -937,10 +937,10 @@ def get_symbolic_alchemy_level(
 def get_symbolic_alchemy_fixed(
     episode_items, chemistry, observe_used=True, reward_weights=None,
     end_trial_action=False, max_steps_per_trial=DEFAULT_MAX_STEPS_PER_TRIAL,
-    see_chemistries=None, generate_events=False):
+    see_chemistries=None, generate_events=True, return_chemistry=False):
   """Symbolic alchemy which generates same chemistry and items every episode."""
 
-  return SymbolicAlchemy(
+  symbolic_alchemy = SymbolicAlchemy(
       observe_used=observe_used,
       chemistry_gen=lambda: chemistry,
       reward_weights=reward_weights,
@@ -950,3 +950,8 @@ def get_symbolic_alchemy_fixed(
       max_steps_per_trial=max_steps_per_trial,
       see_chemistries=see_chemistries,
       generate_events=generate_events)
+  
+  if return_chemistry:
+    return symbolic_alchemy.reset(return_chemistry=True)
+  
+  return symbolic_alchemy.reset() 
