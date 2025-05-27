@@ -48,7 +48,7 @@ def parse_args():
                         help="Batch size for training and validation.")
     parser.add_argument("--learning_rate", type=float, default=1e-5,
                         help="Initial learning rate for AdamW optimizer.")
-    parser.add_argument("--weight_decay", type=float, default=0.01,
+    parser.add_argument("--weight_decay", type=float, default=0.00,
                         help="Weight decay for AdamW optimizer.")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility.")
@@ -64,7 +64,7 @@ def parse_args():
                         help="Weights & Biases run name (optional). Defaults to a generated name.")
     parser.add_argument("--log_interval", type=int, default=50,
                         help="Log training batch metrics every N batches.")
-    parser.add_argument("--num_workers", type=int, default=25,
+    parser.add_argument("--num_workers", type=int, default=15,
                         help="Number of workers for data preprocessing parallelization.")
     parser.add_argument("--wandb_mode", type=str, default="offline", choices=["online", "offline"],
                         help="Weights & Biases mode: 'online' for live logging, 'offline' for local logging.")
