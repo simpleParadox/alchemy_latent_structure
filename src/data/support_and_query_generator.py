@@ -9,14 +9,21 @@ import json
 import random
 import argparse
 import os
+import gzip
 from typing import Dict, List, Tuple, Set, Any, Union
 from tqdm import tqdm
 
 
 def load_chemistry_graph(file_path: str) -> Dict[str, Dict]:
-    """Load and parse the chemistry graph JSON file with multiple episodes."""
-    with open(file_path, 'r') as f:
-        return json.load(f)
+    """Load and parse the chemistry graph JSON file with multiple episodes.
+    Supports both compressed (.gz) and uncompressed JSON files.
+    """
+    if file_path.endswith('.gz'):
+        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+            return json.load(f)
+    else:
+        with open(file_path, 'r') as f:
+            return json.load(f)
 
 
 def get_stone_description(node_data: Dict) -> str:
@@ -299,13 +306,13 @@ def calculate_max_unique_samples(graph: Dict, max_steps: int) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate samples from chemistry graph")
-    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/deterministic_chemistries.json",
+    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/deterministic_chemistries_167424_80_unique.json.gz",
                         help="Path to the chemistry graph JSON file")
     parser.add_argument("--output", default="chemistry_samples.json",
                         help="Output JSON file path for generated samples")
-    parser.add_argument("--samples_per_episode", type=int, default=50,
+    parser.add_argument("--samples_per_episode", type=int, default=1000,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=2,
+    parser.add_argument("--support_steps", type=int, default=1,
                         help="Minimum number of transformation steps in each sample")
     parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
@@ -332,6 +339,8 @@ def main():
         # Determine the number of episodes for validation (10%)
         num_val_episodes = max(1, int(num_episodes * 0.1))
         num_train_episodes = num_episodes - num_val_episodes
+        
+        print(f"Creating {num_train_episodes} training episodes and {num_val_episodes} validation episodes")
         
         # Randomly select episodes for validation
         episode_ids = list(chemistry_graphs.keys())
@@ -362,6 +371,13 @@ def main():
         train_graphs = chemistry_graphs
         val_graphs = {}
         train_output_file = output_file
+        
+        # Change prefix and add hop information for single dataset case as well
+        support_hop = args.support_steps
+        query_hop = args.query_steps
+        prefix = "compositional_" if args.support_steps <= args.query_steps else "decompositional_"
+        train_output_file = os.path.splitext(output_file)[0] + f"_shop_{support_hop}_qhop_{query_hop}.json"
+        train_output_file = os.path.join(os.path.dirname(train_output_file), prefix + os.path.basename(train_output_file))
     
     # Process training episodes
     if train_graphs:
@@ -381,6 +397,7 @@ def main():
         # Process each training episode
         total_train_samples = 0
         print("\nProcessing training episodes...")
+        
         for episode_id, episode_data in tqdm(train_graphs.items(), desc="Processing Training Episodes"):
             
             # Extract the graph for this episode
@@ -388,11 +405,15 @@ def main():
             
             # Estimate maximum unique samples for this episode
             max_unique_support = calculate_max_unique_samples(graph, args.support_steps)
-            print(f"  Estimated maximum unique samples for episode {episode_id}: ~{max_unique_support}")
+            
+            # Estimate maximum unique samples for this episode
+            max_unique_query = calculate_max_unique_samples(graph, args.query_steps)
             
             if args.samples_per_episode > max_unique_support:
-                print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
+                print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique support samples (~{max_unique_support}) for episode {episode_id}.")
             
+            if args.samples_per_episode > max_unique_query:
+                print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
             
             support_and_query_samples = generate_support_and_query_examples(
                 graph, 
@@ -411,7 +432,6 @@ def main():
                 "query_samples_info": support_and_query_samples["query_samples_info"]
             }
             
-            print(f"  Generated {support_and_query_samples['support_num_generated']} support samples and {support_and_query_samples['query_num_generated']} query samples")
             # Update total samples
             support_num_generated = support_and_query_samples["support_num_generated"]
             query_num_generated = support_and_query_samples["query_num_generated"]
@@ -419,7 +439,7 @@ def main():
         
         # Write training output to JSON file
         with open(train_output_file, 'w') as f:
-            json.dump(train_output_data, f, indent=2)
+            json.dump(train_output_data, f)
         
         print(f"\nGenerated a total of {total_train_samples} unique training samples across {len(train_graphs)} episodes")
         print(f"Training output saved to {train_output_file}")
@@ -481,7 +501,7 @@ def main():
         
         # Write validation output to JSON file
         with open(val_output_file, 'w') as f:
-            json.dump(val_output_data, f, indent=2)
+            json.dump(val_output_data, f)
         
         print(f"\nGenerated a total of {total_val_samples} unique validation samples across {len(val_graphs)} episodes")
         print(f"Validation output saved to {val_output_file}")

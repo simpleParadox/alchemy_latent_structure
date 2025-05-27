@@ -1,21 +1,193 @@
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 import json
 import re
-from typing import List, Dict, Tuple, Any, Set
+from typing import List, Dict, Tuple, Any, Set, Optional
 from functools import partial
 from tqdm import tqdm
+import multiprocessing as mp
+from multiprocessing import Pool
+import random
+import numpy as np
+from collections import defaultdict
+
+
+def process_episode_worker(args):
+    """Worker function for processing a single episode. Must be at module level for multiprocessing."""
+    (episode_id, episode_content, task_type, word2idx, stone_state_to_id, 
+     special_token_ids, filter_query_from_support) = args
+    
+    if not episode_content:
+        return []
+    
+    # Unpack special token IDs
+    io_sep_token_id, item_sep_token_id, sos_token_id, eos_token_id, unk_token_id = special_token_ids
+    
+    support_examples_str = episode_content.get("support", [])
+    query_examples_str = episode_content.get("query", [])
+    processed_data = []
+    
+    for query_ex_str in query_examples_str:
+        # Filter support examples
+        filtered_support_examples_str = filter_support_examples_helper(
+            support_examples_str, query_ex_str, filter_query_from_support)
+        
+        # Tokenize query example
+        query_tokens = tokenize_single_example_str_helper(query_ex_str, word2idx, unk_token_id, io_sep_token_id)
+        _, query_input_tokens, query_output_feature_tokens, query_initial_state_str, query_output_state_str = query_tokens
+        
+        if task_type == "seq2seq":
+            # For seq2seq, use existing tokenization (features as individual tokens)
+            tokenized_support_full_for_encoder = []
+            for sup_ex_str in filtered_support_examples_str:
+                full_sup_tokens, _, _, _, _ = tokenize_single_example_str_helper(sup_ex_str, word2idx, unk_token_id, io_sep_token_id)
+                tokenized_support_full_for_encoder.append(full_sup_tokens)
+            
+            encoder_input_ids = []
+            for i, sup_tokens in enumerate(tokenized_support_full_for_encoder):
+                encoder_input_ids.extend(sup_tokens)
+                if i < len(tokenized_support_full_for_encoder) - 1:
+                    encoder_input_ids.append(item_sep_token_id)
+            
+            if tokenized_support_full_for_encoder:
+                encoder_input_ids.append(item_sep_token_id)  # Separator before query
+            encoder_input_ids.extend(query_input_tokens)
+
+            decoder_input_ids = [sos_token_id] + query_output_feature_tokens
+            decoder_target_ids = query_output_feature_tokens + [eos_token_id]
+            processed_data.append({
+                "encoder_input_ids": encoder_input_ids,
+                "decoder_input_ids": decoder_input_ids,
+                "decoder_target_ids": decoder_target_ids
+            })
+            
+        elif task_type == "classification":
+            # For classification, convert stone states to single tokens
+            tokenized_support_for_encoder = []
+            for sup_ex_str in filtered_support_examples_str:
+                # Parse the support example
+                parts = sup_ex_str.split(" -> ")
+                input_part_str = parts[0]
+                output_state_str = parts[1]
+                
+                # Extract input stone state and potions
+                first_brace_end = input_part_str.find("}")
+                input_stone_state = input_part_str[:first_brace_end+1]
+                potions_str = input_part_str[first_brace_end+1:].strip()
+                
+                # Convert input stone state to single token
+                input_state_token_id = word2idx.get(input_stone_state, unk_token_id)
+                
+                # Convert potions to tokens 
+                tokenized_potions = []
+                if potions_str:
+                    potions = potions_str.split(" ")
+                    tokenized_potions = [word2idx.get(p, unk_token_id) for p in potions]
+                
+                # Convert output stone state to single token
+                output_state_token_id = word2idx.get(output_state_str, unk_token_id)
+                
+                # Build full support example: input_state + potions + separator + output_state
+                full_sup_tokens = [input_state_token_id] + tokenized_potions + [io_sep_token_id] + [output_state_token_id]
+                tokenized_support_for_encoder.append(full_sup_tokens)
+            
+            # Process query input similarly - convert input state to single token
+            query_parts = query_ex_str.split(" -> ")
+            query_input_part_str = query_parts[0]
+            query_first_brace_end = query_input_part_str.find("}")
+            query_potions_str = query_input_part_str[query_first_brace_end+1:].strip()
+            
+            # Convert query input stone state to single token
+            query_input_state_token_id = word2idx.get(query_initial_state_str, unk_token_id)
+            
+            # Convert query potions to tokens
+            query_tokenized_potions = []
+            if query_potions_str:
+                query_potions = query_potions_str.split(" ")
+                query_tokenized_potions = [word2idx.get(p, unk_token_id) for p in query_potions]
+            
+            query_input_tokens_classification = [query_input_state_token_id] + query_tokenized_potions
+            
+            # Build encoder input
+            encoder_input_ids = []
+            for i, sup_tokens in enumerate(tokenized_support_for_encoder):
+                encoder_input_ids.extend(sup_tokens)
+                if i < len(tokenized_support_for_encoder) - 1:
+                    encoder_input_ids.append(item_sep_token_id)
+            
+            if tokenized_support_for_encoder:
+                encoder_input_ids.append(item_sep_token_id)  # Separator before query
+            encoder_input_ids.extend(query_input_tokens_classification)
+
+            target_class_id = stone_state_to_id.get(query_output_state_str, -1)
+            if target_class_id == -1:
+                continue 
+            processed_data.append({
+                "encoder_input_ids": encoder_input_ids,
+                "target_class_id": target_class_id
+            })
+    
+    return processed_data
+
+
+def filter_support_examples_helper(support_examples, query_example, filter_query_from_support):
+    """Helper function for filtering support examples."""
+    if not filter_query_from_support:
+        return support_examples
+    
+    filtered_support = []
+    for sup_ex in support_examples:
+        if sup_ex != query_example:
+            filtered_support.append(sup_ex)
+    return filtered_support
+
+
+def tokenize_single_example_str_helper(example_str, word2idx, unk_token_id, io_sep_token_id):
+    """Helper function for tokenizing a single example string."""
+    parts = example_str.split(" -> ")
+    input_part_str = parts[0]
+    output_state_str = parts[1]
+
+    first_brace_end = input_part_str.find("}")
+    initial_state_str = input_part_str[:first_brace_end+1]
+    potions_str = input_part_str[first_brace_end+1:].strip()
+
+    # Parse stone string to tokens (extract features)
+    features = re.findall(r':\s*([\w-]+)', initial_state_str)
+    tokenized_initial_state = [word2idx.get(f, unk_token_id) for f in features]
+    
+    tokenized_potions = []
+    if potions_str:
+        potions = potions_str.split(" ")
+        tokenized_potions = [word2idx.get(p, unk_token_id) for p in potions]
+
+    # Parse output stone features
+    features_output = re.findall(r':\s*([\w-]+)', output_state_str)
+    tokenized_output_feature_tokens = [word2idx.get(f, unk_token_id) for f in features_output]
+    
+    full_example_tokens = tokenized_initial_state + tokenized_potions + [io_sep_token_id] + tokenized_output_feature_tokens
+    query_input_tokens = tokenized_initial_state + tokenized_potions
+    
+    return full_example_tokens, query_input_tokens, tokenized_output_feature_tokens, initial_state_str, output_state_str
+
 
 class AlchemyDataset(Dataset):
     def __init__(self, json_file_path: str, 
-                 task_type: str = "seq2seq", # "seq2seq" or "classification"
+                 task_type: str = "classification", # "seq2seq" or "classification"
                  vocab_word2idx: Dict[str, int] = None, 
                  vocab_idx2word: Dict[int, str] = None,
                  stone_state_to_id: Dict[str, int] = None, # For classification
-                 filter_query_from_support: bool = False): # Filter query examples from support sets
+                 filter_query_from_support: bool = False, # Filter query examples from support sets
+                 num_workers: int = 4, # Number of workers for multiprocessing
+                 val_split: Optional[float] = None, # Validation split ratio (e.g., 0.2 for 20%)
+                 val_split_seed: int = 42): # Seed for reproducible splits
         
         self.task_type = task_type
         self.filter_query_from_support = filter_query_from_support # Only relevant if support hop length == query_hop_length.
+        self.num_workers = max(1, num_workers)  # Ensure at least 1 worker
+        self.val_split = val_split
+        self.val_split_seed = val_split_seed
+        
         self.PAD_TOKEN_STR = "<pad>"
         self.SOS_TOKEN_STR = "<sos>"
         self.EOS_TOKEN_STR = "<eos>"
@@ -56,7 +228,13 @@ class AlchemyDataset(Dataset):
                                          if state.startswith('{') and state.endswith('}')}
                 self.id_to_stone_state = {v: k for k, v in self.stone_state_to_id.items()}
         
-        self.data = self._load_and_preprocess_data(json_file_path)
+        self.data = self._load_and_preprocess_data(json_file_path, self.num_workers)
+        
+        # Create train/val splits if requested
+        self.train_set = None
+        self.val_set = None
+        if self.val_split is not None:
+            self._create_train_val_splits()
 
     def _parse_stone_string_to_tokens(self, stone_str: str) -> List[int]:
         features = re.findall(r':\s*([\w-]+)', stone_str) 
@@ -118,7 +296,7 @@ class AlchemyDataset(Dataset):
                 all_words.update(features_output)
         
         sorted_words = sorted(list(all_words))
-        word2idx = {word: i for i, word in enumerate(self.special_tokens + sorted_words)}
+        word2idx = {word: i for i, word in enumerate(sorted_words + self.special_tokens)}
         idx2word = {i: word for word, i in word2idx.items()}
         return word2idx, idx2word
 
@@ -159,7 +337,7 @@ class AlchemyDataset(Dataset):
         sorted_potions = sorted(list(potions))
         sorted_states = sorted(list(unique_stone_states))
         
-        all_tokens = self.special_tokens + sorted_potions + sorted_states
+        all_tokens = sorted_states + sorted_potions + self.special_tokens  # Order matters: states first. This is because later, the num_classes will be based on the stone states.
         word2idx = {token: i for i, token in enumerate(all_tokens)}
         idx2word = {i: token for token, i in word2idx.items()}
         
@@ -195,145 +373,191 @@ class AlchemyDataset(Dataset):
         
         return filtered_support
 
-    def _load_and_preprocess_data(self, json_file_path: str) -> List[Dict[str, Any]]:
-        processed_data: List[Dict[str, Any]] = []
+    def _load_and_preprocess_data(self, json_file_path: str, num_workers: int) -> List[Dict[str, Any]]:
         with open(json_file_path, 'r') as f:
             raw_data = json.load(f)
         
-        pbar = tqdm(total=len(raw_data["episodes"]), desc=f"Processing episodes ({self.task_type})", unit="episode")
-
+        # Prepare arguments for multiprocessing
+        special_token_ids = (self.io_sep_token_id, self.item_sep_token_id, 
+                           self.sos_token_id, self.eos_token_id, self.unk_token_id)
+        
+        episode_args = []
         for episode_id, episode_content in raw_data["episodes"].items():
-            if not episode_content: # Handle potentially empty episode entries
-                pbar.update(1)
-                continue
-            support_examples_str = episode_content.get("support", [])
-            query_examples_str = episode_content.get("query", [])
-
-            for query_ex_str in query_examples_str:
+            if episode_content:  # Skip empty episodes
+                episode_args.append((
+                    episode_id, episode_content, self.task_type, self.word2idx, 
+                    self.stone_state_to_id, special_token_ids, self.filter_query_from_support
+                ))
+        
+        # Use multiprocessing to process episodes in parallel
+        processed_data: List[Dict[str, Any]] = []
+        
+        if num_workers > 1 and len(episode_args) > 1:
+            print(f"Processing {len(episode_args)} episodes using {num_workers} workers...")
+            with Pool(processes=num_workers) as pool:
+                # Process episodes in parallel
+                results = list(tqdm(
+                    pool.imap(process_episode_worker, episode_args),
+                    total=len(episode_args),
+                    desc=f"Processing episodes ({self.task_type})",
+                    unit="episode"
+                ))
                 
-                # First, filter the support examples based on the query example.
-                filtered_support_examples_str = self._filter_support_examples(support_examples_str, query_ex_str)
-                if len(filtered_support_examples_str) < len(support_examples_str):
-                    pbar.set_postfix_str(f"Original support examples: {len(support_examples_str)}, filtered support examples {len(filtered_support_examples_str)}.")
-
-                # Second, tokenize the query example.
-                _, query_input_tokens, query_output_feature_tokens, query_initial_state_str, query_output_state_str = self._tokenize_single_example_str(query_ex_str)
-                
-                if self.task_type == "seq2seq":
-                    # For seq2seq, use the existing tokenization (features as individual tokens)
-                    tokenized_support_full_for_encoder: List[List[int]] = []
-                    for sup_ex_str in filtered_support_examples_str:
-                        # For encoder, we use the full "input -> output" representation of support examples
-                        full_sup_tokens, _, _, _ = self._tokenize_single_example_str(sup_ex_str)
-                        tokenized_support_full_for_encoder.append(full_sup_tokens)
-                    
-                    encoder_input_ids: List[int] = []
-                    for i, sup_tokens in enumerate(tokenized_support_full_for_encoder):
-                        encoder_input_ids.extend(sup_tokens)
-                        if i < len(tokenized_support_full_for_encoder) - 1:
-                            encoder_input_ids.append(self.item_sep_token_id)
-                    
-                    if tokenized_support_full_for_encoder:
-                        encoder_input_ids.append(self.item_sep_token_id) # Separator before query
-                    encoder_input_ids.extend(query_input_tokens)
-
-                    decoder_input_ids = [self.sos_token_id] + query_output_feature_tokens
-                    decoder_target_ids = query_output_feature_tokens + [self.eos_token_id]
-                    processed_data.append({
-                        "encoder_input_ids": encoder_input_ids,
-                        "decoder_input_ids": decoder_input_ids,
-                        "decoder_target_ids": decoder_target_ids
-                    })
-                    
-                elif self.task_type == "classification":
-                    # For classification, convert stone states to single tokens
-                    tokenized_support_for_encoder: List[List[int]] = []
-                    for sup_ex_str in filtered_support_examples_str:
-                        # Parse the support example to get input state, potions, and output state
-                        parts = sup_ex_str.split(" -> ")
-                        input_part_str = parts[0]
-                        output_state_str = parts[1]
-                        
-                        # Extract input stone state and potions
-                        first_brace_end = input_part_str.find("}")
-                        input_stone_state = input_part_str[:first_brace_end+1]
-                        potions_str = input_part_str[first_brace_end+1:].strip()
-                        
-                        # Convert input stone state to single token
-                        input_state_token_id = self.word2idx.get(input_stone_state, self.unk_token_id)
-                        
-                        # Convert potions to tokens 
-                        tokenized_potions: List[int] = []
-                        if potions_str:
-                            potions = potions_str.split(" ")
-                            tokenized_potions = [self.word2idx.get(p, self.unk_token_id) for p in potions]
-                        
-                        # Convert output stone state to single token
-                        output_state_token_id = self.word2idx.get(output_state_str, self.unk_token_id)
-                        
-                        # Build full support example: input_state + potions + separator + output_state
-                        full_sup_tokens = [input_state_token_id] + tokenized_potions + [self.io_sep_token_id] + [output_state_token_id]
-                        tokenized_support_for_encoder.append(full_sup_tokens)
-                    
-                    # Process query input similarly - convert input state to single token
-                    query_parts = query_ex_str.split(" -> ")
-                    query_input_part_str = query_parts[0]
-                    query_first_brace_end = query_input_part_str.find("}")
-                    query_potions_str = query_input_part_str[query_first_brace_end+1:].strip()
-                    
-                    # Convert query input stone state to single token
-                    query_input_state_token_id = self.word2idx.get(query_initial_state_str, self.unk_token_id)
-                    
-                    # Convert query potions to tokens
-                    query_tokenized_potions: List[int] = []
-                    if query_potions_str:
-                        query_potions = query_potions_str.split(" ")
-                        query_tokenized_potions = [self.word2idx.get(p, self.unk_token_id) for p in query_potions]
-                    
-                    query_input_tokens_classification = [query_input_state_token_id] + query_tokenized_potions
-                    
-                    # Build encoder input
-                    encoder_input_ids: List[int] = []
-                    for i, sup_tokens in enumerate(tokenized_support_for_encoder):
-                        encoder_input_ids.extend(sup_tokens)
-                        if i < len(tokenized_support_for_encoder) - 1:
-                            encoder_input_ids.append(self.item_sep_token_id)
-                    
-                    if tokenized_support_for_encoder:
-                        encoder_input_ids.append(self.item_sep_token_id) # Separator before query
-                    encoder_input_ids.extend(query_input_tokens_classification)
-
-                    target_class_id = self.stone_state_to_id.get(query_output_state_str, -1) # -1 for unknown state if strict
-                    if target_class_id == -1:
-                        # This should not happen if stone_state_to_id is built from the same dataset
-                        print(f"Warning: Unknown stone state encountered in classification: {query_output_state_str}")
-                        continue 
-                    processed_data.append({
-                        "encoder_input_ids": encoder_input_ids,
-                        "target_class_id": target_class_id
-                    })
-            pbar.update(1)
-        pbar.close()
+                # Flatten results from all episodes
+                for episode_results in results:
+                    processed_data.extend(episode_results)
+        else:
+            # Fallback to sequential processing for single worker or single episode
+            print(f"Processing {len(episode_args)} episodes sequentially...")
+            for args in tqdm(episode_args, desc=f"Processing episodes ({self.task_type})", unit="episode"):
+                episode_results = process_episode_worker(args)
+                processed_data.extend(episode_results)
+        
+        print(f"Total processed examples: {len(processed_data)}")
         return processed_data
     
+    def _create_train_val_splits(self):
+        """Create balanced train and validation splits from the loaded data."""
+        if not (0.0 < self.val_split < 1.0):
+            raise ValueError(f"val_split must be between 0 and 1, got {self.val_split}")
+        
+        if self.task_type == "classification":
+            self._create_balanced_classification_splits()
+        else:
+            self._create_random_splits()
+    
+    def _create_balanced_classification_splits(self):
+        """Create stratified splits for classification to ensure class balance."""
+        # Set seed for reproducible splits
+        random_state = np.random.RandomState(self.val_split_seed)
+        
+        # Group data by target class
+        class_to_indices = defaultdict(list)
+        for idx, item in enumerate(self.data):
+            target_class_id = item["target_class_id"]
+            class_to_indices[target_class_id].append(idx)
+        
+        train_indices = []
+        val_indices = []
+        
+        print(f"Creating balanced splits with {self.val_split} validation ratio:")
+        
+        # For each class, split proportionally
+        for class_id, indices in class_to_indices.items():
+            random_state.shuffle(indices)
+            
+            val_size = max(1, int(len(indices) * self.val_split))  # Ensure at least 1 sample in val
+            train_size = len(indices) - val_size
+            
+            train_indices.extend(indices[:train_size])
+            val_indices.extend(indices[train_size:])
+            
+            stone_state = self.id_to_stone_state.get(class_id, f"Unknown({class_id})")
+            print(f"  Class {class_id} ({stone_state}): {train_size} train, {val_size} val (total: {len(indices)})")
+        
+        # Create Subset objects
+        self.train_set = Subset(self, train_indices)
+        self.val_set = Subset(self, val_indices)
+        
+        # Verify class balance
+        self._verify_class_balance()
+        
+        print(f"Created balanced train/val splits:")
+        print(f"  Total samples: {len(self.data)}")
+        print(f"  Train samples: {len(self.train_set)} ({len(self.train_set)/len(self.data)*100:.1f}%)")
+        print(f"  Val samples: {len(self.val_set)} ({len(self.val_set)/len(self.data)*100:.1f}%)")
+    
+    def _create_random_splits(self):
+        """Create random splits for seq2seq tasks."""
+        random_state = np.random.RandomState(self.val_split_seed)
+        
+        indices = list(range(len(self.data)))
+        random_state.shuffle(indices)
+        
+        val_size = int(len(self.data) * self.val_split)
+        train_size = len(self.data) - val_size
+        
+        train_indices = indices[:train_size]
+        val_indices = indices[train_size:]
+        
+        self.train_set = Subset(self, train_indices)
+        self.val_set = Subset(self, val_indices)
+        
+        print(f"Created random train/val splits:")
+        print(f"  Total samples: {len(self.data)}")
+        print(f"  Train samples: {len(self.train_set)} ({len(self.train_set)/len(self.data)*100:.1f}%)")
+        print(f"  Val samples: {len(self.val_set)} ({len(self.val_set)/len(self.data)*100:.1f}%)")
+    
+    def _verify_class_balance(self):
+        """Verify that all classes in train set are also present in validation set."""
+        if self.task_type != "classification":
+            return
+        
+        # Get class distributions
+        train_classes = set()
+        val_classes = set()
+        
+        for idx in self.train_set.indices:
+            target_class_id = self.data[idx]["target_class_id"]
+            train_classes.add(target_class_id)
+        
+        for idx in self.val_set.indices:
+            target_class_id = self.data[idx]["target_class_id"]
+            val_classes.add(target_class_id)
+        
+        # Check for class imbalance
+        missing_in_val = train_classes - val_classes
+        missing_in_train = val_classes - train_classes
+        
+        if missing_in_val:
+            print(f"WARNING: {len(missing_in_val)} classes present in train but missing in validation:")
+            for class_id in missing_in_val:
+                stone_state = self.id_to_stone_state.get(class_id, f"Unknown({class_id})")
+                print(f"  Class {class_id}: {stone_state}")
+        
+        if missing_in_train:
+            print(f"WARNING: {len(missing_in_train)} classes present in validation but missing in train:")
+            for class_id in missing_in_train:
+                stone_state = self.id_to_stone_state.get(class_id, f"Unknown({class_id})")
+                print(f"  Class {class_id}: {stone_state}")
+        
+        if not missing_in_val and not missing_in_train:
+            print("✓ Class balance verified: All classes present in both train and validation sets")
+        else:
+            raise ValueError("Class imbalance detected! Train and validation sets must contain all the same classes.")
+    
+    def get_train_set(self):
+        """Get the training subset. Returns self if no split was created."""
+        return self.train_set if self.train_set is not None else self
+    
+    def get_val_set(self):
+        """Get the validation subset. Returns None if no split was created."""
+        return self.val_set
+    
+    def has_val_split(self) -> bool:
+        """Check if validation split was created."""
+        return self.val_set is not None
+
     def __len__(self) -> int:
+        """Return the number of samples in the dataset."""
         return len(self.data)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        item = self.data[idx] # self.data has the data that is returned from _load_and_preprocess_data.
-        if self.task_type == "seq2seq":
-            return {
-                "encoder_input_ids": torch.tensor(item["encoder_input_ids"], dtype=torch.long),
-                "decoder_input_ids": torch.tensor(item["decoder_input_ids"], dtype=torch.long),
-                "decoder_target_ids": torch.tensor(item["decoder_target_ids"], dtype=torch.long)
-            }
-        elif self.task_type == "classification":
-            return {
-                "encoder_input_ids": torch.tensor(item["encoder_input_ids"], dtype=torch.long),
-                "target_class_id": torch.tensor(item["target_class_id"], dtype=torch.long) # Single ID
-            }
-        else:
-            raise ValueError(f"Unknown task_type: {self.task_type}")
+        """Get a single sample from the dataset."""
+        if idx >= len(self.data):
+            raise IndexError(f"Index {idx} is out of range for dataset of size {len(self.data)}")
+        
+        sample = self.data[idx]
+        
+        # Convert lists to tensors for the sample
+        result = {}
+        for key, value in sample.items():
+            if isinstance(value, list):
+                result[key] = torch.tensor(value, dtype=torch.long)
+            else:
+                result[key] = value
+        
+        return result
 
 def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_type: str = "seq2seq") -> Dict[str, torch.Tensor]:
     encoder_inputs = [item["encoder_input_ids"] for item in batch]
@@ -350,7 +574,7 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_typ
             "decoder_target_ids": padded_decoder_targets
         }
     elif task_type == "classification":
-        target_class_ids = torch.stack([item["target_class_id"] for item in batch]) # Stack to form a batch of IDs
+        target_class_ids = torch.tensor([item["target_class_id"] for item in batch]) # Stack to form a batch of IDs
         return {
             "encoder_input_ids": padded_encoder_inputs,
             "target_class_id": target_class_ids
