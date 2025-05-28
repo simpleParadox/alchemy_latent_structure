@@ -48,7 +48,7 @@ def parse_args():
                         help="Batch size for training and validation.")
     parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
-    parser.add_argument("--weight_decay", type=float, default=0.00,
+    parser.add_argument("--weight_decay", type=float, default=0.01,
                         help="Weight decay for AdamW optimizer.")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility.")
@@ -233,14 +233,15 @@ def main():
     print(f"Loading training data from: {args.train_data_path}")
     
     # Create dataset with optional validation split
-    full_dataset = AlchemyDataset(
-        json_file_path=args.train_data_path, 
-        task_type=args.task_type,
-        filter_query_from_support=args.filter_query_from_support,
-        num_workers=args.num_workers,
-        val_split=args.val_split,
-        val_split_seed=args.val_split_seed
-    )
+    with accelerator.main_process_first(): # Doing this once to prevent OOM errors when loading data on multiple processes.
+        full_dataset = AlchemyDataset(
+            json_file_path=args.train_data_path, 
+            task_type=args.task_type,
+            filter_query_from_support=args.filter_query_from_support,
+            num_workers=args.num_workers,
+            val_split=args.val_split,
+            val_split_seed=args.val_split_seed
+        )
 
     # Get train and validation sets
     train_dataset = full_dataset.get_train_set()
