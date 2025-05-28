@@ -3,3 +3,4 @@ alchemy_env/
 wandb/
 checkpoints/
 *.json.gz
+*.sh

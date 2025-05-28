@@ -30,15 +30,15 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--task_type", type=str, default="classification", choices=["seq2seq", "classification"],
                         help="Type of task: 'seq2seq' for feature-wise prediction or 'classification' for whole state prediction.")
-    parser.add_argument("--train_data_path", type=str, default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1.json",
+    parser.add_argument("--train_data_path", type=str, default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2.json",
                         help="Path to the training JSON data file.")
-    parser.add_argument("--val_data_path", type=str, default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1.json",
+    parser.add_argument("--val_data_path", type=str, default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2.json",
                         help="Path to the validation JSON data file (optional).")
     parser.add_argument("--val_split", type=float, default=None,
                         help="Validation split ratio (e.g., 0.1 for 10%%). If provided, validation set will be created from training data instead of loading separate file. Default is None.")
     parser.add_argument("--val_split_seed", type=int, default=42,
                         help="Seed for reproducible train/val splits.")
-    parser.add_argument("--model_size", type=str, default="tiny", choices=["tiny", "xsmall", "small", "medium", "large"],
+    parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"],
                         help="Size of the transformer model.")
     parser.add_argument("--max_seq_len", type=int, default=2048, # Max length for support + query + separators
                         help="Maximum sequence length for the model.")
@@ -46,7 +46,7 @@ def parse_args():
                         help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=1024,
                         help="Batch size for training and validation.")
-    parser.add_argument("--learning_rate", type=float, default=1e-5,
+    parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
     parser.add_argument("--weight_decay", type=float, default=0.00,
                         help="Weight decay for AdamW optimizer.")
