@@ -306,9 +306,9 @@ def calculate_max_unique_samples(graph: Dict, max_steps: int) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate samples from chemistry graph")
-    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/deterministic_chemistries_167424_80_unique.json.gz",
+    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/deterministic_chemistries_167424_80_unique_stones.json.gz",
                         help="Path to the chemistry graph JSON file")
-    parser.add_argument("--output", default="chemistry_samples.json",
+    parser.add_argument("--output", default="chemistry_samples_167424_80_unique_stones.json",
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=1000,
                         help="Number of samples to generate for each episode")
@@ -319,7 +319,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
     parser.add_argument("--create_val_from_train", action="store_true",
-                        help="Create a validation set from the training set", default=False)
+                        help="Create a validation set from the training set", default=True)
     
     args = parser.parse_args()
     
@@ -347,6 +347,9 @@ def main():
         random.shuffle(episode_ids)
         val_episode_ids = set(episode_ids[:num_val_episodes])
         train_episode_ids = set(episode_ids[num_val_episodes:])
+        
+        ordered_train_episode_ids = sorted(list(train_episode_ids))
+        ordered_val_episode_ids = sorted(list(val_episode_ids))
         
         # Create separate dictionaries for training and validation
         train_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in train_episode_ids}
@@ -527,6 +530,10 @@ def main():
                 example_count += 1
                 if example_count >= 5:
                     break
+        
+        # Stop after printing 5 episodes
+        if example_count >= 10:
+            break
 
 if __name__ == "__main__":
     main()

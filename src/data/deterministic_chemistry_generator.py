@@ -300,13 +300,13 @@ def main():
     parser.add_argument(
         "--output_file",
         type=str,
-        default="deterministic_chemistries.json",
+        default="deterministic_chemistries_167424_80_unique_stones.json",
         help="Path to save the generated chemistries JSON file."
     )
     parser.add_argument(
         "--save_interval",
         type=int,
-        default=100000,
+        default=1670000,
         help="How often to save intermediate results (number of combinations processed)."
     )
     parser.add_argument(
@@ -400,7 +400,7 @@ def main():
                         color = get_stone_feature_name(0, perceived_stone.perceived_coords[0])
                         size = get_stone_feature_name(1, perceived_stone.perceived_coords[1])
                         roundness = get_stone_feature_name(2, perceived_stone.perceived_coords[2])
-                        current_stone_desc = f"{{color: {color}, size: {size}, roundness: {roundness}, reward: {aligned_stone_with_reward.reward}}}"
+                        current_stone_desc = f"{{color: {color}, size: {size}, roundness: {roundness},reward: {aligned_stone_with_reward.reward}}}"
                     except Exception as desc_e:
                         print(f"Warning: Could not generate description for node {node_obj_str}: {desc_e}")
                         current_stone_desc = "Error generating description"
