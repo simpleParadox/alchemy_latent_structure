@@ -179,12 +179,14 @@ class AlchemyDataset(Dataset):
                  stone_state_to_id: Dict[str, int] = None, # For classification
                  filter_query_from_support: bool = False, # Filter query examples from support sets
                  num_workers: int = 4, # Number of workers for multiprocessing
+                 chunk_size: int = 100, # Number of episodes to process in each chunk (memory management)
                  val_split: Optional[float] = None, # Validation split ratio (e.g., 0.2 for 20%)
                  val_split_seed: int = 42): # Seed for reproducible splits
         
         self.task_type = task_type
         self.filter_query_from_support = filter_query_from_support # Only relevant if support hop length == query_hop_length.
         self.num_workers = max(1, num_workers)  # Ensure at least 1 worker
+        self.chunk_size = max(1, chunk_size)  # Ensure at least 1 episode per chunk
         self.val_split = val_split
         self.val_split_seed = val_split_seed
         
@@ -228,7 +230,7 @@ class AlchemyDataset(Dataset):
                                          if state.startswith('{') and state.endswith('}')}
                 self.id_to_stone_state = {v: k for k, v in self.stone_state_to_id.items()}
         
-        self.data = self._load_and_preprocess_data(json_file_path, self.num_workers)
+        self.data = self._load_and_preprocess_data(json_file_path, self.num_workers, self.chunk_size)
         
         # Create train/val splits if requested
         self.train_set = None
@@ -373,7 +375,7 @@ class AlchemyDataset(Dataset):
         
         return filtered_support
 
-    def _load_and_preprocess_data(self, json_file_path: str, num_workers: int) -> List[Dict[str, Any]]:
+    def _load_and_preprocess_data(self, json_file_path: str, num_workers: int, chunk_size: int) -> List[Dict[str, Any]]:
         with open(json_file_path, 'r') as f:
             raw_data = json.load(f)
         
@@ -393,19 +395,28 @@ class AlchemyDataset(Dataset):
         processed_data: List[Dict[str, Any]] = []
         
         if num_workers > 1 and len(episode_args) > 1:
-            print(f"Processing {len(episode_args)} episodes using {num_workers} workers...")
-            with Pool(processes=num_workers) as pool:
-                # Process episodes in parallel
-                results = list(tqdm(
-                    pool.imap(process_episode_worker, episode_args),
-                    total=len(episode_args),
-                    desc=f"Processing episodes ({self.task_type})",
-                    unit="episode"
-                ))
+            # Process in chunks to manage memory usage
+            for i in range(0, len(episode_args), chunk_size):
+                chunk = episode_args[i:i + chunk_size]
+                chunk_num = i // chunk_size + 1
+                total_chunks = (len(episode_args) + chunk_size - 1) // chunk_size
                 
-                # Flatten results from all episodes
-                for episode_results in results:
-                    processed_data.extend(episode_results)
+                print(f"Processing chunk {chunk_num}/{total_chunks} ({len(chunk)} episodes) using {num_workers} workers...")
+                
+                with Pool(processes=min(num_workers, len(chunk))) as pool:
+                    # Process episodes in parallel
+                    results = list(tqdm(
+                        pool.imap(process_episode_worker, chunk),
+                        total=len(chunk),
+                        desc=f"Processing chunk {chunk_num}/{total_chunks} ({self.task_type})",
+                        unit="episode"
+                    ))
+                    
+                    # Flatten results from all episodes in this chunk
+                    for episode_results in results:
+                        processed_data.extend(episode_results)
+                
+                print(f"Chunk {chunk_num}/{total_chunks} completed. Total examples so far: {len(processed_data)}")
         else:
             # Fallback to sequential processing for single worker or single episode
             print(f"Processing {len(episode_args)} episodes sequentially...")
