@@ -195,24 +195,24 @@ def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_si
     # (assuming vocab_size around 32k)
     configs = {
         "tiny": { # Approx. 10M params with 32k vocab
-            "num_encoder_layers": 2, "num_decoder_layers": 2, "emb_size": 128, 
-            "nhead": 4, "dim_feedforward": 256, "dropout": 0.1
+            "num_encoder_layers": 2, "num_decoder_layers": 2, 
+            "emb_size": 128, "nhead": 4, "dim_feedforward": 256, "dropout": 0.1
         },
-        "xsmall": { 
-            "num_encoder_layers": 4, "num_decoder_layers": 4, "emb_size": 256, 
-            "nhead": 4, "dim_feedforward": 512, "dropout": 0.1
+        "xsmall": { # Approx. 15M params with 32k vocab
+            "num_encoder_layers": 4, "num_decoder_layers": 4, 
+            "emb_size": 256, "nhead": 4, "dim_feedforward": 512, "dropout": 0.1
         },
         "small": { # Approx. 22M params with 32k vocab
-            "num_encoder_layers": 3, "num_decoder_layers": 3, "emb_size": 256, 
-            "nhead": 4, "dim_feedforward": 1024, "dropout": 0.1
+            "num_encoder_layers": 4, "num_decoder_layers": 4, 
+            "emb_size": 256, "nhead": 4, "dim_feedforward": 1024, "dropout": 0.1
         },
         "medium": { # Approx. 62M params with 32k vocab
-            "num_encoder_layers": 4, "num_decoder_layers": 4, "emb_size": 512, 
-            "nhead": 8, "dim_feedforward": 2048, "dropout": 0.1
+            "num_encoder_layers": 6, "num_decoder_layers": 6, 
+            "emb_size": 512, "nhead": 8, "dim_feedforward": 1024, "dropout": 0.1
         },
         "large": { # Approx. 77M params with 32k vocab
-            "num_encoder_layers": 6, "num_decoder_layers": 6, "emb_size": 512, 
-            "nhead": 8, "dim_feedforward": 2048, "dropout": 0.1
+            "num_encoder_layers": 6, "num_decoder_layers": 6, 
+            "emb_size": 512, "nhead": 8, "dim_feedforward": 2048, "dropout": 0.1
         }
     }
 
@@ -267,12 +267,12 @@ def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: 
             "dim_feedforward": 512, "dropout": 0.1
         },
         "small": { 
-            "num_encoder_layers": 3, "emb_size": 256, "nhead": 4, 
+            "num_encoder_layers": 4, "emb_size": 256, "nhead": 4, 
             "dim_feedforward": 1024, "dropout": 0.1
         },
         "medium": { 
-            "num_encoder_layers": 4, "emb_size": 512, "nhead": 8, 
-            "dim_feedforward": 2048, "dropout": 0.1
+            "num_encoder_layers": 6, "emb_size": 512, "nhead": 8, 
+            "dim_feedforward": 1024, "dropout": 0.1
         },
         "large": { 
             "num_encoder_layers": 6, "emb_size": 512, "nhead": 8, 
