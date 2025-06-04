@@ -179,7 +179,7 @@ class AlchemyDataset(Dataset):
                  stone_state_to_id: Dict[str, int] = None, # For classification
                  filter_query_from_support: bool = False, # Filter query examples from support sets
                  num_workers: int = 4, # Number of workers for multiprocessing
-                 chunk_size: int = 100, # Number of episodes to process in each chunk (memory management)
+                 chunk_size: int = 10000, # Number of episodes to process in each chunk (memory management)
                  val_split: Optional[float] = None, # Validation split ratio (e.g., 0.2 for 20%)
                  val_split_seed: int = 42): # Seed for reproducible splits
         

@@ -17,6 +17,7 @@ from accelerate import Accelerator
 
 # Assuming train.py is in src/models/, so data_loaders and models are siblings
 from data_loaders import AlchemyDataset, collate_fn
+import re
 from models import create_transformer_model, create_classifier_model # Added create_classifier_model
 
 def set_seed(seed_value):
@@ -52,9 +53,9 @@ def parse_args():
                         help="Weight decay for AdamW optimizer.")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility.")
-    parser.add_argument("--save_dir", type=str, default="./checkpoints",
+    parser.add_argument("--save_dir", type=str, default="/home/rsaha/projects/dm_alchemy/src/saved_models/",
                         help="Directory to save model checkpoints.")
-    parser.add_argument("--filter_query_from_support", action="store_true",
+    parser.add_argument("--filter_query_from_support", type=str, choices=["True", "False"],
                         help="Filter out query examples from support sets to prevent data leakage when support_steps=query_steps=1. Default=True", default=True)
     parser.add_argument("--wandb_project", type=str, default="alchemy-meta-learning",
                         help="Weights & Biases project name.")
@@ -233,6 +234,9 @@ def main():
     print(f"Loading training data from: {args.train_data_path}")
     
     # Create dataset with optional validation split
+    
+    args.filter_query_from_support = True if args.filter_query_from_support == "True" else False
+    print(f"Filter query from support: {args.filter_query_from_support}")
     with accelerator.main_process_first(): # Doing this once to prevent OOM errors when loading data on multiple processes.
         full_dataset = AlchemyDataset(
             json_file_path=args.train_data_path, 
@@ -353,10 +357,35 @@ def main():
             print(f"Criterion: CrossEntropyLoss (for class predictions)")
 
     # --- Training Loop ---
+    # Extract support and query hop values from train_data_path
+    
+    # Parse hop values from the filename
+    hop_pattern = r'shop_(\d+)_qhop_(\d+)'
+    match = re.search(hop_pattern, args.train_data_path)
+    if match:
+        support_hop = match.group(1)
+        query_hop = match.group(2)
+    else:
+        # Fallback values if pattern not found
+        support_hop = "1"
+        query_hop = "2"
+    
+    # Create hierarchical save directory
+    hierarchical_save_dir = os.path.join(
+        args.save_dir,
+        args.model_size,
+        args.task_type,
+        f"shop_{support_hop}_qhop_{query_hop}",
+        f"seed_{args.val_split_seed}"
+    )
+    
     if accelerator.is_local_main_process:
-        if not os.path.exists(args.save_dir):
-            os.makedirs(args.save_dir)
-            print(f"Created checkpoint directory: {args.save_dir}")
+        if not os.path.exists(hierarchical_save_dir):
+            os.makedirs(hierarchical_save_dir)
+            print(f"Created checkpoint directory: {hierarchical_save_dir}")
+        
+        # Update args.save_dir to use the hierarchical structure
+        args.save_dir = hierarchical_save_dir
 
     best_val_loss = float('inf')
 
@@ -386,7 +415,7 @@ def main():
 
             if accelerator.is_local_main_process and val_loss < best_val_loss:
                 best_val_loss = val_loss
-                model_save_path = os.path.join(args.save_dir, f"best_model_{args.task_type}_{args.model_size}.pt")
+                model_save_path = os.path.join(args.save_dir, f"best_model_epoch_{epoch+1}_{args.task_type}_{args.model_size}.pt")
                 
                 # Get unwrapped model for saving
                 unwrapped_model = accelerator.unwrap_model(model)

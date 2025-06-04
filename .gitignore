@@ -6,3 +6,4 @@ checkpoints/
 *.sh
 output_files/
 src/models/output_files/
+src/saved_models/
