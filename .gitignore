@@ -5,5 +5,6 @@ checkpoints/
 *.json.gz
 *.sh
 output_files/
+src/models/profile.py
 src/models/output_files/
 src/saved_models/
