@@ -6,13 +6,13 @@ metric:
 parameters:
   # Sweep parameter - model size variations
   model_size:
-    values: ['xsmall']
+    values: ['small']
     # values: ['small', 'medium']
   # Fixed parameters from job.sh
   train_data_path:
-    value: '/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1.json'
+    value: 'src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1.json'
   val_data_path:
-    value: '/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_3_qhop_1.json'
+    value: 'src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_3_qhop_1.json'
   task_type:
     value: 'classification'
   epochs:
@@ -30,13 +30,15 @@ parameters:
   # val_split:
   #   value: null
   val_split_seed:
-    values: [0,1,2]
+    values: [42]
+  data_split_seed:
+    values: [42]
   max_seq_len:
     value: 2048
   learning_rate:
     value: 0.0001
   seed:
-    value: 42
+    value: 42 # This is the seed for torch, cuda etc.
   filter_query_from_support:
     value: true # if qhop=shop length.
   wandb_project:

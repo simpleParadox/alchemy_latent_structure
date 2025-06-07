@@ -5,6 +5,7 @@ import random
 import numpy as np
 from functools import partial
 import time
+from cluster_profile import cluster
 
 import torch
 import torch.nn as nn
@@ -28,17 +29,20 @@ def set_seed(seed_value):
         torch.cuda.manual_seed_all(seed_value)
 
 def parse_args():
+    
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--task_type", type=str, default="classification", choices=["seq2seq", "classification"],
                         help="Type of task: 'seq2seq' for feature-wise prediction or 'classification' for whole state prediction.")
-    parser.add_argument("--train_data_path", type=str, default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2.json",
+    parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2.json",
                         help="Path to the training JSON data file.")
-    parser.add_argument("--val_data_path", type=str, default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2.json",
+    parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2.json",
                         help="Path to the validation JSON data file (optional).")
     parser.add_argument("--val_split", type=float, default=None,
                         help="Validation split ratio (e.g., 0.1 for 10%%). If provided, validation set will be created from training data instead of loading separate file. Default is None.")
     parser.add_argument("--val_split_seed", type=int, default=42,
                         help="Seed for reproducible train/val splits.")
+    parser.add_argument("--data_split_seed", type=int, default=42,
+                        help="Seed value that gets appended to the data path to load the approapriate training / validation.")
     parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"],
                         help="Size of the transformer model.")
     parser.add_argument("--max_seq_len", type=int, default=2048, # Max length for support + query + separators
@@ -53,7 +57,7 @@ def parse_args():
                         help="Weight decay for AdamW optimizer.")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility.")
-    parser.add_argument("--save_dir", type=str, default="/home/rsaha/projects/dm_alchemy/src/saved_models/",
+    parser.add_argument("--save_dir", type=str, default="src/saved_models/",
                         help="Directory to save model checkpoints.")
     parser.add_argument("--filter_query_from_support", type=str, choices=["True", "False"],
                         help="Filter out query examples from support sets to prevent data leakage when support_steps=query_steps=1. Default=True", default=True)
@@ -209,6 +213,24 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
 
 def main():
     args = parse_args()
+    
+    base_path = None
+    if cluster == 'cirrus':
+        # Cirrus-specific paths
+        base_path = '/home/rsaha/projects/dm_alchemy/'
+    else:
+        # Profile is cc.
+        base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/projects/dm_alchemy/'
+    
+    # First, add the 'data_split_seed' to the train_data_path and val_data_path
+    args.train_data_path = f"{args.train_data_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
+    args.val_data_path = f"{args.val_data_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
+        
+    # Update data paths to be relative to the base path
+    args.train_data_path = os.path.join(base_path, args.train_data_path)
+    args.val_data_path = os.path.join(base_path, args.val_data_path) if args.val_data_path else None
+    args.save_dir = os.path.join(base_path, args.save_dir)
+    
     
     # Initialize Accelerator
     accelerator = Accelerator()

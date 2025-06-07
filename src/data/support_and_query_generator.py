@@ -316,7 +316,7 @@ def main():
                         help="Minimum number of transformation steps in each sample")
     parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
-    parser.add_argument("--seed", type=int, default=42,
+    parser.add_argument("--seed", type=int, default=2,
                         help="Random seed for reproducibility")
     parser.add_argument("--create_val_from_train", action="store_true",
                         help="Create a validation set from the training set", default=True)
@@ -364,6 +364,16 @@ def main():
         
         # Change prefix based on support and query steps.
         prefix = "compositional_" if args.support_steps <= args.query_steps else "decompositional_"
+        
+        # Add seed to the filename
+        base_train = os.path.splitext(train_output_file)[0]
+        ext_train = os.path.splitext(train_output_file)[1]
+        train_output_file = f"{base_train}_seed_{args.seed}{ext_train}"
+        
+        base_val = os.path.splitext(val_output_file)[0]
+        ext_val = os.path.splitext(val_output_file)[1]
+        val_output_file = f"{base_val}_seed_{args.seed}{ext_val}"
+        
         train_output_file, val_output_file = [os.path.join(os.path.dirname(f), prefix + os.path.basename(f)) for f in [train_output_file, val_output_file]]
         
         print(f"Creating separate training ({num_train_episodes} episodes) and validation ({num_val_episodes} episodes) sets")
