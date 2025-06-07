@@ -213,6 +213,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
 
 def main():
     args = parse_args()
+
     
     base_path = None
     if cluster == 'cirrus':
@@ -221,6 +222,9 @@ def main():
     else:
         # Profile is cc.
         base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/projects/dm_alchemy/'
+    
+    print("Base path: ", base_path)
+    print("Profile cluster: ", cluster)
     
     # First, add the 'data_split_seed' to the train_data_path and val_data_path
     args.train_data_path = f"{args.train_data_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
@@ -237,6 +241,7 @@ def main():
     
     # Set seed for reproducibility
     set_seed(args.seed)
+    print("Seed: ", args.seed)
 
     # Initialize wandb only on main process
     if accelerator.is_local_main_process:
