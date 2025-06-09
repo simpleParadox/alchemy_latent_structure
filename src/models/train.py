@@ -31,7 +31,7 @@ def set_seed(seed_value):
 def parse_args():
     
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
-    parser.add_argument("--task_type", type=str, default="classification", choices=["seq2seq", "classification"],
+    parser.add_argument("--task_type", type=str, default="seq2seq", choices=["seq2seq", "classification"],
                         help="Type of task: 'seq2seq' for feature-wise prediction or 'classification' for whole state prediction.")
     parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2.json",
                         help="Path to the training JSON data file.")
@@ -63,6 +63,8 @@ def parse_args():
                         help="Filter out query examples from support sets to prevent data leakage when support_steps=query_steps=1. Default=True", default=True)
     parser.add_argument("--wandb_project", type=str, default="alchemy-meta-learning",
                         help="Weights & Biases project name.")
+    parser.add_argument("--scheduler_call_location", type=str, default="after_epoch", choices=["after_epoch", "after_batch"],
+                        help="Where to call the scheduler: 'after_epoch' for per-epoch scheduling, 'after_batch' for per-batch.")
     parser.add_argument("--wandb_entity", type=str, default=None, # Replace with your W&B entity
                         help="Weights & Biases entity name.")
     parser.add_argument("--wandb_run_name", type=str, default=None,
@@ -137,8 +139,6 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
         accelerator.backward(loss)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-        if args.task_type == "seq2seq": # Scheduler might be per step or per epoch depending on setup
-            scheduler.step() 
 
         total_loss += loss.item()
         total_correct_preds += correct
@@ -158,8 +158,9 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             })
             start_time = time.time()
     
-    if args.task_type == "classification": # If scheduler is per epoch for classification
-        if scheduler: scheduler.step()
+    # if args.task_type == "classification": # If scheduler is per epoch for classification
+    # Call scheduler.step() after each epoch if it is defined.
+    if scheduler: scheduler.step()
 
     avg_epoch_loss = total_loss / len(dataloader)
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
@@ -363,7 +364,7 @@ def main():
     # --- Optimizer and Scheduler ---
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     
-    num_training_steps = args.epochs * len(train_dataloader)
+    num_training_steps = args.epochs
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-7)
 
     # Prepare everything with Accelerator
