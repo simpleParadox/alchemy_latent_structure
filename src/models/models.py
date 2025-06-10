@@ -30,7 +30,7 @@ class Seq2SeqTransformer(nn.Module):
     """
     def __init__(self, num_encoder_layers: int, num_decoder_layers: int, 
                  emb_size: int, nhead: int, src_vocab_size: int, tgt_vocab_size: int,
-                 dim_feedforward: int = 512, dropout: float = 0.1):
+                 dim_feedforward: int = 512, dropout: float = 0.1, max_len=1024):
         super(Seq2SeqTransformer, self).__init__()
         
         self.transformer = nn.Transformer(d_model=emb_size,
@@ -44,7 +44,7 @@ class Seq2SeqTransformer(nn.Module):
         self.generator = nn.Linear(emb_size, tgt_vocab_size)
         self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
         self.tgt_tok_emb = nn.Embedding(tgt_vocab_size, emb_size)
-        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout)
+        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_len)
         self.emb_size = emb_size
 
     def forward(self, src, tgt, src_mask=None, tgt_mask=None, 
@@ -173,7 +173,7 @@ class StoneStateClassifier(nn.Module):
         logits = self.classification_head(pooled_output) # (batch_size, num_classes)
         return logits
 
-def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_size: int, device="cpu"):
+def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_size: int, device="cpu", max_len=1024):
     """
     Creates a Seq2SeqTransformer model based on a configuration name.
     The parameter counts are approximate and depend on the exact vocabulary sizes.
@@ -228,7 +228,8 @@ def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_si
         src_vocab_size=src_vocab_size,
         tgt_vocab_size=tgt_vocab_size,
         dim_feedforward=config["dim_feedforward"],
-        dropout=config["dropout"]
+        dropout=config["dropout"],
+        max_len=max_len
     )
     
     model.to(device)

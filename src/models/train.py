@@ -33,9 +33,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--task_type", type=str, default="seq2seq", choices=["seq2seq", "classification"],
                         help="Type of task: 'seq2seq' for feature-wise prediction or 'classification' for whole state prediction.")
-    parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2.json",
+    parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
                         help="Path to the training JSON data file.")
-    parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2.json",
+    parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1.json",
                         help="Path to the validation JSON data file (optional).")
     parser.add_argument("--val_split", type=float, default=None,
                         help="Validation split ratio (e.g., 0.1 for 10%%). If provided, validation set will be created from training data instead of loading separate file. Default is None.")
@@ -79,19 +79,32 @@ def parse_args():
 
 def calculate_accuracy_seq2seq(predictions, targets, ignore_index):
     """
-    Calculates accuracy for seq2seq task, ignoring padding tokens.
+    Calculates accuracy for seq2seq task based on full sequence matches, ignoring padding tokens.
     predictions: (batch_size, seq_len, vocab_size) - model logits
     targets: (batch_size, seq_len) - ground truth token ids
     ignore_index: token id for padding, to be ignored in accuracy calculation
     """
     predicted_tokens = predictions.argmax(dim=-1) # (batch_size, seq_len)
-    mask = (targets != ignore_index)
     
-    correct_predictions = ((predicted_tokens == targets) & mask).sum().item()
-    num_tokens_to_consider = mask.sum().item()
+    # Mask for non-padding tokens (True for actual tokens, False for padding)
+    non_padding_mask = (targets != ignore_index)
     
-    accuracy = correct_predictions / num_tokens_to_consider if num_tokens_to_consider > 0 else 0.0
-    return accuracy, correct_predictions, num_tokens_to_consider
+    # Check if each token is correct
+    # token_correct will be True where predicted_token == target_token, False otherwise
+    token_correct = (predicted_tokens == targets)
+    
+    # For each sequence, we consider it correct if all its non-padding tokens are correct.
+    # We can achieve this by checking if (token_correct OR is_padding_token) is True for all tokens in a sequence.
+    # is_padding_token is ~non_padding_mask
+    # So, for a sequence to be correct, (token_correct | ~non_padding_mask) must be all True along the sequence dimension.
+    correct_sequences = (token_correct | ~non_padding_mask).all(dim=1)
+    
+    num_correct_sequences = correct_sequences.sum().item()
+    num_sequences_in_batch = targets.size(0) # batch_size
+    
+    accuracy = num_correct_sequences / num_sequences_in_batch if num_sequences_in_batch > 0 else 0.0
+    # The function now returns sequence-level accuracy, count of correct sequences, and total sequences in batch.
+    return accuracy, num_correct_sequences, num_sequences_in_batch
 
 def calculate_accuracy_classification(predictions, targets):
     """
@@ -262,9 +275,11 @@ def main():
     print(f"Loading training data from: {args.train_data_path}")
     
     # Create dataset with optional validation split
+    print(f"Filter query from support initial: {args.filter_query_from_support}")
+    if not args.filter_query_from_support: # First check if it's not set, then convert to boolean.
+        args.filter_query_from_support = True if args.filter_query_from_support == 'True' else False
     
-    args.filter_query_from_support = True if args.filter_query_from_support == "True" else False
-    print(f"Filter query from support: {args.filter_query_from_support}")
+    print("Filter query from support set to:", args.filter_query_from_support)
     with accelerator.main_process_first(): # Doing this once to prevent OOM errors when loading data on multiple processes.
         full_dataset = AlchemyDataset(
             json_file_path=args.train_data_path, 
@@ -343,7 +358,8 @@ def main():
             config_name=args.model_size,
             src_vocab_size=src_vocab_size,
             tgt_vocab_size=tgt_vocab_size,
-            device=accelerator.device
+            device=accelerator.device,
+            max_len=args.max_seq_len
         )
         criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id)
     elif args.task_type == "classification":

@@ -14,3 +14,4 @@ wandb_sweep_config.yaml
 .eggs/*
 src/models/cluster_profile.py
 *.out
+src/explicit_implicit_icl/

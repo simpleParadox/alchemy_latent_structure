@@ -28,7 +28,7 @@ def process_episode_worker(args):
     processed_data = []
     
     for query_ex_str in query_examples_str:
-        # Filter support examples
+        # Filter support examples. Essentially, we want to remove the query example from the support set if filter_query_from_support is True.
         filtered_support_examples_str = filter_support_examples_helper(
             support_examples_str, query_ex_str, filter_query_from_support)
         
@@ -127,6 +127,11 @@ def process_episode_worker(args):
                 "target_class_id": target_class_id
             })
     
+    # Debugging: Check for UNK token in encoder_input_ids
+    for item in processed_data:
+        if "encoder_input_ids" in item and unk_token_id in item["encoder_input_ids"]:
+            print(f"DEBUG: UNK token ({unk_token_id}) found in encoder_input_ids for episode {episode_id}. Example: {item['encoder_input_ids']}")
+
     return processed_data
 
 
@@ -166,7 +171,7 @@ def tokenize_single_example_str_helper(example_str, word2idx, unk_token_id, io_s
     tokenized_output_feature_tokens = [word2idx.get(f, unk_token_id) for f in features_output]
     
     full_example_tokens = tokenized_initial_state + tokenized_potions + [io_sep_token_id] + tokenized_output_feature_tokens
-    query_input_tokens = tokenized_initial_state + tokenized_potions
+    query_input_tokens = tokenized_initial_state + tokenized_potions # Might be confusing because I do not add the io_sep_token_id here, but this is how it was done in Brenden Lake's paper.
     
     return full_example_tokens, query_input_tokens, tokenized_output_feature_tokens, initial_state_str, output_state_str
 
