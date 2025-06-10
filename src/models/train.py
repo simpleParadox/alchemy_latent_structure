@@ -420,7 +420,7 @@ def main():
         args.model_size,
         args.task_type,
         f"shop_{support_hop}_qhop_{query_hop}",
-        f"seed_{args.val_split_seed}"
+        f"seed_{args.data_split_seed}"
     )
     
     if accelerator.is_local_main_process:
