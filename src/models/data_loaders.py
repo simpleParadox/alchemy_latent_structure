@@ -15,7 +15,8 @@ from collections import defaultdict
 def process_episode_worker(args):
     """Worker function for processing a single episode. Must be at module level for multiprocessing."""
     (episode_id, episode_content, task_type, word2idx, stone_state_to_id, 
-     special_token_ids, filter_query_from_support) = args
+     special_token_ids, filter_query_from_support, 
+     all_output_features_list, feature_to_idx_map) = args # Added new args for multi-label
     
     if not episode_content:
         return []
@@ -126,7 +127,37 @@ def process_episode_worker(args):
                 "encoder_input_ids": encoder_input_ids,
                 "target_class_id": target_class_id
             })
-    
+            
+        elif task_type == "classification_multi_label":
+            # For multi-label classification, tokenize inputs like seq2seq (features as individual tokens)
+            # but target is a multi-hot vector of output features.
+            tokenized_support_full_for_encoder = []
+            for sup_ex_str in filtered_support_examples_str:
+                full_sup_tokens, _, _, _, _ = tokenize_single_example_str_helper(sup_ex_str, word2idx, unk_token_id, io_sep_token_id)
+                tokenized_support_full_for_encoder.append(full_sup_tokens)
+            
+            encoder_input_ids = []
+            for i, sup_tokens in enumerate(tokenized_support_full_for_encoder):
+                encoder_input_ids.extend(sup_tokens)
+                if i < len(tokenized_support_full_for_encoder) - 1:
+                    encoder_input_ids.append(item_sep_token_id)
+            
+            if tokenized_support_full_for_encoder:
+                encoder_input_ids.append(item_sep_token_id)  # Separator before query
+            encoder_input_ids.extend(query_input_tokens) # query_input_tokens are already feature-based
+
+            # Create multi-hot target vector for output features
+            output_feature_strings = re.findall(r':\s*([\w-]+)', query_output_state_str)
+            target_feature_vector = [0] * len(all_output_features_list)
+            for feature_str in output_feature_strings:
+                if feature_str in feature_to_idx_map:
+                    target_feature_vector[feature_to_idx_map[feature_str]] = 1
+            
+            processed_data.append({
+                "encoder_input_ids": encoder_input_ids,
+                "target_feature_vector": target_feature_vector
+            })
+
     # Debugging: Check for UNK token in encoder_input_ids
     for item in processed_data:
         if "encoder_input_ids" in item and unk_token_id in item["encoder_input_ids"]:
@@ -178,7 +209,7 @@ def tokenize_single_example_str_helper(example_str, word2idx, unk_token_id, io_s
 
 class AlchemyDataset(Dataset):
     def __init__(self, json_file_path: str, 
-                 task_type: str = "classification", # "seq2seq" or "classification"
+                 task_type: str = "classification", # "seq2seq", "classification", "classification_multi_label"
                  vocab_word2idx: Dict[str, int] = None, 
                  vocab_idx2word: Dict[int, str] = None,
                  stone_state_to_id: Dict[str, int] = None, # For classification
@@ -212,9 +243,11 @@ class AlchemyDataset(Dataset):
             if self.task_type == "classification":
                 # For classification, build vocabulary with special tokens + potions + stone states
                 self.word2idx, self.idx2word = self._build_classification_vocab(json_file_path)
-            else:
-                # For seq2seq, build feature/potion vocabulary (includes individual features)
+            elif self.task_type == "seq2seq" or self.task_type == "classification_multi_label":
+                # For seq2seq and classification_multi_label, build feature/potion vocabulary
                 self.word2idx, self.idx2word = self._build_feature_potion_vocab(json_file_path)
+            else:
+                raise ValueError(f"Unknown task_type for vocab building: {self.task_type}")
 
         self.pad_token_id = self.word2idx[self.PAD_TOKEN_STR]
         self.sos_token_id = self.word2idx[self.SOS_TOKEN_STR]
@@ -235,6 +268,33 @@ class AlchemyDataset(Dataset):
                                          if state.startswith('{') and state.endswith('}')}
                 self.id_to_stone_state = {v: k for k, v in self.stone_state_to_id.items()}
         
+        # For classification_multi_label, we need a mapping for output features
+        self.all_output_features_list = None
+        self.feature_to_idx_map = None
+        self.num_output_features = None
+        if self.task_type == "classification_multi_label":
+            all_features_in_dataset: Set[str] = set()
+            with open(json_file_path, 'r') as f:
+                raw_data_for_features = json.load(f)
+            for episode_id, episode_content in raw_data_for_features["episodes"].items():
+                if not episode_content: continue
+                all_example_strings = episode_content.get("support", []) + episode_content.get("query", [])
+                for example_str in all_example_strings:
+                    # Use a simplified way to get output_state_str, then parse features
+                    # This avoids calling the full tokenize_single_example_str_helper here if not needed
+                    # or ensures all its dependencies are met if it were used.
+                    try:
+                        output_state_str = example_str.split(" -> ")[1]
+                        features_output = re.findall(r':\s*([\w-]+)', output_state_str)
+                        all_features_in_dataset.update(features_output)
+                    except IndexError:
+                        print(f"Warning: Malformed example string in episode {episode_id}: {example_str}")
+            
+            self.all_output_features_list = sorted(list(all_features_in_dataset))
+            self.feature_to_idx_map = {feature: idx for idx, feature in enumerate(self.all_output_features_list)}
+            self.num_output_features = len(self.all_output_features_list)
+            print(f"Built output feature mapping for multi-label classification: {self.num_output_features} unique features.")
+
         self.data = self._load_and_preprocess_data(json_file_path, self.num_workers, self.chunk_size)
         
         # Create train/val splits if requested
@@ -388,12 +448,17 @@ class AlchemyDataset(Dataset):
         special_token_ids = (self.io_sep_token_id, self.item_sep_token_id, 
                            self.sos_token_id, self.eos_token_id, self.unk_token_id)
         
+        # Add feature mapping for multi-label task to worker args
+        all_output_features_list_arg = self.all_output_features_list if self.task_type == "classification_multi_label" else None
+        feature_to_idx_map_arg = self.feature_to_idx_map if self.task_type == "classification_multi_label" else None
+
         episode_args = []
         for episode_id, episode_content in raw_data["episodes"].items():
             if episode_content:  # Skip empty episodes
                 episode_args.append((
                     episode_id, episode_content, self.task_type, self.word2idx, 
-                    self.stone_state_to_id, special_token_ids, self.filter_query_from_support
+                    self.stone_state_to_id, special_token_ids, self.filter_query_from_support,
+                    all_output_features_list_arg, feature_to_idx_map_arg # Pass new args
                 ))
         
         # Use multiprocessing to process episodes in parallel
@@ -437,9 +502,9 @@ class AlchemyDataset(Dataset):
         if not (0.0 < self.val_split < 1.0):
             raise ValueError(f"val_split must be between 0 and 1, got {self.val_split}")
         
-        if self.task_type == "classification":
+        if self.task_type == "classification": # Only classification needs balanced splits for now
             self._create_balanced_classification_splits()
-        else:
+        else: # seq2seq and classification_multi_label use random splits
             self._create_random_splits()
     
     def _create_balanced_classification_splits(self):
@@ -595,6 +660,14 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_typ
             "encoder_input_ids": padded_encoder_inputs,
             "target_class_id": target_class_ids
         }
+    elif task_type == "classification_multi_label":
+        # Target is a multi-hot vector, already a tensor in __getitem__
+        # We just need to stack them into a batch tensor.
+        target_feature_vectors = torch.stack([item["target_feature_vector"] for item in batch])
+        return {
+            "encoder_input_ids": padded_encoder_inputs,
+            "target_feature_vector": target_feature_vectors
+        }
     else:
         raise ValueError(f"Unknown task_type in collate_fn: {task_type}")
 
@@ -658,6 +731,44 @@ if __name__ == '__main__':
         print(f"ERROR: JSON data file not found at {FILE_PATH}. Please ensure the file exists.")
     except Exception as e:
         print(f"An error occurred during Classification DataLoader testing: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # Test Classification Multi-Label
+    print("\n\n--- Testing Classification Multi-Label Task ---")
+    try:
+        dataset_ml = AlchemyDataset(json_file_path=FILE_PATH, task_type="classification_multi_label", num_workers=1) # Using 1 worker for easier debugging if needed
+        print(f"Dataset (Multi-Label) initialized. Number of samples: {len(dataset_ml)}")
+        print(f"Feature/Potion Vocabulary size: {len(dataset_ml.word2idx)}")
+        if dataset_ml.num_output_features:
+            print(f"Number of output features for multi-label: {dataset_ml.num_output_features}")
+            # print(f"  Feature to index map (sample): {list(dataset_ml.feature_to_idx_map.items())[:5]}")
+
+        custom_collate_ml = partial(collate_fn, pad_token_id=dataset_ml.pad_token_id, task_type="classification_multi_label")
+        dataloader_ml = DataLoader(dataset_ml, batch_size=2, shuffle=False, collate_fn=custom_collate_ml)
+        print("DataLoader (Multi-Label) created.")
+
+        for i, batch_data in enumerate(dataloader_ml):
+            if i >= 1: break
+            print(f"\n--- Multi-Label Batch {i+1} --- ")
+            print("Encoder Inputs Shape:", batch_data["encoder_input_ids"].shape)
+            print("Target Feature Vector Shape:", batch_data["target_feature_vector"].shape)
+            if len(batch_data["encoder_input_ids"]) > 0:
+                 print("Encoder input (first sample):", batch_data["encoder_input_ids"][0])
+                 print("Target feature vector (first sample):", batch_data["target_feature_vector"][0])
+                 # Find indices where target is 1
+                 target_indices = (batch_data["target_feature_vector"][0] == 1).nonzero(as_tuple=True)[0]
+                 if dataset_ml.all_output_features_list: # Ensure list is not None
+                    target_features = [dataset_ml.all_output_features_list[idx.item()] for idx in target_indices]
+                    print(f"  Target features (first sample): {target_features}")
+
+
+        if len(dataset_ml) == 0: print("WARNING: Multi-Label dataset is empty.")
+
+    except FileNotFoundError:
+        print(f"ERROR: JSON data file not found at {FILE_PATH}. Please ensure the file exists.")
+    except Exception as e:
+        print(f"An error occurred during Multi-Label DataLoader testing: {e}")
         import traceback
         traceback.print_exc()
 

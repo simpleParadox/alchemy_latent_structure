@@ -31,8 +31,8 @@ def set_seed(seed_value):
 def parse_args():
     
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
-    parser.add_argument("--task_type", type=str, default="seq2seq", choices=["seq2seq", "classification"],
-                        help="Type of task: 'seq2seq' for feature-wise prediction or 'classification' for whole state prediction.")
+    parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label"],
+                        help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
     parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
                         help="Path to the training JSON data file.")
     parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1.json",
@@ -49,7 +49,7 @@ def parse_args():
                         help="Maximum sequence length for the model.")
     parser.add_argument("--epochs", type=int, default=2,
                         help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=1024,
+    parser.add_argument("--batch_size", type=int, default=8,
                         help="Batch size for training and validation.")
     parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
@@ -106,6 +106,25 @@ def calculate_accuracy_seq2seq(predictions, targets, ignore_index):
     # The function now returns sequence-level accuracy, count of correct sequences, and total sequences in batch.
     return accuracy, num_correct_sequences, num_sequences_in_batch
 
+def calculate_accuracy_multilabel(predictions, targets, threshold=0.5):
+    """
+    Calculates accuracy for multi-label classification.
+    predictions: (batch_size, num_features) - model logits (before sigmoid)
+    targets: (batch_size, num_features) - multi-hot encoded ground truth
+    threshold: threshold for converting probabilities to binary predictions
+    """
+    # Apply sigmoid and threshold to get binary predictions
+    preds_binary = (torch.sigmoid(predictions) > threshold).float()
+    
+    # Exact match accuracy: (number of samples where all labels are correct) / batch_size
+    correct_samples = (preds_binary == targets).all(dim=1).sum().item()
+    total_samples = targets.size(0)
+    
+    exact_match_accuracy = correct_samples / total_samples if total_samples > 0 else 0.0
+    
+    return exact_match_accuracy, correct_samples, total_samples
+
+
 def calculate_accuracy_classification(predictions, targets):
     """
     Calculates accuracy for classification task.
@@ -140,12 +159,16 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id)
         elif args.task_type == "classification":
             target_class_ids = batch["target_class_id"]
-            # For classification, generate src_padding_mask if model expects it
-            # Assuming pad_token_id is consistent for encoder inputs
             src_padding_mask = (encoder_input_ids == pad_token_id) 
             output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask) # (batch_size, num_classes)
             loss = criterion(output_logits, target_class_ids) # CrossEntropyLoss expects (N, C) and (N)
             acc, correct, considered = calculate_accuracy_classification(output_logits, target_class_ids)
+        elif args.task_type == "classification_multi_label":
+            target_feature_vector = batch["target_feature_vector"] # (batch_size, num_output_features)
+            src_padding_mask = (encoder_input_ids == pad_token_id)
+            output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask) # (batch_size, num_output_features)
+            loss = criterion(output_logits, target_feature_vector.float()) # BCEWithLogitsLoss expects float targets
+            acc, correct, considered = calculate_accuracy_multilabel(output_logits, target_feature_vector)
         else:
             raise ValueError(f"Unknown task_type: {args.task_type}")
 
@@ -187,11 +210,10 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     total_loss = 0
     total_correct_preds = 0
     total_considered_items = 0
-    all_accs = [] if args.task_type == "seq2seq" else None # all_accs might not be relevant for classification like this
+    all_accs = [] if args.task_type == "seq2seq" else None 
     with torch.no_grad():
         pbar = tqdm(dataloader, disable=not accelerator.is_local_main_process)
         for batch_idx, batch in enumerate(pbar):
-            # No need to move to device explicitly - Accelerate handles this
             encoder_input_ids = batch["encoder_input_ids"]
 
             if args.task_type == "seq2seq":
@@ -207,9 +229,12 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
                 loss = criterion(output_logits, target_class_ids)
                 acc, correct, considered = calculate_accuracy_classification(output_logits, target_class_ids)
-                # For classification, `acc` is already the batch accuracy.
-                # If we want a list of batch accuracies, we can append `acc`.
-                # For now, we just calculate the overall average.
+            elif args.task_type == "classification_multi_label":
+                target_feature_vector = batch["target_feature_vector"]
+                src_padding_mask = (encoder_input_ids == pad_token_id)
+                output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
+                loss = criterion(output_logits, target_feature_vector.float())
+                acc, correct, considered = calculate_accuracy_multilabel(output_logits, target_feature_vector)
             else:
                 raise ValueError(f"Unknown task_type: {args.task_type}")
 
@@ -222,8 +247,8 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     
     if args.task_type == "seq2seq":
         return avg_epoch_loss, avg_epoch_accuracy, all_accs # all_accs is specific to seq2seq here
-    else: # classification
-        return avg_epoch_loss, avg_epoch_accuracy # No third element like all_accs needed for now
+    else: # classification or classification_multi_label
+        return avg_epoch_loss, avg_epoch_accuracy
 
 def main():
     args = parse_args()
@@ -276,8 +301,8 @@ def main():
     
     # Create dataset with optional validation split
     print(f"Filter query from support initial: {args.filter_query_from_support}")
-    if not args.filter_query_from_support: # First check if it's not set, then convert to boolean.
-        args.filter_query_from_support = True if args.filter_query_from_support == 'True' else False
+    # Correctly convert string "True" or "False" or boolean True to boolean
+    args.filter_query_from_support = str(args.filter_query_from_support) == 'True'
     
     print("Filter query from support set to:", args.filter_query_from_support)
     with accelerator.main_process_first(): # Doing this once to prevent OOM errors when loading data on multiple processes.
@@ -330,6 +355,9 @@ def main():
     elif args.task_type == "classification":
         num_classes = len(full_dataset.stone_state_to_id)
         print(f"Number of classes (Stone States for Classification): {num_classes}")
+    elif args.task_type == "classification_multi_label":
+        num_output_features = full_dataset.num_output_features
+        print(f"Number of output features (for Multi-label Classification): {num_output_features}")
 
     # Create data loaders
     custom_collate_train = partial(collate_fn, pad_token_id=pad_token_id, task_type=args.task_type)
@@ -371,6 +399,15 @@ def main():
             max_len=args.max_seq_len
         )
         criterion = nn.CrossEntropyLoss()
+    elif args.task_type == "classification_multi_label":
+        model = create_classifier_model( # Using the same StoneStateClassifier model
+            config_name=args.model_size,
+            src_vocab_size=src_vocab_size,
+            num_classes=num_output_features, # Output layer size is num_output_features
+            device=accelerator.device,
+            max_len=args.max_seq_len
+        )
+        criterion = nn.BCEWithLogitsLoss() # Use BCEWithLogitsLoss for multi-label
     else:
         raise ValueError(f"Unknown task_type: {args.task_type}")
     
@@ -397,8 +434,10 @@ def main():
         print(f"Scheduler: CosineAnnealingLR, T_max: {num_training_steps}")
         if args.task_type == "seq2seq":
             print(f"Criterion: CrossEntropyLoss (ignoring PAD_ID: {pad_token_id} for target sequences)")
-        else:
+        elif args.task_type == "classification":
             print(f"Criterion: CrossEntropyLoss (for class predictions)")
+        elif args.task_type == "classification_multi_label":
+            print(f"Criterion: BCEWithLogitsLoss (for multi-label feature predictions)")
 
     # --- Training Loop ---
     # Extract support and query hop values from train_data_path
@@ -478,6 +517,10 @@ def main():
                 elif args.task_type == "classification":
                     checkpoint['stone_state_to_id'] = full_dataset.stone_state_to_id
                     checkpoint['id_to_stone_state'] = full_dataset.id_to_stone_state
+                elif args.task_type == "classification_multi_label":
+                    checkpoint['feature_to_idx_map'] = full_dataset.feature_to_idx_map
+                    checkpoint['idx_to_feature_map'] = {v: k for k, v in full_dataset.feature_to_idx_map.items()}
+                    checkpoint['num_output_features'] = full_dataset.num_output_features
                 
                 torch.save(checkpoint, model_save_path)
                 print(f"New best validation loss: {best_val_loss:.4f}. Model saved to {model_save_path}")
@@ -501,6 +544,10 @@ def main():
                 elif args.task_type == "classification":
                     checkpoint['stone_state_to_id'] = full_dataset.stone_state_to_id
                     checkpoint['id_to_stone_state'] = full_dataset.id_to_stone_state
+                elif args.task_type == "classification_multi_label":
+                    checkpoint['feature_to_idx_map'] = full_dataset.feature_to_idx_map
+                    checkpoint['idx_to_feature_map'] = {v: k for k, v in full_dataset.feature_to_idx_map.items()}
+                    checkpoint['num_output_features'] = full_dataset.num_output_features
                 torch.save(checkpoint, model_save_path)
                 print(f"Model saved to {model_save_path} (no validation)")
         
