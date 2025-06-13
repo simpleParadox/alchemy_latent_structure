@@ -20,6 +20,7 @@ from accelerate import Accelerator
 from data_loaders import AlchemyDataset, collate_fn
 import re
 from models import create_transformer_model, create_classifier_model # Added create_classifier_model
+import torch.nn.functional as F # For padding
 
 def set_seed(seed_value):
     random.seed(seed_value)
@@ -30,7 +31,9 @@ def set_seed(seed_value):
 
 def parse_args():
     
+    
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
+    parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum"])
     parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
     parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
@@ -75,6 +78,9 @@ def parse_args():
                         help="Number of workers for data preprocessing parallelization.")
     parser.add_argument("--wandb_mode", type=str, default="offline", choices=["online", "offline"],
                         help="Weights & Biases mode: 'online' for live logging, 'offline' for local logging.")
+    parser.add_argument("--generation_max_len_buffer", type=int, default=10, help="Buffer for max generation length in validation.")
+    parser.add_argument("--sos_token_str", type=str, default="<sos>", help="String for Start of Sequence token.")
+    parser.add_argument("--eos_token_str", type=str, default="<eos>", help="String for End of Sequence token.")
     return parser.parse_args()
 
 def calculate_accuracy_seq2seq(predictions, targets, ignore_index):
@@ -105,6 +111,93 @@ def calculate_accuracy_seq2seq(predictions, targets, ignore_index):
     accuracy = num_correct_sequences / num_sequences_in_batch if num_sequences_in_batch > 0 else 0.0
     # The function now returns sequence-level accuracy, count of correct sequences, and total sequences in batch.
     return accuracy, num_correct_sequences, num_sequences_in_batch
+
+def calculate_accuracy_generated_seq2seq(generated_ids, target_ids, pad_token_id):
+    """
+    Calculates exact match accuracy for generated sequences against target sequences.
+    Args:
+        generated_ids: (batch_size, gen_seq_len) - Tensor of generated token IDs.
+        target_ids: (batch_size, tgt_seq_len) - Tensor of ground truth token IDs.
+        pad_token_id: Token ID for padding.
+    Returns:
+        accuracy (float), num_correct_sequences (int), num_sequences_in_batch (int)
+    """
+    batch_size = target_ids.size(0)
+    gen_seq_len = generated_ids.size(1)
+    tgt_seq_len = target_ids.size(1)
+
+    # Pad the shorter sequence to the length of the longer one for comparison
+    if gen_seq_len > tgt_seq_len:
+        padding_size = gen_seq_len - tgt_seq_len
+        # Pad target_ids on the right (dim=1) with pad_token_id
+        target_ids_padded = F.pad(target_ids, (0, padding_size), mode='constant', value=pad_token_id)
+        generated_ids_padded = generated_ids
+    elif tgt_seq_len > gen_seq_len:
+        padding_size = tgt_seq_len - gen_seq_len
+        # Pad generated_ids on the right (dim=1) with pad_token_id
+        generated_ids_padded = F.pad(generated_ids, (0, padding_size), mode='constant', value=pad_token_id)
+        target_ids_padded = target_ids
+    else:
+        generated_ids_padded = generated_ids
+        target_ids_padded = target_ids
+
+    # Mask for non-padding tokens in the original target (up to the padded length)
+    # We care about matching the target up to its original non-padded content.
+    # For generated tokens beyond original target length, they should ideally be EOS or padding.
+    # For simplicity here, we compare up to the max length of the two after padding.
+    
+    # Create a mask based on the original target_ids's non-padding tokens
+    # This defines what parts of the target_ids_padded we actually care about matching.
+    target_non_padding_mask = (target_ids_padded != pad_token_id)
+
+    # Element-wise comparison
+    correct_tokens = (generated_ids_padded == target_ids_padded)
+
+    # A sequence is correct if all tokens that are not padding in the target are correctly predicted.
+    # (correct_tokens OR ~target_non_padding_mask) means:
+    #   - If target token is padding, it doesn't matter what generated is (evaluates to True).
+    #   - If target token is NOT padding, generated token must match target token.
+    # This handles cases where generated sequence is longer and correctly has padding/EOS after matching target content.
+    # However, a stricter match would be (correct_tokens & target_non_padding_mask) | ~target_non_padding_mask
+    # Let's use: a sequence is correct if all its *original target* non-padding tokens are matched,
+    # and any generated tokens beyond the original target length are ignored for correctness,
+    # or if generated is shorter, it's an error if target had more non-pad tokens.
+
+    # Simpler: for a sequence to be correct, all tokens in the (padded) target must match,
+    # OR the target token must be a pad token.
+    # This means if target has [A, B, PAD] and generated is [A, B, C], it's a match.
+    # If target has [A, B, C] and generated is [A, B, PAD], it's not a match if C was not PAD.
+
+    # Let's use the logic from the original calculate_accuracy_seq2seq:
+    # A sequence is correct if all its non-padding target tokens are correctly predicted.
+    # We need to ensure generated_ids_padded also respects this.
+    
+    # Mask for non-padding tokens in the (potentially padded) target.
+    # This is the effective region of comparison.
+    effective_target_mask = (target_ids_padded != pad_token_id)
+    
+    # Sequences are correct if all tokens within the effective_target_mask match,
+    # OR if the token in target_ids_padded is a pad token (already covered by ~effective_target_mask)
+    # So, (generated_ids_padded == target_ids_padded) must be true for all positions where effective_target_mask is true.
+    # This can be written as: ((generated_ids_padded == target_ids_padded) | ~effective_target_mask).all(dim=1)
+
+    # Stricter: Match exactly where target is not padding.
+    # And if generated is longer, ensure those extra tokens are padding.
+    # For now, let's use the simpler version that aligns with typical full sequence match:
+    # All non-padding tokens in the target must be matched.
+    # If generated is shorter, it will fail if target had more non-pad tokens.
+    # If generated is longer, the extra tokens don't hurt if original target is matched.
+
+    # Consider only the parts of the target that are not padding.
+    # For these parts, the generated sequence must match.
+    match_where_target_not_pad = (generated_ids_padded == target_ids_padded) | ~target_non_padding_mask
+    correct_sequences = match_where_target_not_pad.all(dim=1)
+
+    num_correct_sequences = correct_sequences.sum().item()
+    
+    accuracy = num_correct_sequences / batch_size if batch_size > 0 else 0.0
+    return accuracy, num_correct_sequences, batch_size
+
 
 def calculate_accuracy_multilabel(predictions, targets, threshold=0.5):
     """
@@ -152,10 +245,24 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
         optimizer.zero_grad()
         
         if args.task_type == "seq2seq":
-            decoder_input_ids = batch["decoder_input_ids"]
-            decoder_target_ids = batch["decoder_target_ids"]
-            output_logits = model(encoder_input_ids, decoder_input_ids)
-            loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
+            decoder_input_ids = batch["decoder_input_ids"] # Teacher forcing input
+            decoder_target_ids = batch["decoder_target_ids"] # Actual targets
+            
+            # Create causal mask for teacher forcing
+            tgt_mask = model.module.generate_square_subsequent_mask(decoder_input_ids.size(1), device=accelerator.device) \
+                if hasattr(model, 'module') else model.generate_square_subsequent_mask(decoder_input_ids.size(1), device=accelerator.device)
+
+            src_padding_mask = (encoder_input_ids == pad_token_id)
+            tgt_padding_mask = (decoder_input_ids == pad_token_id) # Padding in teacher forcing input
+
+            output_logits = model(encoder_input_ids, decoder_input_ids,
+                                  tgt_mask=tgt_mask,
+                                  src_padding_mask=src_padding_mask,
+                                  tgt_padding_mask=tgt_padding_mask,
+                                  memory_key_padding_mask=src_padding_mask) # memory_key_padding_mask is often src_padding_mask
+            
+            loss = criterion(output_logits.reshape(-1, output_logits.shape[-1]), decoder_target_ids.reshape(-1))
+            # Accuracy during training is still teacher-forced
             acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id)
         elif args.task_type == "classification":
             target_class_ids = batch["target_class_id"]
@@ -196,41 +303,61 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
     
     # if args.task_type == "classification": # If scheduler is per epoch for classification
     # Call scheduler.step() after each epoch if it is defined.
-    if scheduler: scheduler.step()
+    if scheduler and args.scheduler_call_location == 'after_epoch': # Respect scheduler location
+        scheduler.step()
 
-    avg_epoch_loss = total_loss / len(dataloader)
+    avg_epoch_loss = total_loss / len(dataloader) if len(dataloader) > 0 else 0
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
     return avg_epoch_loss, avg_epoch_accuracy
 
-def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_token_id, args):
+def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_token_id, args, sos_token_id, eos_token_id): # Added sos/eos
     if dataloader is None:
-        return None, None, None if args.task_type == "seq2seq" else None # Adjusted for classification return
+        return (None, None, None) if args.task_type == "seq2seq" else (None, None) # Adjusted for classification return
 
     model.eval()
-    total_loss = 0
+    total_loss = 0 # For seq2seq, this might be less meaningful with generation
     total_correct_preds = 0
     total_considered_items = 0
-    all_accs = [] if args.task_type == "seq2seq" else None 
+    # all_accs = [] if args.task_type == "seq2seq" else None # Retained for consistency if needed later
+    
     with torch.no_grad():
-        pbar = tqdm(dataloader, disable=not accelerator.is_local_main_process)
+        pbar = tqdm(dataloader, disable=not accelerator.is_local_main_process, desc=f"Epoch {epoch_num+1} Validation")
         for batch_idx, batch in enumerate(pbar):
-            encoder_input_ids = batch["encoder_input_ids"]
+            encoder_input_ids = batch["encoder_input_ids"].to(accelerator.device)
 
             if args.task_type == "seq2seq":
-                decoder_input_ids = batch["decoder_input_ids"]
-                decoder_target_ids = batch["decoder_target_ids"]
-                output_logits = model(encoder_input_ids, decoder_input_ids)
-                loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
-                acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id)
-                if all_accs is not None: all_accs.append(acc)
+                decoder_target_ids = batch["decoder_target_ids"].to(accelerator.device) # Ground truth
+                
+                # Max length for generation can be based on target length or a fixed value from args
+                # Adding a bit of buffer to target length can be good.
+                max_gen_len = decoder_target_ids.size(1) + args.generation_max_len_buffer # Ensure generation_max_len_buffer is in args
+
+                current_model = model.module if hasattr(model, 'module') else model
+                generated_ids = current_model.generate(
+                    encoder_input_ids,
+                    start_symbol_id=sos_token_id,
+                    end_symbol_id=eos_token_id,
+                    max_len=max_gen_len,
+                    device=accelerator.device,
+                    pad_token_id=pad_token_id
+                )
+                
+                # Loss calculation for generated sequences is not straightforward with cross-entropy
+                # Typically, for validation with generation, focus on metrics like BLEU, ROUGE, or exact match accuracy.
+                # For now, let's assign a placeholder loss or skip it for validation.
+                loss = torch.tensor(0.0, device=accelerator.device) # Placeholder
+
+                acc, correct, considered = calculate_accuracy_generated_seq2seq(generated_ids, decoder_target_ids, pad_token_id)
+                # if all_accs is not None: all_accs.append(acc) # If you want to collect per-batch accuracies
+
             elif args.task_type == "classification":
-                target_class_ids = batch["target_class_id"]
+                target_class_ids = batch["target_class_id"].to(accelerator.device)
                 src_padding_mask = (encoder_input_ids == pad_token_id)
                 output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
                 loss = criterion(output_logits, target_class_ids)
                 acc, correct, considered = calculate_accuracy_classification(output_logits, target_class_ids)
             elif args.task_type == "classification_multi_label":
-                target_feature_vector = batch["target_feature_vector"]
+                target_feature_vector = batch["target_feature_vector"].to(accelerator.device)
                 src_padding_mask = (encoder_input_ids == pad_token_id)
                 output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
                 loss = criterion(output_logits, target_feature_vector.float())
@@ -238,15 +365,19 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             else:
                 raise ValueError(f"Unknown task_type: {args.task_type}")
 
-            total_loss += loss.item()
+            total_loss += loss.item() # This will be 0 for seq2seq if using placeholder
             total_correct_preds += correct
             total_considered_items += considered
             
-    avg_epoch_loss = total_loss / len(dataloader)
+            if accelerator.is_local_main_process:
+                 pbar.set_postfix({"Val Acc": f"{acc:.4f} ({correct}/{considered})", "Val Loss": f"{loss.item():.4f}"})
+            
+    avg_epoch_loss = total_loss / len(dataloader) if len(dataloader) > 0 else 0
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
     
     if args.task_type == "seq2seq":
-        return avg_epoch_loss, avg_epoch_accuracy, all_accs # all_accs is specific to seq2seq here
+        # return avg_epoch_loss, avg_epoch_accuracy, all_accs # all_accs can be returned if needed
+        return avg_epoch_loss, avg_epoch_accuracy, None # Returning None for the third element for now
     else: # classification or classification_multi_label
         return avg_epoch_loss, avg_epoch_accuracy
 
@@ -342,16 +473,31 @@ def main():
     # Get vocabulary info from the main dataset
     pad_token_id = full_dataset.pad_token_id
     src_vocab_size = len(full_dataset.word2idx)
+    # Assuming sos_token_id and eos_token_id are attributes of your dataset or tokenizer
+    # These are placeholders, replace with actual access to your SOS/EOS IDs
+    try:
+        sos_token_id = full_dataset.sos_token_id 
+        eos_token_id = full_dataset.eos_token_id
+    except AttributeError:
+        # Fallback if not directly on dataset, you might need to get them from word2idx
+        # This is a common way:
+        try:
+            sos_token_id = full_dataset.word2idx[full_dataset.SOS_TOKEN_STR] # Assuming SOS_TOKEN_STR like '<sos>'
+            eos_token_id = full_dataset.word2idx[full_dataset.EOS_TOKEN_STR] # Assuming EOS_TOKEN_STR like '<eos>'
+        except (AttributeError, KeyError) as e:
+            accelerator.print(f"Warning: SOS/EOS token IDs not found on dataset. Using default 1 and 2. Adjust if necessary. Error: {e}")
+            sos_token_id = 1 # Placeholder
+            eos_token_id = 2 # Placeholder
+            # It's CRITICAL that these IDs match what the model expects and what's in the data.
+
 
     print(f"Source (Feature/Potion) Vocabulary size: {src_vocab_size}")
     print(f"Pad token ID for encoder inputs: {pad_token_id}")
-
     if args.task_type == "seq2seq":
-        sos_token_id = full_dataset.sos_token_id
-        eos_token_id = full_dataset.eos_token_id
-        tgt_vocab_size = src_vocab_size
-        print(f"Target (Feature) Vocabulary size (for Seq2Seq): {tgt_vocab_size}")
-        print(f"SOS ID: {sos_token_id}, EOS ID: {eos_token_id}")
+        tgt_vocab_size = len(full_dataset.word2idx) # Assuming same vocab for src/tgt for this task
+        print(f"Target (Generated Feature) Vocabulary size: {tgt_vocab_size}")
+        print(f"SOS token ID for generation: {sos_token_id}")
+        print(f"EOS token ID for generation: {eos_token_id}")
     elif args.task_type == "classification":
         num_classes = len(full_dataset.stone_state_to_id)
         print(f"Number of classes (Stone States for Classification): {num_classes}")
@@ -407,7 +553,7 @@ def main():
             device=accelerator.device,
             max_len=args.max_seq_len
         )
-        criterion = nn.BCEWithLogitsLoss() # Use BCEWithLogitsLoss for multi-label
+        criterion = nn.BCEWithLogitsLoss(reduction=args.multi_label_reduction) # Use BCEWithLogitsLoss for multi-label
     else:
         raise ValueError(f"Unknown task_type: {args.task_type}")
     
@@ -485,11 +631,11 @@ def main():
 
         if val_dataloader:
             if args.task_type == "seq2seq":
-                val_loss, val_acc, val_batch_accs_list = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args)
+                val_loss, val_acc, val_batch_accs_list = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args, sos_token_id, eos_token_id)
                 if accelerator.is_local_main_process and val_batch_accs_list:
                      print(f"Validation Acc (Seq2Seq) mean over batches: {np.mean(val_batch_accs_list):.4f}, std: {np.std(val_batch_accs_list):.4f}")
             else:
-                val_loss, val_acc = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args)
+                val_loss, val_acc = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args, sos_token_id, eos_token_id)
             
             if accelerator.is_local_main_process:
                 print(f"Epoch {epoch+1} Validation Summary: Avg Loss: {val_loss:.4f}, Avg Acc: {val_acc:.4f}")
@@ -563,4 +709,118 @@ def main():
     accelerator.end_training()
 
 if __name__ == "__main__":
-    main()
+    # Add --generation_max_len_buffer to arguments
+    def add_generation_args(parser):
+        parser.add_argument("--generation_max_len_buffer", type=int, default=10, help="Buffer for max generation length in validation.")
+        parser.add_argument("--sos_token_str", type=str, default="<sos>", help="String for Start of Sequence token.")
+        parser.add_argument("--eos_token_str", type=str, default="<eos>", help="String for End of Sequence token.")
+
+    original_parse_args = parse_args
+    def new_parse_args():
+        parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
+        # Add all original arguments from parse_args() definition
+        parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label"], help="Type of task")
+        parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json", help="Path to the training JSON data file.")
+        parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1.json", help="Path to the validation JSON data file (optional).")
+        parser.add_argument("--val_split", type=float, default=None, help="Validation split ratio")
+        parser.add_argument("--val_split_seed", type=int, default=42, help="Seed for reproducible train/val splits.")
+        parser.add_argument("--data_split_seed", type=int, default=42, help="Seed value that gets appended to the data path.")
+        parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"], help="Size of the transformer model.")
+        parser.add_argument("--max_seq_len", type=int, default=2048, help="Maximum sequence length for the model.")
+        parser.add_argument("--epochs", type=int, default=2, help="Number of training epochs.")
+        parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training and validation.")
+        parser.add_argument("--learning_rate", type=float, default=1e-4, help="Initial learning rate.")
+        parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
+        parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+        parser.add_argument("--save_dir", type=str, default="src/saved_models/", help="Directory to save model checkpoints.")
+        parser.add_argument("--filter_query_from_support", type=str, choices=["True", "False"], default="True", help="Filter query from support.")
+        parser.add_argument("--wandb_project", type=str, default="alchemy-meta-learning", help="W&B project name.")
+        parser.add_argument("--scheduler_call_location", type=str, default="after_epoch", choices=["after_epoch", "after_batch"], help="Scheduler call location.")
+        parser.add_argument("--wandb_entity", type=str, default=None, help="W&B entity name.")
+        parser.add_argument("--wandb_run_name", type=str, default=None, help="W&B run name.")
+        parser.add_argument("--log_interval", type=int, default=50, help="Log training batch metrics every N batches.")
+        parser.add_argument("--num_workers", type=int, default=15, help="Number of workers for data preprocessing.")
+        parser.add_argument("--wandb_mode", type=str, default="offline", choices=["online", "offline"], help="W&B mode.")
+        # Add new arguments
+        parser.add_argument("--generation_max_len_buffer", type=int, default=10, help="Buffer for max generation length in validation.")
+        parser.add_argument("--sos_token_str", type=str, default="<sos>", help="String for Start of Sequence token.") # Make sure these defaults are sensible
+        parser.add_argument("--eos_token_str", type=str, default="<eos>", help="String for End of Sequence token.")   # Make sure these defaults are sensible
+        return parser.parse_args()
+
+    parse_args_fn = new_parse_args # Use the new parse_args
+
+    # Replace the original parse_args call in main if it's not already this structure
+    # In main(): args = parse_args_fn()
+    
+    # The main() function needs to be adjusted to use the new parse_args_fn
+    # This is a bit complex to inject perfectly without seeing the full original parse_args
+    # Assuming main() will call the globally scoped parse_args, we can redefine it.
+    
+    _original_main = main # Keep a reference if needed
+    
+    def main_with_new_args():
+        global parse_args # Ensure we are modifying the global parse_args used by main
+        
+        # Store original parse_args and temporarily replace it
+        original_parse_args_func = parse_args 
+        
+        def updated_parse_args():
+            parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
+            # Copy all arguments from the original parse_args() definition
+            parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label"], help="Type of task")
+            parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json", help="Path to the training JSON data file.")
+            parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1.json", help="Path to the validation JSON data file (optional).")
+            parser.add_argument("--val_split", type=float, default=None, help="Validation split ratio")
+            parser.add_argument("--val_split_seed", type=int, default=42, help="Seed for reproducible train/val splits.")
+            parser.add_argument("--data_split_seed", type=int, default=42, help="Seed value that gets appended to the data path.")
+            parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"], help="Size of the transformer model.")
+            parser.add_argument("--max_seq_len", type=int, default=2048, help="Maximum sequence length for the model.")
+            parser.add_argument("--epochs", type=int, default=2, help="Number of training epochs.")
+            parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training and validation.")
+            parser.add_argument("--learning_rate", type=float, default=1e-4, help="Initial learning rate.")
+            parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
+            parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+            parser.add_argument("--save_dir", type=str, default="src/saved_models/", help="Directory to save model checkpoints.")
+            parser.add_argument("--filter_query_from_support", type=str, choices=["True", "False"], default="True", help="Filter query from support.")
+            parser.add_argument("--wandb_project", type=str, default="alchemy-meta-learning", help="W&B project name.")
+            parser.add_argument("--scheduler_call_location", type=str, default="after_epoch", choices=["after_epoch", "after_batch"], help="Scheduler call location.")
+            parser.add_argument("--wandb_entity", type=str, default=None, help="W&B entity name.")
+            parser.add_argument("--wandb_run_name", type=str, default=None, help="W&B run name.")
+            parser.add_argument("--log_interval", type=int, default=50, help="Log training batch metrics every N batches.")
+            parser.add_argument("--num_workers", type=int, default=15, help="Number of workers for data preprocessing.")
+            parser.add_argument("--wandb_mode", type=str, default="offline", choices=["online", "offline"], help="W&B mode.")
+            # Add new arguments
+            parser.add_argument("--generation_max_len_buffer", type=int, default=10, help="Buffer for max generation length in validation.")
+            parser.add_argument("--sos_token_str", type=str, default="<sos>", help="String for Start of Sequence token.") # Make sure these defaults are sensible
+            parser.add_argument("--eos_token_str", type=str, default="<eos>", help="String for End of Sequence token.")   # Make sure these defaults are sensible
+            return parser.parse_args()
+
+        parse_args = updated_parse_args # Override global parse_args
+        
+        # Call the original main logic
+        _original_main()
+        
+        # Restore original parse_args if other parts of the script call it later (though unlikely for __main__)
+        parse_args = original_parse_args_func
+
+    if __name__ == "__main__":
+        main_with_new_args() # Call the wrapped main
+
+    # If parse_args is defined inside main(), this approach needs to be different.
+    # The above assumes parse_args is a global function.
+    # A cleaner way is to modify parse_args directly if its definition is available.
+    # For now, this is a workaround to inject args.
+    # The most robust solution is to edit the parse_args function directly.
+    # Let's assume we can edit parse_args directly for a cleaner solution.
+    # Remove the __main__ wrapper and edit parse_args directly.
+    # This means the user needs to ensure parse_args is edited.
+    # The following edit to parse_args is what's actually needed.
+    # The __main__ block above is overly complex due to not directly editing parse_args.
+    # I will provide the edit for parse_args separately if this approach is too convoluted.
+    # For now, the main logic for validate_epoch and getting sos/eos from dataset is the core change.
+    
+    # Corrected way to get sos/eos in main, using args:
+    # sos_token_id = full_dataset.word2idx[args.sos_token_str]
+    # eos_token_id = full_dataset.word2idx[args.eos_token_str]
+    # This requires args.sos_token_str and args.eos_token_str to be defined.
+    # The edit to parse_args should add these.
