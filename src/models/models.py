@@ -97,6 +97,66 @@ class Seq2SeqTransformer(nn.Module):
         tgt_emb_pe = tgt_emb_pe.permute(1,0,2) # Output from PE: (S_tgt, N, E) -> (N, S_tgt, E) for Decoder
         return self.transformer.decoder(tgt_emb_pe, memory, tgt_mask, None, 
                                         tgt_padding_mask, memory_key_padding_mask) # Output: (N, S_tgt, E)
+        
+    def generate(self, src, start_symbol_id, end_symbol_id, max_len, device, pad_token_id):
+        """
+            Autoregressive generation method.
+            
+            Args:
+                src: Source sequence tensor, shape (batch_size, src_seq_len)
+                start_symbol_id: Token ID to start generation (SOS token)
+                end_symbol_id: Token ID to end generation (EOS token)
+                max_len: Maximum length of generated sequence
+                device: Device to create tensors on
+                pad_token_id: Padding token ID for creating masks
+                
+            Returns:
+                generated_ids: Generated token sequences, shape (batch_size, generated_seq_len)
+        """
+        self.eval()  # Set model to evaluation mode]
+        
+        # First create a padding mask and pass it through the encoder.
+        src_padding_mask = (src == pad_token_id)  # Shape: (batch_size, src_seq_len)
+        # 'src' is the encoder input, so we encode it first.
+        memory = self.encode(src, src_padding_mask=src_padding_mask)  # Shape: (batch_size, src_seq_len, emb_size)
+        
+        batch_size = src.size(0)
+        # Initialize the target sequence with the start symbol.
+        tgt = torch.full((batch_size, 1), start_symbol_id, dtype=torch.long, device=device)
+        finished = torch.zeros(batch_size, dtype=torch.bool, device=device)  # Track finished sequences.
+        
+        # Generate the sequence step by step.
+        for i in range(max_len - 1):
+            # Create the target mask for the current step.
+            tgt_mask = self.generate_square_subsequent_mask(tgt.size(1), device=device)
+            tgt_len = tgt.size(1)
+            
+            # Decode the current target sequence.
+            decoder_output = self.decode(
+                tgt=tgt, 
+                memory=memory, 
+                tgt_mask=tgt_mask, 
+                memory_key_padding_mask=src_padding_mask
+            )
+            
+            # Get the logits for the last token logits only.
+            last_token_logits = self.generator(decoder_output[:, -1, :]) # Generator is the linear layer over the vocabulary.
+            
+            # Get the token predictions using greedy decoding.
+            next_token = last_token_logits.argmax(dim=-1)
+            
+            # Now append the newly predicted token to the target sequence.
+            tgt = torch.cat([tgt, next_token.unsqueeze(1)], dim=1)
+            
+            just_finished = (next_token == end_symbol_id)
+            finished = finished | just_finished  # Update finished sequences.
+            
+            if finished.all():
+                break
+           
+        # Will remove the start symbol in the function that calls this.
+        return tgt  # Shape: (batch_size, generated_seq_len)
+        
 
     @staticmethod
     def generate_square_subsequent_mask(sz: int, device="cpu"):
