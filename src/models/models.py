@@ -256,7 +256,7 @@ def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_si
     configs = {
         "tiny": { # Approx. 10M params with 32k vocab
             "num_encoder_layers": 2, "num_decoder_layers": 2, 
-            "emb_size": 128, "nhead": 4, "dim_feedforward": 256, "dropout": 0.1
+            "emb_size": 256, "nhead": 4, "dim_feedforward": 512, "dropout": 0.1
         },
         "xsmall": { # Approx. 15M params with 32k vocab
             "num_encoder_layers": 4, "num_decoder_layers": 4, 
