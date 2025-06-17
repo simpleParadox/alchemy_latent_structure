@@ -453,7 +453,7 @@ class AlchemyDataset(Dataset):
         feature_to_idx_map_arg = self.feature_to_idx_map if self.task_type == "classification_multi_label" else None
 
         episode_args = []
-        c = 0
+        # c = 0
         for episode_id, episode_content in raw_data["episodes"].items():
             if episode_content:  # Skip empty episodes
                 episode_args.append((
@@ -461,10 +461,10 @@ class AlchemyDataset(Dataset):
                     self.stone_state_to_id, special_token_ids, self.filter_query_from_support,
                     all_output_features_list_arg, feature_to_idx_map_arg # Pass new args
                 ))
-                c += 1
-            if c == 5000:
-                print(f"Loaded {c} episodes from {json_file_path}. Stopping early for testing.")
-                break
+                # c += 1
+            # if c == 5000: # Uncomment this for debugging/testing.
+            #     print(f"Loaded {c} episodes from {json_file_path}. Stopping early for testing.")
+            #     break
         
         # Use multiprocessing to process episodes in parallel
         processed_data: List[Dict[str, Any]] = []
