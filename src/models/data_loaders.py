@@ -461,8 +461,11 @@ class AlchemyDataset(Dataset):
                     self.stone_state_to_id, special_token_ids, self.filter_query_from_support,
                     all_output_features_list_arg, feature_to_idx_map_arg # Pass new args
                 ))
-                # c += 1
-            # if c == 5000: # Uncomment this for debugging/testing.
+            #     c += 1
+            # if ('train' in json_file_path) and (c == 5000): # Uncomment this for debugging/testing.
+            #     print(f"Loaded {c} episodes from {json_file_path}. Stopping early for testing.")
+            #     break
+            # if ('val' in json_file_path) and (c == 100): # Uncomment this for debugging/testing.
             #     print(f"Loaded {c} episodes from {json_file_path}. Stopping early for testing.")
             #     break
         
@@ -647,13 +650,14 @@ class AlchemyDataset(Dataset):
 
 def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_type: str = "seq2seq") -> Dict[str, torch.Tensor]:
     encoder_inputs = [item["encoder_input_ids"] for item in batch]
-    padded_encoder_inputs = torch.nn.utils.rnn.pad_sequence(encoder_inputs, batch_first=True, padding_value=pad_token_id)
+    padding_side = 'right'
+    padded_encoder_inputs = torch.nn.utils.rnn.pad_sequence(encoder_inputs, batch_first=True, padding_value=pad_token_id, padding_side=padding_side)
     
     if task_type == "seq2seq":
         decoder_inputs = [item["decoder_input_ids"] for item in batch]
         decoder_targets = [item["decoder_target_ids"] for item in batch]
-        padded_decoder_inputs = torch.nn.utils.rnn.pad_sequence(decoder_inputs, batch_first=True, padding_value=pad_token_id)
-        padded_decoder_targets = torch.nn.utils.rnn.pad_sequence(decoder_targets, batch_first=True, padding_value=pad_token_id)
+        padded_decoder_inputs = torch.nn.utils.rnn.pad_sequence(decoder_inputs, batch_first=True, padding_value=pad_token_id, padding_side='right')
+        padded_decoder_targets = torch.nn.utils.rnn.pad_sequence(decoder_targets, batch_first=True, padding_value=pad_token_id, padding_side='right')
         return {
             "encoder_input_ids": padded_encoder_inputs,
             "decoder_input_ids": padded_decoder_inputs,

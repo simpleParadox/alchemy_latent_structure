@@ -49,7 +49,7 @@ def parse_args():
                         help="Size of the transformer model.")
     parser.add_argument("--max_seq_len", type=int, default=2048, # Max length for support + query + separators
                         help="Maximum sequence length for the model.")
-    parser.add_argument("--epochs", type=int, default=2,
+    parser.add_argument("--epochs", type=int, default=20,
                         help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=256,
                         help="Batch size for training and validation.")
@@ -65,6 +65,8 @@ def parse_args():
                         help="Filter out query examples from support sets to prevent data leakage when support_steps=query_steps=1. Default=True", default=True)
     parser.add_argument("--wandb_project", type=str, default="alchemy-meta-learning",
                         help="Weights & Biases project name.")
+    parser.add_argument("--use_scheduler", type=str, default="True", choices=["True", "False"],
+                        help="Use learning rate scheduler. Default is True.")
     parser.add_argument("--scheduler_call_location", type=str, default="after_epoch", choices=["after_epoch", "after_batch"],
                         help="Where to call the scheduler: 'after_epoch' for per-epoch scheduling, 'after_batch' for per-batch.")
     parser.add_argument("--wandb_entity", type=str, default=None, # Replace with your W&B entity
@@ -210,30 +212,31 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             decoder_input_ids = batch["decoder_input_ids"]
             decoder_target_ids = batch["decoder_target_ids"]
             
-            eos_token_id = dataloader.dataset.eos_token_id
-            
-            
             output_logits = model(encoder_input_ids, decoder_input_ids)
             
-            target_mask = (decoder_target_ids != pad_token_id)
+            # The criterion will automatically ignore pad_token_id because it was initialized with ignore_index.
+            loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
             
-            # Apply mask to both logits and targets for loss calculation
-            # Flatten and apply mask
-            output_logits_flat = output_logits.view(-1, output_logits.shape[-1])  # (batch_size * seq_len, vocab_size)
-            decoder_target_flat = decoder_target_ids.view(-1)  # (batch_size * seq_len)
-            target_mask_flat = target_mask.view(-1)  # (batch_size * seq_len)
             
-            # Only calculate loss on non-<eos> tokens
-            if target_mask_flat.sum() > 0:  # Make sure we have some valid tokens.
-                # This is what should be happening generally.
-                masked_output_logits = output_logits_flat[target_mask_flat]
-                masked_targets = decoder_target_flat[target_mask_flat]
-                loss = criterion(masked_output_logits, masked_targets)
+            # target_mask = (decoder_target_ids != pad_token_id)
+            
+            # # Apply mask to both logits and targets for loss calculation
+            # # Flatten and apply mask
+            # output_logits_flat = output_logits.view(-1, output_logits.shape[-1])  # (batch_size * seq_len, vocab_size)
+            # decoder_target_flat = decoder_target_ids.view(-1)  # (batch_size * seq_len)
+            # target_mask_flat = target_mask.view(-1)  # (batch_size * seq_len)
+            
+            # # Only calculate loss on non-<eos> tokens
+            # if target_mask_flat.sum() > 0:  # Make sure we have some valid tokens.
+            #     # This is what should be happening generally.
+            #     masked_output_logits = output_logits_flat[target_mask_flat]
+            #     masked_targets = decoder_target_flat[target_mask_flat]
+            #     loss = criterion(masked_output_logits, masked_targets)
                 
-            else:
-                print("This shouldn't be happening. \nWarning: No valid tokens for loss calculation. Using original logits and targets.")
-                # Fallback: use original calculation if no valid tokens (shouldn't happen normally)
-                loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
+            # else:
+            #     print("This shouldn't be happening. \nWarning: No valid tokens for loss calculation. Using original logits and targets.")
+            #     # Fallback: use original calculation if no valid tokens (shouldn't happen normally)
+            #     loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
                 
             # Calculate accuracy.
             # Quick diagnostic
@@ -244,6 +247,10 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             # print(f"EOS token ID: {eos_token_id}")
             # print(f"PAD token ID: {pad_token_id}")
             # print(f"Are they the same? {eos_token_id == pad_token_id}")
+            # print(f"Sample decoder_target_ids: {decoder_target_ids[0]}")
+            # print(f"Sample output_logits: {output_logits[0]}")
+            # print(f"Sample masked_output_logits: {masked_output_logits[0]}")
+            # print(f"Sample masked_targets: {masked_targets[0]}")
             acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id, eos_token_id=None)
             
         elif args.task_type == "classification":
@@ -324,8 +331,8 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 # This generates the tokens one-by-one.
                 generated_ids = unwrapped_model.generate(
                     src=encoder_input_ids,
-                    start_symbol_id=sos_token_id,  # You'll need to get this from your dataset
-                    end_symbol_id=eos_token_id,    # You'll need to get this from your dataset
+                    start_symbol_id=sos_token_id,  
+                    end_symbol_id=eos_token_id,    
                     max_len=max_target_len,
                     device=encoder_input_ids.device,
                     pad_token_id=pad_token_id
@@ -340,75 +347,41 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 
                 batch_size = decoder_target_ids.size(0)
                 
-                # The following three lines are okay because this is a token-wise loss.
-                # If the generated_ids is longer than the target, we trim it to match the target length.
-                # This is to ensure we only compare valid tokens.
-                
-                # Remove <eos> from both generated and target sequences.
-                target_without_eos = []
-                generated_without_eos = []
-                
-                for i in range(batch_size):
-                    target_seq = decoder_target_ids[i]
-                    eos_pos_target = (target_seq == eos_token_id).nonzero()
-                    
-                    if len(eos_pos_target) > 0:
-                        target_trimmed = target_seq[:eos_pos_target.item()] # Trim at first EOS
-                    else:
-                        target_trimmed = target_seq # Trim at first EOS
-                
-                    # Process generated sequences similarly
-                    gen_seq = generated_ids[i]
-                    eos_pos_gen = (gen_seq == eos_token_id).nonzero()
-                    
-                    if len(eos_pos_gen) > 0:
-                        gen_trimmed = gen_seq[:eos_pos_gen.item()]
-                    else:
-                        gen_trimmed = gen_seq
-                        
-                    target_without_eos.append(target_trimmed)
-                    generated_without_eos.append(gen_trimmed)
-                    
-                token_error_rate = None
-                if target_without_eos and generated_without_eos:
-                    max_len = max(max(len(t) for t in target_without_eos), max(len(g) for g in generated_without_eos))
-                    
-                    if max_len > 0:
-                        # Pad and stack
-                        target_padded = torch.stack([
-                            torch.cat([seq, torch.full((max_len - len(seq),), pad_token_id, device=seq.device)])
-                            if len(seq) < max_len else seq
-                            for seq in target_without_eos
-                        ])
-                        
-                        generated_padded = torch.stack([
-                            torch.cat([seq, torch.full((max_len - len(seq),), pad_token_id, device=seq.device)])
-                            if len(seq) < max_len else seq
-                            for seq in generated_without_eos
-                        ])
-                        
-                        # Calculate error rate on content tokens only (excluding padding)
-                        valid_mask = (target_padded != pad_token_id)
-                        mismatches = (generated_padded != target_padded) & valid_mask
-                        total_valid_tokens = valid_mask.sum().float()
-                        
-                        if total_valid_tokens > 0:
-                            token_error_rate = mismatches.sum().float() / total_valid_tokens
-                        else:
-                            token_error_rate = torch.tensor(0.0, device=encoder_input_ids.device)
-                    else:
-                        print("Validation - Warning: All sequences in the batch are empty after EOS trimming. Setting token_error_rate to 0.0.")
-                        token_error_rate = torch.tensor(0.0, device=encoder_input_ids.device)
+                # Calculate loss as token error rate INCLUDING EOS tokens
+                min_len = min(generated_ids.size(1), decoder_target_ids.size(1))
+                max_len = max(generated_ids.size(1), decoder_target_ids.size(1))
+
+                # Pad both to the same length
+                if generated_ids.size(1) < max_len:
+                    padding = torch.full((batch_size, max_len - generated_ids.size(1)), pad_token_id, 
+                                       dtype=generated_ids.dtype, device=generated_ids.device)
+                    generated_padded = torch.cat([generated_ids, padding], dim=1)
                 else:
-                    print("Validation - Warning: No valid sequences found after EOS trimming. Setting token_error_rate to 0.0.")
+                    generated_padded = generated_ids
+
+                if decoder_target_ids.size(1) < max_len:
+                    padding = torch.full((batch_size, max_len - decoder_target_ids.size(1)), pad_token_id, 
+                                       dtype=decoder_target_ids.dtype, device=decoder_target_ids.device)
+                    target_padded = torch.cat([decoder_target_ids, padding], dim=1)
+                else:
+                    target_padded = decoder_target_ids
+
+                # Calculate error rate on all non-padding tokens (INCLUDING EOS)
+                valid_mask = (target_padded != pad_token_id)
+                mismatches = (generated_padded != target_padded) & valid_mask
+                total_valid_tokens = valid_mask.sum().float()
+
+                if total_valid_tokens > 0:
+                    token_error_rate = mismatches.sum().float() / total_valid_tokens
+                else:
                     token_error_rate = torch.tensor(0.0, device=encoder_input_ids.device)
-                
-                # Create a mock loss object for compatibility
+
                 loss = token_error_rate
 
                 # Calculate accuracy using generated sequences vs targets
                 acc, correct, considered = calculate_accuracy_generated_seq2seq(generated_ids, decoder_target_ids, pad_token_id)
                 if all_accs is not None: all_accs.append(acc)
+                
                 
             elif args.task_type == "classification":
                 target_class_ids = batch["target_class_id"]
@@ -605,7 +578,11 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     
     num_training_steps = args.epochs
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-7)
+    use_scheduler = str(args.use_scheduler) == "True" or str(args.use_scheduler) == "true"
+    print("Use scheduler: ", use_scheduler)
+    scheduler = None
+    if use_scheduler:
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-7)
 
     # Prepare everything with Accelerator
     model, optimizer, train_dataloader, scheduler = accelerator.prepare(
