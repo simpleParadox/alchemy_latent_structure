@@ -33,7 +33,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum"],
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
-    parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label"],
+    parser.add_argument("--task_type", type=str, default="seq2seq", choices=["seq2seq", "classification", "classification_multi_label"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
     parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
                         help="Path to the training JSON data file.")
@@ -45,13 +45,13 @@ def parse_args():
                         help="Seed for reproducible train/val splits.")
     parser.add_argument("--data_split_seed", type=int, default=42,
                         help="Seed value that gets appended to the data path to load the approapriate training / validation.")
-    parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"],
+    parser.add_argument("--model_size", type=str, default="tiny", choices=["tiny", "xsmall", "small", "medium", "large"],
                         help="Size of the transformer model.")
     parser.add_argument("--max_seq_len", type=int, default=2048, # Max length for support + query + separators
                         help="Maximum sequence length for the model.")
     parser.add_argument("--epochs", type=int, default=2,
                         help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=8,
+    parser.add_argument("--batch_size", type=int, default=256,
                         help="Batch size for training and validation.")
     parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
@@ -79,32 +79,30 @@ def parse_args():
                         help="Weights & Biases mode: 'online' for live logging, 'offline' for local logging.")
     return parser.parse_args()
 
-def calculate_accuracy_seq2seq(predictions, targets, ignore_index):
+def calculate_accuracy_seq2seq(predictions, targets, pad_token_id, eos_token_id=None):
     """
-    Calculates accuracy for seq2seq task based on full sequence matches, ignoring padding tokens.
-    predictions: (batch_size, seq_len, vocab_size) - model logits
-    targets: (batch_size, seq_len) - ground truth token ids
-    ignore_index: token id for padding, to be ignored in accuracy calculation
+    Calculates accuracy for seq2seq task, ignoring both padding and EOS tokens.
     """
-    predicted_tokens = predictions.argmax(dim=-1) # (batch_size, seq_len)
+    predicted_tokens = predictions.argmax(dim=-1)
     
-    # Mask for non-padding tokens (True for actual tokens, False for padding)
-    non_padding_mask = (targets != ignore_index)
+    # Create mask for tokens we want to evaluate
+    if eos_token_id is not None:
+        # Ignore both padding and EOS tokens
+        valid_token_mask = (targets != pad_token_id) & (targets != eos_token_id)
+    else:
+        # Only ignore padding tokens
+        valid_token_mask = (targets != pad_token_id)
     
-    # Check if each token is correct
-    # token_correct will be True where predicted_token == target_token, False otherwise
     token_correct = (predicted_tokens == targets)
     
-    # For each sequence, we consider it correct if all its non-padding tokens are correct.
-    # We can achieve this by checking if (token_correct OR is_padding_token) is True for all tokens in a sequence.
-    # is_padding_token is ~non_padding_mask
-    # So, for a sequence to be correct, (token_correct | ~non_padding_mask) must be all True along the sequence dimension.
-    correct_sequences = (token_correct | ~non_padding_mask).all(dim=1)
+    # For each sequence, check if all valid tokens are correct
+    correct_sequences = (token_correct | ~valid_token_mask).all(dim=1)
     
     num_correct_sequences = correct_sequences.sum().item()
-    num_sequences_in_batch = targets.size(0) # batch_size
+    num_sequences_in_batch = targets.size(0)
     
     accuracy = num_correct_sequences / num_sequences_in_batch if num_sequences_in_batch > 0 else 0.0
+    # Need to check the generated accuracy as well.
     # The function now returns sequence-level accuracy, count of correct sequences, and total sequences in batch.
     return accuracy, num_correct_sequences, num_sequences_in_batch
 
@@ -217,7 +215,7 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             
             output_logits = model(encoder_input_ids, decoder_input_ids)
             
-            target_mask = (decoder_target_ids != eos_token_id)
+            target_mask = (decoder_target_ids != pad_token_id)
             
             # Apply mask to both logits and targets for loss calculation
             # Flatten and apply mask
@@ -231,13 +229,22 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
                 masked_output_logits = output_logits_flat[target_mask_flat]
                 masked_targets = decoder_target_flat[target_mask_flat]
                 loss = criterion(masked_output_logits, masked_targets)
+                
             else:
                 print("This shouldn't be happening. \nWarning: No valid tokens for loss calculation. Using original logits and targets.")
                 # Fallback: use original calculation if no valid tokens (shouldn't happen normally)
                 loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
                 
             # Calculate accuracy.
-            acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id)
+            # Quick diagnostic
+            # print(f"Target shape: {decoder_target_ids.shape}")
+            # print(f"Output shape: {output_logits.shape}")
+            # print(f"Sample target: {decoder_target_ids[0]}")
+            # print(f"Sample prediction: {output_logits[0].argmax(dim=-1)}")
+            # print(f"EOS token ID: {eos_token_id}")
+            # print(f"PAD token ID: {pad_token_id}")
+            # print(f"Are they the same? {eos_token_id == pad_token_id}")
+            acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id, eos_token_id=None)
             
         elif args.task_type == "classification":
             target_class_ids = batch["target_class_id"]
