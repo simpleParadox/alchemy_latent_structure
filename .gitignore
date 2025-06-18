@@ -15,3 +15,9 @@ wandb_sweep_config.yaml
 src/models/cluster_profile.py
 *.out
 src/explicit_implicit_icl/
+
+src/models/quick_diagnostic.py
+src/models/test_args.py
+src/models/test_overfitting_fix.py
+src/models/test_overfitting_fix_training.py
+src/models/test_seq2seq_comprehensive.py

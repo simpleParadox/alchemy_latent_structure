@@ -33,7 +33,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum"],
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
-    parser.add_argument("--task_type", type=str, default="seq2seq", choices=["seq2seq", "classification", "classification_multi_label"],
+    parser.add_argument("--task_type", type=str, default="seq2seq", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
     parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
                         help="Path to the training JSON data file.")
@@ -51,7 +51,7 @@ def parse_args():
                         help="Maximum sequence length for the model.")
     parser.add_argument("--epochs", type=int, default=20,
                         help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=256,
+    parser.add_argument("--batch_size", type=int, default=512,
                         help="Batch size for training and validation.")
     parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
@@ -65,7 +65,7 @@ def parse_args():
                         help="Filter out query examples from support sets to prevent data leakage when support_steps=query_steps=1. Default=True", default=True)
     parser.add_argument("--wandb_project", type=str, default="alchemy-meta-learning",
                         help="Weights & Biases project name.")
-    parser.add_argument("--use_scheduler", type=str, default="True", choices=["True", "False"],
+    parser.add_argument("--use_scheduler", type=str, default="False", choices=["True", "False"],
                         help="Use learning rate scheduler. Default is True.")
     parser.add_argument("--scheduler_call_location", type=str, default="after_epoch", choices=["after_epoch", "after_batch"],
                         help="Where to call the scheduler: 'after_epoch' for per-epoch scheduling, 'after_batch' for per-batch.")
@@ -79,6 +79,8 @@ def parse_args():
                         help="Number of workers for data preprocessing parallelization.")
     parser.add_argument("--wandb_mode", type=str, default="offline", choices=["online", "offline"],
                         help="Weights & Biases mode: 'online' for live logging, 'offline' for local logging.")
+    parser.add_argument("--use_autoregressive_training", type=str, default="False", choices=["True", "False"],
+                        help="Use autoregressive generation during training instead of teacher forcing. This makes training consistent with validation but may be slower. Default is False.")
     return parser.parse_args()
 
 def calculate_accuracy_seq2seq(predictions, targets, pad_token_id, eos_token_id=None):
@@ -212,46 +214,80 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             decoder_input_ids = batch["decoder_input_ids"]
             decoder_target_ids = batch["decoder_target_ids"]
             
-            output_logits = model(encoder_input_ids, decoder_input_ids)
+            # Convert string arguments to boolean
+            use_autoregressive = args.use_autoregressive_training == "True"
             
-            # The criterion will automatically ignore pad_token_id because it was initialized with ignore_index.
-            loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
-            
-            
-            # target_mask = (decoder_target_ids != pad_token_id)
-            
-            # # Apply mask to both logits and targets for loss calculation
-            # # Flatten and apply mask
-            # output_logits_flat = output_logits.view(-1, output_logits.shape[-1])  # (batch_size * seq_len, vocab_size)
-            # decoder_target_flat = decoder_target_ids.view(-1)  # (batch_size * seq_len)
-            # target_mask_flat = target_mask.view(-1)  # (batch_size * seq_len)
-            
-            # # Only calculate loss on non-<eos> tokens
-            # if target_mask_flat.sum() > 0:  # Make sure we have some valid tokens.
-            #     # This is what should be happening generally.
-            #     masked_output_logits = output_logits_flat[target_mask_flat]
-            #     masked_targets = decoder_target_flat[target_mask_flat]
-            #     loss = criterion(masked_output_logits, masked_targets)
+            if use_autoregressive:
+                # Use autoregressive training (consistent with validation)
+                # Get necessary token IDs
+                sos_token_id = dataloader.dataset.sos_token_id if hasattr(dataloader.dataset, 'sos_token_id') else None
+                eos_token_id = dataloader.dataset.eos_token_id if hasattr(dataloader.dataset, 'eos_token_id') else None
                 
-            # else:
-            #     print("This shouldn't be happening. \nWarning: No valid tokens for loss calculation. Using original logits and targets.")
-            #     # Fallback: use original calculation if no valid tokens (shouldn't happen normally)
-            #     loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
+                # Get the unwrapped model to access the generate method
+                unwrapped_model = accelerator.unwrap_model(model)
                 
-            # Calculate accuracy.
-            # Quick diagnostic
-            # print(f"Target shape: {decoder_target_ids.shape}")
-            # print(f"Output shape: {output_logits.shape}")
-            # print(f"Sample target: {decoder_target_ids[0]}")
-            # print(f"Sample prediction: {output_logits[0].argmax(dim=-1)}")
-            # print(f"EOS token ID: {eos_token_id}")
-            # print(f"PAD token ID: {pad_token_id}")
-            # print(f"Are they the same? {eos_token_id == pad_token_id}")
-            # print(f"Sample decoder_target_ids: {decoder_target_ids[0]}")
-            # print(f"Sample output_logits: {output_logits[0]}")
-            # print(f"Sample masked_output_logits: {masked_output_logits[0]}")
-            # print(f"Sample masked_targets: {masked_targets[0]}")
-            acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id, eos_token_id=None)
+                # Generate sequences autoregressively
+                max_target_len = decoder_target_ids.size(1) + 4
+                generated_ids = unwrapped_model.generate(
+                    src=encoder_input_ids,
+                    start_symbol_id=sos_token_id,
+                    end_symbol_id=eos_token_id,
+                    max_len=max_target_len,
+                    device=encoder_input_ids.device,
+                    pad_token_id=pad_token_id
+                )
+                
+                # Remove SOS token for comparison
+                generated_ids = generated_ids[:, 1:]
+                
+                # Calculate loss based on token error rate (same as validation)
+                batch_size = decoder_target_ids.size(0)
+                min_len = min(generated_ids.size(1), decoder_target_ids.size(1))
+                max_len = max(generated_ids.size(1), decoder_target_ids.size(1))
+
+                # Pad both to the same length
+                if generated_ids.size(1) < max_len:
+                    padding = torch.full((batch_size, max_len - generated_ids.size(1)), pad_token_id, 
+                                       dtype=generated_ids.dtype, device=generated_ids.device)
+                    generated_padded = torch.cat([generated_ids, padding], dim=1)
+                else:
+                    generated_padded = generated_ids
+
+                if decoder_target_ids.size(1) < max_len:
+                    padding = torch.full((batch_size, max_len - decoder_target_ids.size(1)), pad_token_id, 
+                                       dtype=decoder_target_ids.dtype, device=decoder_target_ids.device)
+                    target_padded = torch.cat([decoder_target_ids, padding], dim=1)
+                else:
+                    target_padded = decoder_target_ids
+
+                # Calculate token error rate
+                valid_mask = (target_padded != pad_token_id)
+                mismatches = (generated_padded != target_padded) & valid_mask
+                total_valid_tokens = valid_mask.sum().float()
+
+                if total_valid_tokens > 0:
+                    token_error_rate = mismatches.sum().float() / total_valid_tokens
+                else:
+                    token_error_rate = torch.tensor(0.0, device=encoder_input_ids.device)
+
+                # Convert to log scale for training stability
+                epsilon = 1e-8
+                loss = -torch.log(1.0 - token_error_rate + epsilon)
+                
+                # NOTE: Need to use the criterion for calculating loss so that backward pass works correctly.
+                # And accelerator.backward(loss) will work correctly.
+                
+                # Calculate accuracy using generated sequences
+                acc, correct, considered = calculate_accuracy_generated_seq2seq(generated_ids, decoder_target_ids, pad_token_id)
+                
+            else:
+                # Use teacher forcing (original behavior)
+                output_logits = model(encoder_input_ids, decoder_input_ids)
+                
+                # The criterion will automatically ignore pad_token_id because it was initialized with ignore_index.
+                loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
+                
+                acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id, eos_token_id=None)
             
         elif args.task_type == "classification":
             target_class_ids = batch["target_class_id"]
@@ -265,6 +301,16 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask) # (batch_size, num_output_features)
             loss = criterion(output_logits, target_feature_vector.float()) # BCEWithLogitsLoss expects float targets
             acc, correct, considered = calculate_accuracy_multilabel(output_logits, target_feature_vector)
+        elif args.task_type == "seq2seq_stone_state":
+            decoder_input_ids = batch["decoder_input_ids"]
+            decoder_target_ids = batch["decoder_target_ids"]
+            
+            output_logits = model(encoder_input_ids, decoder_input_ids)
+            
+            # The criterion will automatically ignore pad_token_id because it was initialized with ignore_index.
+            loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
+            
+            acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id, eos_token_id=None)
         else:
             raise ValueError(f"Unknown task_type: {args.task_type}")
 
@@ -341,13 +387,10 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 # Remove the SOS token from the generated sequences so that we can compare them directly with the decoder_target_ids.
                 generated_ids = generated_ids[:, 1:]
 
-                # For loss calculation, we still use teacher forcing for consistency with training
-                teacher_output_logits = model(encoder_input_ids, decoder_input_ids)
-                teacher_forced_loss = criterion(teacher_output_logits.view(-1, teacher_output_logits.shape[-1]), decoder_target_ids.view(-1))
-                
                 batch_size = decoder_target_ids.size(0)
                 
-                # Calculate loss as token error rate INCLUDING EOS tokens
+                # Calculate loss as token error rate INCLUDING EOS tokens using ONLY generated tokens
+                # This makes validation consistent with autoregressive generation
                 min_len = min(generated_ids.size(1), decoder_target_ids.size(1))
                 max_len = max(generated_ids.size(1), decoder_target_ids.size(1))
 
@@ -376,7 +419,11 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 else:
                     token_error_rate = torch.tensor(0.0, device=encoder_input_ids.device)
 
-                loss = token_error_rate
+                # Use token error rate as loss (ranges from 0.0 to 1.0)
+                # Convert to log scale to make it more comparable to cross-entropy loss
+                # Add small epsilon to avoid log(0)
+                epsilon = 1e-8
+                loss = -torch.log(1.0 - token_error_rate + epsilon)
 
                 # Calculate accuracy using generated sequences vs targets
                 acc, correct, considered = calculate_accuracy_generated_seq2seq(generated_ids, decoder_target_ids, pad_token_id)
@@ -395,6 +442,13 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
                 loss = criterion(output_logits, target_feature_vector.float())
                 acc, correct, considered = calculate_accuracy_multilabel(output_logits, target_feature_vector)
+            elif args.task_type == "seq2seq_stone_state":
+                decoder_input_ids = batch["decoder_input_ids"]
+                decoder_target_ids = batch["decoder_target_ids"]
+                
+                output_logits = model(encoder_input_ids, decoder_input_ids)
+                loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
+                acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id, eos_token_id=None)
             else:
                 raise ValueError(f"Unknown task_type: {args.task_type}")
 
@@ -433,7 +487,8 @@ def main():
     args.train_data_path = os.path.join(base_path, args.train_data_path)
     args.val_data_path = os.path.join(base_path, args.val_data_path) if args.val_data_path else None
     args.save_dir = os.path.join(base_path, args.save_dir)
-    
+    print("Updated train data path: ", args.train_data_path)
+    print("Updated validation data path: ", args.val_data_path if args.val_data_path else "None")
     
     # Initialize Accelerator
     accelerator = Accelerator()
@@ -506,7 +561,7 @@ def main():
     print(f"Source (Feature/Potion) Vocabulary size: {src_vocab_size}")
     print(f"Pad token ID for encoder inputs: {pad_token_id}")
 
-    if args.task_type == "seq2seq":
+    if args.task_type == "seq2seq" or args.task_type == "seq2seq_stone_state":
         sos_token_id = full_dataset.sos_token_id
         eos_token_id = full_dataset.eos_token_id
         tgt_vocab_size = src_vocab_size
@@ -539,9 +594,10 @@ def main():
             collate_fn=custom_collate_val,
             num_workers=args.num_workers
         )
+    
 
     # --- Model ---
-    if args.task_type == "seq2seq":
+    if args.task_type == "seq2seq" or args.task_type == "seq2seq_stone_state":
         model = create_transformer_model(
             config_name=args.model_size,
             src_vocab_size=src_vocab_size,
@@ -675,7 +731,7 @@ def main():
                     'src_vocab_word2idx': full_dataset.word2idx,
                     'src_vocab_idx2word': full_dataset.idx2word
                 }
-                if args.task_type == "seq2seq":
+                if args.task_type == "seq2seq" or args.task_type == "seq2seq_stone_state":
                     checkpoint['tgt_vocab_word2idx'] = full_dataset.word2idx 
                     checkpoint['tgt_vocab_idx2word'] = full_dataset.idx2word
                 elif args.task_type == "classification":
@@ -702,7 +758,7 @@ def main():
                     'src_vocab_word2idx': full_dataset.word2idx,
                     'src_vocab_idx2word': full_dataset.idx2word
                 }
-                if args.task_type == "seq2seq":
+                if args.task_type == "seq2seq" or args.task_type == "seq2seq_stone_state":
                     checkpoint['tgt_vocab_word2idx'] = full_dataset.word2idx
                     checkpoint['tgt_vocab_idx2word'] = full_dataset.idx2word
                 elif args.task_type == "classification":

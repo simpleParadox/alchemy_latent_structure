@@ -45,6 +45,7 @@ def process_episode_worker(args):
                 tokenized_support_full_for_encoder.append(full_sup_tokens)
             
             encoder_input_ids = []
+            # Add item_sep_token_id between support examples.
             for i, sup_tokens in enumerate(tokenized_support_full_for_encoder):
                 encoder_input_ids.extend(sup_tokens)
                 if i < len(tokenized_support_full_for_encoder) - 1:
@@ -158,6 +159,77 @@ def process_episode_worker(args):
                 "target_feature_vector": target_feature_vector
             })
 
+        elif task_type == "seq2seq_stone_state":
+            # For seq2seq_stone_state, use stone states as tokens (like classification)
+            # but with seq2seq decoder structure
+            tokenized_support_for_encoder = []
+            for sup_ex_str in filtered_support_examples_str:
+                # Parse the support example (same as classification)
+                parts = sup_ex_str.split(" -> ")
+                input_part_str = parts[0]
+                output_state_str = parts[1]
+                
+                # Extract input stone state and potions
+                first_brace_end = input_part_str.find("}")
+                input_stone_state = input_part_str[:first_brace_end+1]
+                potions_str = input_part_str[first_brace_end+1:].strip()
+                
+                # Convert input stone state to single token
+                input_state_token_id = word2idx.get(input_stone_state, unk_token_id)
+                
+                # Convert potions to tokens 
+                tokenized_potions = []
+                if potions_str:
+                    potions = potions_str.split(" ")
+                    tokenized_potions = [word2idx.get(p, unk_token_id) for p in potions]
+                
+                # Convert output stone state to single token
+                output_state_token_id = word2idx.get(output_state_str, unk_token_id)
+                
+                # Build full support example: input_state + potions + separator + output_state
+                full_sup_tokens = [input_state_token_id] + tokenized_potions + [io_sep_token_id] + [output_state_token_id]
+                tokenized_support_for_encoder.append(full_sup_tokens)
+    
+            # Process query input similarly 
+            query_parts = query_ex_str.split(" -> ")
+            query_input_part_str = query_parts[0]
+            query_first_brace_end = query_input_part_str.find("}")
+            query_potions_str = query_input_part_str[query_first_brace_end+1:].strip()
+    
+            # Convert query input stone state to single token
+            query_input_state_token_id = word2idx.get(query_initial_state_str, unk_token_id)
+    
+            # Convert query potions to tokens
+            query_tokenized_potions = []
+            if query_potions_str:
+                query_potions = query_potions_str.split(" ")
+                query_tokenized_potions = [word2idx.get(p, unk_token_id) for p in query_potions]
+    
+            query_input_tokens_stone_state = [query_input_state_token_id] + query_tokenized_potions
+    
+            # Build encoder input
+            encoder_input_ids = []
+            for i, sup_tokens in enumerate(tokenized_support_for_encoder):
+                encoder_input_ids.extend(sup_tokens)
+                if i < len(tokenized_support_for_encoder) - 1:
+                    encoder_input_ids.append(item_sep_token_id)
+    
+            if tokenized_support_for_encoder:
+                encoder_input_ids.append(item_sep_token_id)  # Separator before query
+            encoder_input_ids.extend(query_input_tokens_stone_state)
+
+            # For decoder: output stone state as single token + EOS
+            output_state_token_id = word2idx.get(query_output_state_str, unk_token_id)
+
+            decoder_input_ids = [sos_token_id, output_state_token_id]  # [<sos>, stone_state]
+            decoder_target_ids = [output_state_token_id, eos_token_id]  # [stone_state, <eos>]
+
+            processed_data.append({
+                "encoder_input_ids": encoder_input_ids,
+                "decoder_input_ids": decoder_input_ids,
+                "decoder_target_ids": decoder_target_ids
+            })
+
     # Debugging: Check for UNK token in encoder_input_ids
     for item in processed_data:
         if "encoder_input_ids" in item and unk_token_id in item["encoder_input_ids"]:
@@ -240,8 +312,8 @@ class AlchemyDataset(Dataset):
             self.word2idx = vocab_word2idx
             self.idx2word = vocab_idx2word
         else:
-            if self.task_type == "classification":
-                # For classification, build vocabulary with special tokens + potions + stone states
+            if self.task_type == "classification" or self.task_type == "seq2seq_stone_state":
+                # For classification and seq2seq_stone_state, build vocabulary with stone states + potions
                 self.word2idx, self.idx2word = self._build_classification_vocab(json_file_path)
             elif self.task_type == "seq2seq" or self.task_type == "classification_multi_label":
                 # For seq2seq and classification_multi_label, build feature/potion vocabulary
@@ -461,13 +533,13 @@ class AlchemyDataset(Dataset):
                     self.stone_state_to_id, special_token_ids, self.filter_query_from_support,
                     all_output_features_list_arg, feature_to_idx_map_arg # Pass new args
                 ))
-            #     c += 1
-            # if ('train' in json_file_path) and (c == 5000): # Uncomment this for debugging/testing.
-            #     print(f"Loaded {c} episodes from {json_file_path}. Stopping early for testing.")
-            #     break
-            # if ('val' in json_file_path) and (c == 100): # Uncomment this for debugging/testing.
-            #     print(f"Loaded {c} episodes from {json_file_path}. Stopping early for testing.")
-            #     break
+                # c += 1
+                # if ('train' in json_file_path) and (c == 6000): # Uncomment this for debugging/testing.
+                #     print(f"Loaded {c} episodes from {json_file_path}. Stopping early for testing.")
+                #     break
+                # if ('val' in json_file_path) and (c == 100): # Uncomment this for debugging/testing.
+                #     print(f"Loaded {c} episodes from {json_file_path}. Stopping early for testing.")
+                #     break
         
         # Use multiprocessing to process episodes in parallel
         processed_data: List[Dict[str, Any]] = []
@@ -650,14 +722,13 @@ class AlchemyDataset(Dataset):
 
 def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_type: str = "seq2seq") -> Dict[str, torch.Tensor]:
     encoder_inputs = [item["encoder_input_ids"] for item in batch]
-    padding_side = 'right'
-    padded_encoder_inputs = torch.nn.utils.rnn.pad_sequence(encoder_inputs, batch_first=True, padding_value=pad_token_id, padding_side=padding_side)
+    padded_encoder_inputs = torch.nn.utils.rnn.pad_sequence(encoder_inputs, batch_first=True, padding_value=pad_token_id)
     
-    if task_type == "seq2seq":
+    if task_type == "seq2seq" or task_type == "seq2seq_stone_state":  # Handle both seq2seq variants
         decoder_inputs = [item["decoder_input_ids"] for item in batch]
         decoder_targets = [item["decoder_target_ids"] for item in batch]
-        padded_decoder_inputs = torch.nn.utils.rnn.pad_sequence(decoder_inputs, batch_first=True, padding_value=pad_token_id, padding_side='right')
-        padded_decoder_targets = torch.nn.utils.rnn.pad_sequence(decoder_targets, batch_first=True, padding_value=pad_token_id, padding_side='right')
+        padded_decoder_inputs = torch.nn.utils.rnn.pad_sequence(decoder_inputs, batch_first=True, padding_value=pad_token_id)
+        padded_decoder_targets = torch.nn.utils.rnn.pad_sequence(decoder_targets, batch_first=True, padding_value=pad_token_id)
         return {
             "encoder_input_ids": padded_encoder_inputs,
             "decoder_input_ids": padded_decoder_inputs,
