@@ -33,7 +33,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum"],
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
-    parser.add_argument("--task_type", type=str, default="seq2seq", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
+    parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
     parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
                         help="Path to the training JSON data file.")
@@ -45,13 +45,13 @@ def parse_args():
                         help="Seed for reproducible train/val splits.")
     parser.add_argument("--data_split_seed", type=int, default=42,
                         help="Seed value that gets appended to the data path to load the approapriate training / validation.")
-    parser.add_argument("--model_size", type=str, default="tiny", choices=["tiny", "xsmall", "small", "medium", "large"],
+    parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"],
                         help="Size of the transformer model.")
     parser.add_argument("--max_seq_len", type=int, default=2048, # Max length for support + query + separators
                         help="Maximum sequence length for the model.")
     parser.add_argument("--epochs", type=int, default=20,
                         help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=512,
+    parser.add_argument("--batch_size", type=int, default=32,
                         help="Batch size for training and validation.")
     parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
@@ -65,7 +65,7 @@ def parse_args():
                         help="Filter out query examples from support sets to prevent data leakage when support_steps=query_steps=1. Default=True", default=True)
     parser.add_argument("--wandb_project", type=str, default="alchemy-meta-learning",
                         help="Weights & Biases project name.")
-    parser.add_argument("--use_scheduler", type=str, default="False", choices=["True", "False"],
+    parser.add_argument("--use_scheduler", type=str, default="True", choices=["True", "False"],
                         help="Use learning rate scheduler. Default is True.")
     parser.add_argument("--scheduler_call_location", type=str, default="after_epoch", choices=["after_epoch", "after_batch"],
                         help="Where to call the scheduler: 'after_epoch' for per-epoch scheduling, 'after_batch' for per-batch.")
@@ -81,6 +81,8 @@ def parse_args():
                         help="Weights & Biases mode: 'online' for live logging, 'offline' for local logging.")
     parser.add_argument("--use_autoregressive_training", type=str, default="False", choices=["True", "False"],
                         help="Use autoregressive generation during training instead of teacher forcing. This makes training consistent with validation but may be slower. Default is False.")
+    parser.add_argument("--store_predictions", type=str, default="True", choices=["True", "False"],
+                        help="Store predictions during training and validation. Default is False.")
     return parser.parse_args()
 
 def calculate_accuracy_seq2seq(predictions, targets, pad_token_id, eos_token_id=None):
@@ -355,9 +357,16 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     all_accs = [] if args.task_type == "seq2seq" else None 
     sos_token_id = dataloader.dataset.sos_token_id if hasattr(dataloader.dataset, 'sos_token_id') else None
     
-    assert sos_token_id is not None, "SOS token ID must be defined for seq2seq task."
-    eos_token_id = dataloader.dataset.eos_token_id if hasattr(dataloader.dataset, 'eos_token_id') else None
-    assert eos_token_id is not None, "EOS token ID must be defined for seq2seq task."
+    # Initialize storage for predictions and targets if requested
+    all_predictions = []
+    all_targets = []
+    all_encoder_inputs = [] if args.store_predictions else None  # Optional: store inputs for analysis
+    
+    if args.task_type in ["seq2seq", "seq2seq_stone_state"]:
+        assert sos_token_id is not None, "SOS token ID must be defined for seq2seq tasks."
+        eos_token_id = dataloader.dataset.eos_token_id if hasattr(dataloader.dataset, 'eos_token_id') else None
+        assert eos_token_id is not None, "EOS token ID must be defined for seq2seq tasks."
+    
     with torch.no_grad():
         pbar = tqdm(dataloader, disable=not accelerator.is_local_main_process)
         for batch_idx, batch in enumerate(pbar):
@@ -373,8 +382,6 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 # Use autoregressive generation instead of teacher forcing
                 max_target_len = decoder_target_ids.size(1) + 4  # Allow some extra length
                 
-                # Call the generate method with necessary parameters.
-                # This generates the tokens one-by-one.
                 generated_ids = unwrapped_model.generate(
                     src=encoder_input_ids,
                     start_symbol_id=sos_token_id,  
@@ -384,13 +391,18 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                     pad_token_id=pad_token_id
                 )
                 
-                # Remove the SOS token from the generated sequences so that we can compare them directly with the decoder_target_ids.
+                # Remove the SOS token from the generated sequences
                 generated_ids = generated_ids[:, 1:]
 
+                # Store predictions and targets if requested
+                if args.store_predictions:
+                    all_predictions.extend(generated_ids.cpu().numpy())
+                    all_targets.extend(decoder_target_ids.cpu().numpy())
+                    if all_encoder_inputs is not None:
+                        all_encoder_inputs.extend(encoder_input_ids.cpu().numpy())
+
+                # Calculate loss and accuracy (existing logic)
                 batch_size = decoder_target_ids.size(0)
-                
-                # Calculate loss as token error rate INCLUDING EOS tokens using ONLY generated tokens
-                # This makes validation consistent with autoregressive generation
                 min_len = min(generated_ids.size(1), decoder_target_ids.size(1))
                 max_len = max(generated_ids.size(1), decoder_target_ids.size(1))
 
@@ -419,16 +431,11 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 else:
                     token_error_rate = torch.tensor(0.0, device=encoder_input_ids.device)
 
-                # Use token error rate as loss (ranges from 0.0 to 1.0)
-                # Convert to log scale to make it more comparable to cross-entropy loss
-                # Add small epsilon to avoid log(0)
                 epsilon = 1e-8
                 loss = -torch.log(1.0 - token_error_rate + epsilon)
 
-                # Calculate accuracy using generated sequences vs targets
                 acc, correct, considered = calculate_accuracy_generated_seq2seq(generated_ids, decoder_target_ids, pad_token_id)
                 if all_accs is not None: all_accs.append(acc)
-                
                 
             elif args.task_type == "classification":
                 target_class_ids = batch["target_class_id"]
@@ -436,12 +443,31 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
                 loss = criterion(output_logits, target_class_ids)
                 acc, correct, considered = calculate_accuracy_classification(output_logits, target_class_ids)
+                
+                # Store predictions and targets if requested
+                if args.store_predictions:
+                    predicted_classes = output_logits.argmax(dim=-1)  # Get predicted class IDs
+                    all_predictions.extend(predicted_classes.cpu().numpy())
+                    all_targets.extend(target_class_ids.cpu().numpy())
+                    if all_encoder_inputs is not None:
+                        all_encoder_inputs.extend(encoder_input_ids.cpu().numpy())
+                
             elif args.task_type == "classification_multi_label":
                 target_feature_vector = batch["target_feature_vector"]
                 src_padding_mask = (encoder_input_ids == pad_token_id)
                 output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
                 loss = criterion(output_logits, target_feature_vector.float())
                 acc, correct, considered = calculate_accuracy_multilabel(output_logits, target_feature_vector)
+                
+                # Store predictions and targets if requested
+                if args.store_predictions:
+                    predicted_probs = torch.sigmoid(output_logits)  # Convert logits to probabilities
+                    predicted_binary = (predicted_probs > 0.5).float()  # Apply threshold
+                    all_predictions.extend(predicted_binary.cpu().numpy())
+                    all_targets.extend(target_feature_vector.cpu().numpy())
+                    if all_encoder_inputs is not None:
+                        all_encoder_inputs.extend(encoder_input_ids.cpu().numpy())
+                
             elif args.task_type == "seq2seq_stone_state":
                 decoder_input_ids = batch["decoder_input_ids"]
                 decoder_target_ids = batch["decoder_target_ids"]
@@ -449,12 +475,62 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 output_logits = model(encoder_input_ids, decoder_input_ids)
                 loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
                 acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id, eos_token_id=None)
+                
+                # Store predictions and targets if requested
+                if args.store_predictions:
+                    predicted_tokens = output_logits.argmax(dim=-1)  # Get predicted token IDs
+                    all_predictions.extend(predicted_tokens.cpu().numpy())
+                    all_targets.extend(decoder_target_ids.cpu().numpy())
+                    if all_encoder_inputs is not None:
+                        all_encoder_inputs.extend(encoder_input_ids.cpu().numpy())
+                        
             else:
                 raise ValueError(f"Unknown task_type: {args.task_type}")
 
             total_loss += loss.item()
             total_correct_preds += correct
             total_considered_items += considered
+    
+    # Save predictions and targets if requested and we're on the main process
+    if args.store_predictions and accelerator.is_local_main_process:
+        predictions_dir = os.path.join(args.save_dir, "predictions")
+        if not os.path.exists(predictions_dir):
+            os.makedirs(predictions_dir)
+        
+        # Create filenames with epoch and task type
+        epoch_str = f"epoch_{epoch_num+1:03d}"
+        pred_filename = f"predictions_{args.task_type}_{epoch_str}.npz"
+        target_filename = f"targets_{args.task_type}_{epoch_str}.npz"
+        input_filename = f"inputs_{args.task_type}_{epoch_str}.npz"
+        
+        pred_path = os.path.join(predictions_dir, pred_filename)
+        target_path = os.path.join(predictions_dir, target_filename)
+        input_path = os.path.join(predictions_dir, input_filename)
+        
+        # Convert lists to numpy arrays
+        predictions_array = np.array(all_predictions, dtype=object) if args.task_type == "seq2seq" else np.array(all_predictions)
+        targets_array = np.array(all_targets, dtype=object) if args.task_type in ["seq2seq", "seq2seq_stone_state"] else np.array(all_targets)
+        
+        # Save using numpy compressed format
+        np.savez_compressed(pred_path, predictions=predictions_array)
+        np.savez_compressed(target_path, targets=targets_array)
+        
+        if all_encoder_inputs is not None:
+            inputs_array = np.array(all_encoder_inputs, dtype=object)
+            np.savez_compressed(input_path, inputs=inputs_array)
+        
+        print(f"Saved predictions to: {pred_path}")
+        print(f"Saved targets to: {target_path}")
+        if all_encoder_inputs is not None:
+            print(f"Saved inputs to: {input_path}")
+        
+        # Log file paths to wandb for easy access
+        wandb.log({
+            f"predictions_file_epoch_{epoch_num+1}": pred_path,
+            f"targets_file_epoch_{epoch_num+1}": target_path,
+        })
+        if all_encoder_inputs is not None:
+            wandb.log({f"inputs_file_epoch_{epoch_num+1}": input_path})
             
     avg_epoch_loss = total_loss / len(dataloader)
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
@@ -518,6 +594,8 @@ def main():
     print(f"Filter query from support initial: {args.filter_query_from_support}")
     # Correctly convert string "True" or "False" or boolean True to boolean
     args.filter_query_from_support = str(args.filter_query_from_support) == 'True'
+    
+    args.store_predictions = str(args.store_predictions) == 'True'
     
     print("Filter query from support set to:", args.filter_query_from_support)
     with accelerator.main_process_first(): # Doing this once to prevent OOM errors when loading data on multiple processes.
