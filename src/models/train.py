@@ -29,7 +29,6 @@ def set_seed(seed_value):
         torch.cuda.manual_seed_all(seed_value)
 
 def parse_args():
-    
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum"],
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
@@ -82,7 +81,14 @@ def parse_args():
     parser.add_argument("--use_autoregressive_training", type=str, default="False", choices=["True", "False"],
                         help="Use autoregressive generation during training instead of teacher forcing. This makes training consistent with validation but may be slower. Default is False.")
     parser.add_argument("--store_predictions", type=str, default="True", choices=["True", "False"],
-                        help="Store predictions during training and validation. Default is False.")
+                        help="Store predictions during training and validation. Default is True.")
+    
+    # Add new preprocessing arguments
+    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed",
+                        help="Directory to look for/store preprocessed data files.")
+    parser.add_argument("--use_preprocessed", type=str, default="True", choices=["True", "False"],
+                        help="Whether to use preprocessed data if available. Default is True.")
+    
     return parser.parse_args()
 
 def calculate_accuracy_seq2seq(predictions, targets, pad_token_id, eos_token_id=None):
@@ -542,7 +548,6 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
 
 def main():
     args = parse_args()
-
     
     base_path = None
     if cluster == 'cirrus':
@@ -594,18 +599,26 @@ def main():
     print(f"Filter query from support initial: {args.filter_query_from_support}")
     # Correctly convert string "True" or "False" or boolean True to boolean
     args.filter_query_from_support = str(args.filter_query_from_support) == 'True'
-    
     args.store_predictions = str(args.store_predictions) == 'True'
+    args.use_preprocessed = str(args.use_preprocessed) == 'True'  # Add this line
     
     print("Filter query from support set to:", args.filter_query_from_support)
-    with accelerator.main_process_first(): # Doing this once to prevent OOM errors when loading data on multiple processes.
+    print("Store predictions:", args.store_predictions)
+    print("Use preprocessed data:", args.use_preprocessed)  # Add this line
+    
+    # Update paths to be absolute
+    args.preprocessed_dir = os.path.join(base_path, args.preprocessed_dir)  # Add this line
+    
+    with accelerator.main_process_first():
         full_dataset = AlchemyDataset(
             json_file_path=args.train_data_path, 
             task_type=args.task_type,
             filter_query_from_support=args.filter_query_from_support,
             num_workers=args.num_workers,
             val_split=args.val_split,
-            val_split_seed=args.val_split_seed
+            val_split_seed=args.val_split_seed,
+            preprocessed_dir=args.preprocessed_dir,  # Add this line
+            use_preprocessed=args.use_preprocessed   # Add this line
         )
 
     # Get train and validation sets
@@ -627,7 +640,9 @@ def main():
             vocab_idx2word=full_dataset.idx2word,
             stone_state_to_id=full_dataset.stone_state_to_id if args.task_type == "classification" else None,
             filter_query_from_support=args.filter_query_from_support,
-            num_workers=args.num_workers
+            num_workers=args.num_workers,
+            preprocessed_dir=args.preprocessed_dir,  # Add this line
+            use_preprocessed=args.use_preprocessed   # Add this line
         )
     else:
         print("No validation data specified. Skipping validation.")

@@ -10,7 +10,9 @@ from multiprocessing import Pool
 import random
 import numpy as np
 from collections import defaultdict
-
+import pickle
+import hashlib
+import os
 
 def process_episode_worker(args):
     """Worker function for processing a single episode. Must be at module level for multiprocessing."""
@@ -281,22 +283,26 @@ def tokenize_single_example_str_helper(example_str, word2idx, unk_token_id, io_s
 
 class AlchemyDataset(Dataset):
     def __init__(self, json_file_path: str, 
-                 task_type: str = "classification", # "seq2seq", "classification", "classification_multi_label"
+                 task_type: str = "classification",
                  vocab_word2idx: Dict[str, int] = None, 
                  vocab_idx2word: Dict[int, str] = None,
-                 stone_state_to_id: Dict[str, int] = None, # For classification
-                 filter_query_from_support: bool = False, # Filter query examples from support sets
-                 num_workers: int = 4, # Number of workers for multiprocessing
-                 chunk_size: int = 10000, # Number of episodes to process in each chunk (memory management)
-                 val_split: Optional[float] = None, # Validation split ratio (e.g., 0.2 for 20%)
-                 val_split_seed: int = 42): # Seed for reproducible splits
+                 stone_state_to_id: Dict[str, int] = None,
+                 filter_query_from_support: bool = False,
+                 num_workers: int = 4,
+                 chunk_size: int = 10000,
+                 val_split: Optional[float] = None,
+                 val_split_seed: int = 42,
+                 preprocessed_dir: str = "src/data/preprocessed", 
+                 use_preprocessed: bool = True):
         
         self.task_type = task_type
-        self.filter_query_from_support = filter_query_from_support # Only relevant if support hop length == query_hop_length.
-        self.num_workers = max(1, num_workers)  # Ensure at least 1 worker
-        self.chunk_size = max(1, chunk_size)  # Ensure at least 1 episode per chunk
+        self.filter_query_from_support = filter_query_from_support
+        self.num_workers = max(1, num_workers)
+        self.chunk_size = max(1, chunk_size)
         self.val_split = val_split
         self.val_split_seed = val_split_seed
+        self.preprocessed_dir = preprocessed_dir 
+        self.use_preprocessed = use_preprocessed 
         
         self.PAD_TOKEN_STR = "<pad>"
         self.SOS_TOKEN_STR = "<sos>"
@@ -308,15 +314,112 @@ class AlchemyDataset(Dataset):
         self.special_tokens = [self.PAD_TOKEN_STR, self.SOS_TOKEN_STR, self.EOS_TOKEN_STR, 
                                self.IO_SEP_TOKEN_STR, self.ITEM_SEP_TOKEN_STR, self.UNK_TOKEN_STR]
 
+        # Try to load preprocessed data first
+        if self.use_preprocessed and self._load_preprocessed_data(json_file_path):
+            print("Successfully loaded preprocessed data!")
+        else:
+            # Fallback to original preprocessing
+            if self.use_preprocessed:
+                print("Preprocessed data not found, falling back to original preprocessing...")
+            else:
+                print("Using original preprocessing (preprocessed data disabled)...")
+            
+            self._initialize_from_scratch(json_file_path, vocab_word2idx, vocab_idx2word, stone_state_to_id)
+
+        # Create train/val splits if requested
+        self.train_set = None
+        self.val_set = None
+        if self.val_split is not None:
+            self._create_train_val_splits()
+
+    def _generate_preprocessed_filename(self, json_file_path: str) -> tuple:
+        """Generate filenames for preprocessed data based on parameters."""
+        base_name = os.path.splitext(os.path.basename(json_file_path))[0]
+        
+        # Create a unique suffix based on parameters
+        suffix_parts = [
+            self.task_type,
+            f"filter_{self.filter_query_from_support}",
+        ]
+        suffix = "_".join(suffix_parts)
+        
+        data_file = os.path.join(self.preprocessed_dir, f"{base_name}_{suffix}_data.pkl")
+        vocab_file = os.path.join(self.preprocessed_dir, f"{base_name}_{suffix}_vocab.pkl")
+        metadata_file = os.path.join(self.preprocessed_dir, f"{base_name}_{suffix}_metadata.json")
+        
+        return data_file, vocab_file, metadata_file
+
+    def _load_preprocessed_data(self, json_file_path: str) -> bool:
+        """
+        Try to load preprocessed data from disk.
+        Returns True if successful, False otherwise.
+        """
+        data_file, vocab_file, metadata_file = self._generate_preprocessed_filename(json_file_path)
+        
+        # Check if all required files exist
+        if not all(os.path.exists(f) for f in [data_file, vocab_file, metadata_file]):
+            return False
+        
+        try:
+            # Load and verify metadata
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+            
+            # Verify compatibility
+            if (metadata['task_type'] != self.task_type or 
+                metadata['filter_query_from_support'] != self.filter_query_from_support):
+                print(f"Preprocessed data parameters don't match current settings:")
+                print(f"  Expected: task_type={self.task_type}, filter={self.filter_query_from_support}")
+                print(f"  Found: task_type={metadata['task_type']}, filter={metadata['filter_query_from_support']}")
+                return False
+            
+            print(f"Loading preprocessed data from {data_file}")
+            print(f"  Created: {metadata['created_at']}")
+            print(f"  Samples: {metadata['num_samples']}")
+            print(f"  Vocab size: {metadata['vocab_size']}")
+            
+            # Load vocabulary
+            with open(vocab_file, 'rb') as f:
+                vocab_data = pickle.load(f)
+            
+            self.word2idx = vocab_data['word2idx']
+            self.idx2word = vocab_data['idx2word']
+            self.pad_token_id = vocab_data['pad_token_id']
+            self.sos_token_id = vocab_data['sos_token_id']
+            self.eos_token_id = vocab_data['eos_token_id']
+            self.io_sep_token_id = vocab_data['io_sep_token_id']
+            self.item_sep_token_id = vocab_data['item_sep_token_id']
+            self.unk_token_id = vocab_data['unk_token_id']
+            
+            # Load task-specific data
+            self.stone_state_to_id = vocab_data.get('stone_state_to_id')
+            self.id_to_stone_state = vocab_data.get('id_to_stone_state')
+            self.all_output_features_list = vocab_data.get('all_output_features_list')
+            self.feature_to_idx_map = vocab_data.get('feature_to_idx_map')
+            self.num_output_features = vocab_data.get('num_output_features')
+            
+            # Load preprocessed data
+            with open(data_file, 'rb') as f:
+                self.data = pickle.load(f)
+            
+            print(f"Successfully loaded {len(self.data)} preprocessed samples")
+            return True
+            
+        except Exception as e:
+            print(f"Error loading preprocessed data: {e}")
+            return False
+
+    def _initialize_from_scratch(self, json_file_path: str, vocab_word2idx: Dict[str, int] = None, 
+                                vocab_idx2word: Dict[int, str] = None, stone_state_to_id: Dict[str, int] = None):
+        """Initialize dataset from scratch (original behavior)."""
+        
         if vocab_word2idx and vocab_idx2word:
             self.word2idx = vocab_word2idx
             self.idx2word = vocab_idx2word
         else:
             if self.task_type == "classification" or self.task_type == "seq2seq_stone_state":
-                # For classification and seq2seq_stone_state, build vocabulary with stone states + potions
                 self.word2idx, self.idx2word = self._build_classification_vocab(json_file_path)
             elif self.task_type == "seq2seq" or self.task_type == "classification_multi_label":
-                # For seq2seq and classification_multi_label, build feature/potion vocabulary
                 self.word2idx, self.idx2word = self._build_feature_potion_vocab(json_file_path)
             else:
                 raise ValueError(f"Unknown task_type for vocab building: {self.task_type}")
@@ -328,6 +431,7 @@ class AlchemyDataset(Dataset):
         self.item_sep_token_id = self.word2idx[self.ITEM_SEP_TOKEN_STR]
         self.unk_token_id = self.word2idx[self.UNK_TOKEN_STR]
 
+        # Initialize task-specific attributes
         self.stone_state_to_id = None
         self.id_to_stone_state = None
         if self.task_type == "classification":
@@ -335,12 +439,11 @@ class AlchemyDataset(Dataset):
                 self.stone_state_to_id = stone_state_to_id
                 self.id_to_stone_state = {v: k for k, v in stone_state_to_id.items()}
             else:
-                # For classification, stone states are already included in the unified vocabulary
                 self.stone_state_to_id = {state: token_id for state, token_id in self.word2idx.items() 
                                          if state.startswith('{') and state.endswith('}')}
                 self.id_to_stone_state = {v: k for k, v in self.stone_state_to_id.items()}
         
-        # For classification_multi_label, we need a mapping for output features
+        # For classification_multi_label
         self.all_output_features_list = None
         self.feature_to_idx_map = None
         self.num_output_features = None
@@ -352,9 +455,6 @@ class AlchemyDataset(Dataset):
                 if not episode_content: continue
                 all_example_strings = episode_content.get("support", []) + episode_content.get("query", [])
                 for example_str in all_example_strings:
-                    # Use a simplified way to get output_state_str, then parse features
-                    # This avoids calling the full tokenize_single_example_str_helper here if not needed
-                    # or ensures all its dependencies are met if it were used.
                     try:
                         output_state_str = example_str.split(" -> ")[1]
                         features_output = re.findall(r':\s*([\w-]+)', output_state_str)
