@@ -30,7 +30,7 @@ def set_seed(seed_value):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
-    parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum"],
+    parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum", 'none'],
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
     parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
@@ -577,6 +577,9 @@ def main():
     # Set seed for reproducibility
     set_seed(args.seed)
     print("Seed: ", args.seed)
+    
+    # Scale learning rate linearly with number of processes (GPUs) (https://huggingface.co/docs/accelerate/concept_guides/performance#learning-rates).
+    args.learning_rate = args.learning_rate * accelerator.num_processes 
 
     # Initialize wandb only on main process
     if accelerator.is_local_main_process:
@@ -698,7 +701,7 @@ def main():
             device=accelerator.device,
             max_len=args.max_seq_len
         )
-        criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id)
+        criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id, reduction=args.multi_label_reduction) # Use CrossEntropyLoss for seq2seq, ignoring PAD_ID
     elif args.task_type == "classification":
         model = create_classifier_model(
             config_name=args.model_size,
@@ -707,7 +710,7 @@ def main():
             device=accelerator.device,
             max_len=args.max_seq_len
         )
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(reduction=args.multi_label_reduction) # Use CrossEntropyLoss for classification
     elif args.task_type == "classification_multi_label":
         model = create_classifier_model( # Using the same StoneStateClassifier model
             config_name=args.model_size,
@@ -724,14 +727,17 @@ def main():
         wandb.watch(model, log="all", log_freq=100)
 
     # --- Optimizer and Scheduler ---
+    print(f"Base learning rate: {args.learning_rate}")
+    print(f"Scaled learning rate (×{accelerator.num_processes}): {args.learning_rate}") # NOTE: the learning rate is scaled by the number of processes (GPUs).
+
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     
-    num_training_steps = args.epochs
+    num_training_steps = args.epochs * len(train_dataloader) # Decaying learning rate over all training steps (not using cycles).
     use_scheduler = str(args.use_scheduler) == "True" or str(args.use_scheduler) == "true"
     print("Use scheduler: ", use_scheduler)
     scheduler = None
     if use_scheduler:
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-7)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-5)
 
     # Prepare everything with Accelerator
     model, optimizer, train_dataloader, scheduler = accelerator.prepare(
