@@ -9,7 +9,7 @@ src/models/profile.py
 src/models/output_files/
 src/saved_models/
 src/models/cluster_profile.py
-wandb_sweep_config.yaml
+*.yaml
 
 .eggs/*
 src/models/cluster_profile.py
