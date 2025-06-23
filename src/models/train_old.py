@@ -579,7 +579,7 @@ def main():
     print("Seed: ", args.seed)
     
     # Scale learning rate linearly with number of processes (GPUs) (https://huggingface.co/docs/accelerate/concept_guides/performance#learning-rates).
-    args.learning_rate = args.learning_rate * accelerator.num_processes 
+    # args.learning_rate = args.learning_rate * accelerator.num_processes 
 
     # Initialize wandb only on main process
     if accelerator.is_local_main_process:

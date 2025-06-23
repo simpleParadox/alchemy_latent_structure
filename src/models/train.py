@@ -591,7 +591,7 @@ def main():
     print("Seed: ", args.seed)
     
     # Scale learning rate linearly with number of processes (GPUs) (https://huggingface.co/docs/accelerate/concept_guides/performance#learning-rates).
-    args.learning_rate = args.learning_rate * accelerator.num_processes 
+    # args.learning_rate = args.learning_rate * accelerator.num_processes 
     
     if args.scheduler_type == "exponential":
         args.scheduler_call_location = "after_epoch"  # ExponentialLR is typically called after each epoch
