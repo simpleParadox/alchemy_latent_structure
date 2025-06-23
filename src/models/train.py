@@ -64,8 +64,16 @@ def parse_args():
                         help="Filter out query examples from support sets to prevent data leakage when support_steps=query_steps=1. Default=True", default=True)
     parser.add_argument("--wandb_project", type=str, default="alchemy-meta-learning",
                         help="Weights & Biases project name.")
+    
+    
     parser.add_argument("--use_scheduler", type=str, default="True", choices=["True", "False"],
                         help="Use learning rate scheduler. Default is True.")
+    parser.add_argument("--scheduler_type", type=str, default="exponential", 
+                        choices=["cosine", "exponential", "none"],
+                        help="Type of learning rate scheduler: 'cosine', 'exponential', or 'none'.")
+    parser.add_argument("--gamma", type=float, default=0.99,
+                        help="Multiplicative factor for ExponentialLR scheduler.")
+    
     parser.add_argument("--scheduler_call_location", type=str, default="after_epoch", choices=["after_epoch", "after_batch"],
                         help="Where to call the scheduler: 'after_epoch' for per-epoch scheduling, 'after_batch' for per-batch.")
     parser.add_argument("--wandb_entity", type=str, default=None, # Replace with your W&B entity
@@ -326,6 +334,10 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
+        # Call scheduler after each batch only for CosineAnnealingLR
+        if scheduler and args.scheduler_type == "cosine":
+            scheduler.step()
+
         total_loss += loss.item()
         total_correct_preds += correct
         total_considered_items += considered
@@ -344,9 +356,9 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             })
             start_time = time.time()
     
-    # if args.task_type == "classification": # If scheduler is per epoch for classification
-    # Call scheduler.step() after each epoch if it is defined.
-    if scheduler: scheduler.step()
+    # Call scheduler after each epoch for ExponentialLR
+    if scheduler and args.scheduler_type == "exponential":
+        scheduler.step()
 
     avg_epoch_loss = total_loss / len(dataloader)
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
@@ -580,6 +592,11 @@ def main():
     
     # Scale learning rate linearly with number of processes (GPUs) (https://huggingface.co/docs/accelerate/concept_guides/performance#learning-rates).
     args.learning_rate = args.learning_rate * accelerator.num_processes 
+    
+    if args.scheduler_type == "exponential":
+        args.scheduler_call_location = "after_epoch"  # ExponentialLR is typically called after each epoch
+    elif args.scheduler_type == "cosine":
+        args.scheduler_call_location = "after_batch" 
 
     # Initialize wandb only on main process
     if accelerator.is_local_main_process:
@@ -727,17 +744,26 @@ def main():
         wandb.watch(model, log="all", log_freq=100)
 
     # --- Optimizer and Scheduler ---
-    print(f"Base learning rate: {args.learning_rate}")
+    print(f"Base learning rate: {args.learning_rate // accelerator.num_processes}")
     print(f"Scaled learning rate (×{accelerator.num_processes}): {args.learning_rate}") # NOTE: the learning rate is scaled by the number of processes (GPUs).
 
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     
-    num_training_steps = args.epochs * len(train_dataloader) # Decaying learning rate over all training steps (not using cycles).
     use_scheduler = str(args.use_scheduler) == "True" or str(args.use_scheduler) == "true"
     print("Use scheduler: ", use_scheduler)
     scheduler = None
-    if use_scheduler:
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-5)
+    
+    if use_scheduler and args.scheduler_type != "none":
+        if args.scheduler_type == "cosine":
+            # For cosine annealing, T_max should be total number of batches
+            num_training_steps = args.epochs * len(train_dataloader)
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-5)
+            print(f"Using CosineAnnealingLR with T_max={num_training_steps}")
+        elif args.scheduler_type == "exponential":
+            scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.gamma)
+            print(f"Using ExponentialLR with gamma={args.gamma}")
+    else:
+        print("No scheduler will be used")
 
     # Prepare everything with Accelerator
     model, optimizer, train_dataloader, scheduler = accelerator.prepare(
@@ -750,7 +776,16 @@ def main():
     if accelerator.is_local_main_process:
         print(f"Model initialized: {args.model_size}, Task: {args.task_type}")
         print(f"Optimizer: AdamW, LR: {args.learning_rate}, Weight Decay: {args.weight_decay}")
-        print(f"Scheduler: CosineAnnealingLR, T_max: {num_training_steps}")
+        
+        if scheduler:
+            if args.scheduler_type == "cosine":
+                num_training_steps = args.epochs * len(train_dataloader)
+                print(f"Scheduler: CosineAnnealingLR, T_max: {num_training_steps} (called per batch)")
+            elif args.scheduler_type == "exponential":
+                print(f"Scheduler: ExponentialLR, gamma: {args.gamma} (called per epoch)")
+        else:
+            print("Scheduler: None")
+            
         if args.task_type == "seq2seq":
             print(f"Criterion: CrossEntropyLoss (ignoring PAD_ID: {pad_token_id} for target sequences)")
         elif args.task_type == "classification":

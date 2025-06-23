@@ -23,3 +23,4 @@ src/models/test_overfitting_fix_training.py
 src/models/test_seq2seq_comprehensive.py
 
 src/data/preprocessed/*
+src/data/preprocessed_other/*
