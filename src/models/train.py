@@ -68,7 +68,7 @@ def parse_args():
     
     parser.add_argument("--use_scheduler", type=str, default="True", choices=["True", "False"],
                         help="Use learning rate scheduler. Default is True.")
-    parser.add_argument("--scheduler_type", type=str, default="exponential", 
+    parser.add_argument("--scheduler_type", type=str, default="cosine", 
                         choices=["cosine", "exponential", "none"],
                         help="Type of learning rate scheduler: 'cosine', 'exponential', or 'none'.")
     parser.add_argument("--gamma", type=float, default=0.99,
