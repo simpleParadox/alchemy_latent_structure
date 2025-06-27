@@ -64,8 +64,6 @@ def parse_args():
                         help="Filter out query examples from support sets to prevent data leakage when support_steps=query_steps=1. Default=True", default=True)
     parser.add_argument("--wandb_project", type=str, default="alchemy-meta-learning",
                         help="Weights & Biases project name.")
-    
-    
     parser.add_argument("--use_scheduler", type=str, default="True", choices=["True", "False"],
                         help="Use learning rate scheduler. Default is True.")
     parser.add_argument("--scheduler_type", type=str, default="cosine", 
@@ -334,10 +332,6 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
-        # Call scheduler after each batch only for CosineAnnealingLR
-        if scheduler and args.scheduler_type == "cosine":
-            scheduler.step()
-
         total_loss += loss.item()
         total_correct_preds += correct
         total_considered_items += considered
@@ -356,9 +350,10 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             })
             start_time = time.time()
     
+    if scheduler: scheduler.step()
     # Call scheduler after each epoch for ExponentialLR
-    if scheduler and args.scheduler_type == "exponential":
-        scheduler.step()
+    # if scheduler and args.scheduler_type == "exponential":
+    #     scheduler.step()
 
     avg_epoch_loss = total_loss / len(dataloader)
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
@@ -591,12 +586,8 @@ def main():
     print("Seed: ", args.seed)
     
     # Scale learning rate linearly with number of processes (GPUs) (https://huggingface.co/docs/accelerate/concept_guides/performance#learning-rates).
-    args.learning_rate = args.learning_rate * accelerator.num_processes 
+    # NOTE: This is at the discretion of the user and is not a requirement.
     
-    if args.scheduler_type == "exponential":
-        args.scheduler_call_location = "after_epoch"  # ExponentialLR is typically called after each epoch
-    elif args.scheduler_type == "cosine":
-        args.scheduler_call_location = "after_batch" 
 
     # Initialize wandb only on main process
     if accelerator.is_local_main_process:
@@ -744,8 +735,7 @@ def main():
         wandb.watch(model, log="all", log_freq=100)
 
     # --- Optimizer and Scheduler ---
-    print(f"Base learning rate: {args.learning_rate // accelerator.num_processes}")
-    print(f"Scaled learning rate (×{accelerator.num_processes}): {args.learning_rate}") # NOTE: the learning rate is scaled by the number of processes (GPUs).
+    print(f"Base learning rate: {args.learning_rate }, Weight decay: {args.weight_decay}")
 
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     
@@ -756,7 +746,8 @@ def main():
     if use_scheduler and args.scheduler_type != "none":
         if args.scheduler_type == "cosine":
             # For cosine annealing, T_max should be total number of batches
-            num_training_steps = args.epochs * len(train_dataloader)
+            # num_training_steps = args.epochs * len(train_dataloader)
+            num_training_steps = args.epochs
             scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-5)
             print(f"Using CosineAnnealingLR with T_max={num_training_steps}")
         elif args.scheduler_type == "exponential":
@@ -779,7 +770,8 @@ def main():
         
         if scheduler:
             if args.scheduler_type == "cosine":
-                num_training_steps = args.epochs * len(train_dataloader)
+                # num_training_steps = args.epochs * len(train_dataloader)
+                num_training_steps = args.epochs
                 print(f"Scheduler: CosineAnnealingLR, T_max: {num_training_steps} (called per batch)")
             elif args.scheduler_type == "exponential":
                 print(f"Scheduler: ExponentialLR, gamma: {args.gamma} (called per epoch)")
