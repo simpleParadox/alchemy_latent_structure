@@ -71,9 +71,9 @@ def parse_args():
                         help="Type of learning rate scheduler: 'cosine', 'exponential', or 'none'.")
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Multiplicative factor for ExponentialLR scheduler.")
-    
     parser.add_argument("--scheduler_call_location", type=str, default="after_epoch", choices=["after_epoch", "after_batch"],
                         help="Where to call the scheduler: 'after_epoch' for per-epoch scheduling, 'after_batch' for per-batch.")
+    
     parser.add_argument("--wandb_entity", type=str, default=None, # Replace with your W&B entity
                         help="Weights & Biases entity name.")
     parser.add_argument("--wandb_run_name", type=str, default=None,
