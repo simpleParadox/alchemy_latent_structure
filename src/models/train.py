@@ -684,7 +684,19 @@ def main():
     # Get train and validation sets
     train_dataset = full_dataset.get_train_set()
     val_dataset = None
-    
+   
+   
+    # Doing some changes to the sequence length based on the training data. The default sequence length is 2048 but
+    # if the sequence length is longer than that, we will double the max_seq_len.
+    max_length = max(len(item['encoder_input_ids']) for item in train_dataset)
+    print(f"Maximum sequence length in training data: {max_length}")
+    if max_length > args.max_seq_len:
+        print(f"Maximum sequence length {max_length} exceeds args.max_seq_len {args.max_seq_len}. Adjusting args.max_seq_len to be double than max_length.")
+        args.max_seq_len *= 2
+        print(f"Adjusted args.max_seq_len: {args.max_seq_len}")
+    else:
+        print(f"Maximum sequence length {max_length} is within args.max_seq_len {args.max_seq_len}. No adjustment needed.")
+
     # Determine validation strategy
     if args.val_split is not None:
         # Use internal split
