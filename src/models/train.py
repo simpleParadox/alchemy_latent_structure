@@ -42,7 +42,7 @@ def parse_args():
                         help="Validation split ratio (e.g., 0.1 for 10%%). If provided, validation set will be created from training data instead of loading separate file. Default is None.")
     parser.add_argument("--val_split_seed", type=int, default=42,
                         help="Seed for reproducible train/val splits.")
-    parser.add_argument("--data_split_seed", type=int, default=42,
+    parser.add_argument("--data_split_seed", type=int, default=0,
                         help="Seed value that gets appended to the data path to load the approapriate training / validation.")
     parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"],
                         help="Size of the transformer model.")
@@ -338,7 +338,7 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
                 # Calculate loss for this group
                 group_loss = loss_criterion(logits_group, target_group_indices)
                 
-                total_loss += group_loss.item()
+                total_loss += group_loss
                 num_losses += 1
                
                 # --- Accuracy Calculation ---
@@ -528,10 +528,10 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 total_loss = 0.0
                 num_losses = 0
                 
-                all_groups_correct = torch.ones(target_class_ids.size(0), dtype=torch.bool, device=target_class_ids.device)  # Start with all samples considered correct, and then set 0 where they are not correct.
+                all_groups_correct = torch.ones(target_feature_vector.size(0), dtype=torch.bool, device=target_feature_vector.device)  # Start with all samples considered correct, and then set 0 where they are not correct.
                 for start_idx, end_idx in feature_groups:
                     logits_group = output_logits[:, start_idx:end_idx]
-                    target_group_one_hot = target_class_ids[:, start_idx:end_idx]  # Get corresponding target features for that group.
+                    target_group_one_hot = target_feature_vector[:, start_idx:end_idx]  # Get corresponding target features for that group.
                     
                     # Convert one-hot to class indices
                     target_group_indices = target_group_one_hot.argmax(dim=-1)
@@ -554,7 +554,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 
                 # Calculate accuracy based on the overall correctness across all groups
                 correct = all_groups_correct.sum().item()
-                considered = target_class_ids.size(0)
+                considered = target_feature_vector.size(0)
                 acc = correct / considered if considered > 0 else 0.0
                 
                 
@@ -774,7 +774,7 @@ def main():
         print(f"Number of classes (Stone States for Classification): {num_classes}")
     elif args.task_type == "classification_multi_label":
         num_output_features = full_dataset.num_output_features
-        print(f"Number of output features (for Multi-label Classification): {num_output_features}")
+        print(f"Number of ungrouped output features (for Multi-label Classification): {num_output_features}")
 
     # Create data loaders
     custom_collate_train = partial(collate_fn, pad_token_id=pad_token_id, task_type=args.task_type)
