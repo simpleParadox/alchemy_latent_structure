@@ -518,8 +518,45 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 target_feature_vector = batch["target_feature_vector"]
                 src_padding_mask = (encoder_input_ids == pad_token_id)
                 output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
-                loss = criterion(output_logits, target_feature_vector.float())
-                acc, correct, considered = calculate_accuracy_multilabel(output_logits, target_feature_vector)
+                
+                
+                feature_groups = [(0, 3), (3, 6), (6, 9), (9, 13)]
+                
+                # Initialize CrossEntropyLoss with ignore_index for group level multi-class classification.
+                loss_criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id)
+                
+                total_loss = 0.0
+                num_losses = 0
+                
+                all_groups_correct = torch.ones(target_class_ids.size(0), dtype=torch.bool, device=target_class_ids.device)  # Start with all samples considered correct, and then set 0 where they are not correct.
+                for start_idx, end_idx in feature_groups:
+                    logits_group = output_logits[:, start_idx:end_idx]
+                    target_group_one_hot = target_class_ids[:, start_idx:end_idx]  # Get corresponding target features for that group.
+                    
+                    # Convert one-hot to class indices
+                    target_group_indices = target_group_one_hot.argmax(dim=-1)
+                    # Calculate loss for this group
+                    group_loss = loss_criterion(logits_group, target_group_indices)
+                    total_loss += group_loss.item()
+                    num_losses += 1
+                    
+                    # --- Accuracy Calculation ---
+                    # Get predicted class index for this group
+                    predicted_indices_group = logits_group.argmax(dim=-1)
+                    # Check which samples are correct for this group
+                    correct_in_group = (predicted_indices_group == target_group_indices)
+                    # Update the overall correctness. A sample is only correct if it has been
+                    # correct for all previous groups AND is correct for the current one.
+                    all_groups_correct &= correct_in_group
+                    
+                # Average the loss across all groups
+                loss = total_loss / num_losses
+                
+                # Calculate accuracy based on the overall correctness across all groups
+                correct = all_groups_correct.sum().item()
+                considered = target_class_ids.size(0)
+                acc = correct / considered if considered > 0 else 0.0
+                
                 
                 # Store predictions and targets if requested
                 if args.store_predictions:
