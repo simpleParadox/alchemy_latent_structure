@@ -314,7 +314,7 @@ def main():
                         help="Number of samples to generate for each episode")
     parser.add_argument("--support_steps", type=int, default=1,
                         help="Minimum number of transformation steps in each sample")
-    parser.add_argument("--query_steps", type=int, default=4,
+    parser.add_argument("--query_steps", type=int, default=5,
                         help="Maximum number of transformation steps in each sample")
     parser.add_argument("--seed", type=int, default=2,
                         help="Random seed for reproducibility")

@@ -310,11 +310,60 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             loss = criterion(output_logits, target_class_ids) # CrossEntropyLoss expects (N, C) and (N)
             acc, correct, considered = calculate_accuracy_classification(output_logits, target_class_ids)
         elif args.task_type == "classification_multi_label":
+            
             target_feature_vector = batch["target_feature_vector"] # (batch_size, num_output_features)
             src_padding_mask = (encoder_input_ids == pad_token_id)
             output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask) # (batch_size, num_output_features)
-            loss = criterion(output_logits, target_feature_vector.float()) # BCEWithLogitsLoss expects float targets
-            acc, correct, considered = calculate_accuracy_multilabel(output_logits, target_feature_vector)
+            
+            
+            # 1. Define the feature gorups.
+            feature_groups = [(0, 3), (3, 6), (6, 9), (9, 13)]
+            
+            
+            # 2. Initialize CrossEntropyLoss with ignore_index for group level multi-class classification.
+            loss_criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id) # Default reduction is 'mean'.
+            
+            total_loss = 0.0
+            num_losses = 0
+            
+            all_groups_correct = torch.ones(target_feature_vector.size(0), dtype=torch.bool, device=target_feature_vector.device)  # Start with all samples considered correct, and then set 0 where they are not correct.
+
+            for start_idx, end_idx in feature_groups:
+                logits_group = output_logits[:, start_idx:end_idx]  # Get logits for the current group
+                target_group_one_hot = target_feature_vector[:, start_idx:end_idx]  # Get corresponding target features for that group.
+                
+                # Convert one-hot to class indices
+                target_group_indices = target_group_one_hot.argmax(dim=-1) 
+                
+                # Calculate loss for this group
+                group_loss = loss_criterion(logits_group, target_group_indices)
+                
+                total_loss += group_loss.item()
+                num_losses += 1
+               
+                # --- Accuracy Calculation ---
+                # Get predicted class index for this group
+                predicted_indices_group = logits_group.argmax(dim=-1)
+                # Check which samples are correct for this group
+                correct_in_group = (predicted_indices_group == target_group_indices)
+                # Update the overall correctness. A sample is only correct if it has been
+                # correct for all previous groups AND is correct for the current one.
+                all_groups_correct &= correct_in_group
+            
+            
+                
+            # Average the loss across all groups
+            loss = total_loss / num_losses
+                
+            # acc, correct, considered = calculate_accuracy_multilabel(output_logits, target_feature_vector)
+            
+            # Calculate accuracy based on the overall correctness across all groups
+            correct = all_groups_correct.sum().item()
+            considered = target_feature_vector.size(0)
+            acc = correct / considered if considered > 0 else 0.0
+            
+           
+            
         elif args.task_type == "seq2seq_stone_state":
             decoder_input_ids = batch["decoder_input_ids"]
             decoder_target_ids = batch["decoder_target_ids"]
