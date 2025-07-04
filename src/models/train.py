@@ -537,7 +537,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                     target_group_indices = target_group_one_hot.argmax(dim=-1)
                     # Calculate loss for this group
                     group_loss = loss_criterion(logits_group, target_group_indices)
-                    total_loss += group_loss.item()
+                    total_loss += group_loss
                     num_losses += 1
                     
                     # --- Accuracy Calculation ---
