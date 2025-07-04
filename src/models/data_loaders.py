@@ -152,9 +152,29 @@ def process_episode_worker(args):
             # Create multi-hot target vector for output features
             output_feature_strings = re.findall(r':\s*([\w-]+)', query_output_state_str)
             target_feature_vector = [0] * len(all_output_features_list)
+            # The following line is only applicable for the classification_multi_label task.
+            # The way the code design works is by having groups of features,
+            # where the first three are always color, the next three are shape, etc.
+            # This way the target_feature_vector will always have groups of features,
+            # where at least one feature from each group is activated (set to 1).
+            feature_to_idx_map_input, feature_to_idx_map_output = feature_to_idx_map[0], feature_to_idx_map[1]
             for feature_str in output_feature_strings:
-                if feature_str in feature_to_idx_map:
-                    target_feature_vector[feature_to_idx_map[feature_str]] = 1
+                if feature_str in feature_to_idx_map_output:
+                    target_feature_vector[feature_to_idx_map_output[feature_str]] = 1
+            
+            # Add a check here. The check should ensure that
+            # 1. At most one feature from each group is activated.
+            # 2. The groups should be tested separately.
+            # The groups are: (0,3), (3,6), (6,9), (9,13) - the second index is exclusive.
+            
+            groups = [(0, 3), (3, 6), (6, 9), (9, 13)]
+            for start, end in groups:
+                group_features = target_feature_vector[start:end]
+                if sum(group_features) > 1:
+                    print(f"Warning: More than one feature activated in group {start}-{end} for episode {episode_id}. Features: {group_features}")
+                if sum(group_features) == 0:
+                    print(f"Warning: No features activated in group {start}-{end} for episode {episode_id}. Features: {group_features}")
+            # Ensure the target_feature_vector is of the correct length
             
             processed_data.append({
                 "encoder_input_ids": encoder_input_ids,
@@ -395,7 +415,11 @@ class AlchemyDataset(Dataset):
             self.stone_state_to_id = vocab_data.get('stone_state_to_id')
             self.id_to_stone_state = vocab_data.get('id_to_stone_state')
             self.all_output_features_list = vocab_data.get('all_output_features_list')
-            self.feature_to_idx_map = vocab_data.get('feature_to_idx_map')
+            if self.task_type == "classification_multi_label":
+                self.feature_to_idx_map_input = vocab_data.get('feature_to_idx_map_input')
+                self.feature_to_idx_map_output = vocab_data.get('feature_to_idx_map_output')
+            else:
+                self.feature_to_idx_map = vocab_data.get('feature_to_idx_map')
             self.num_output_features = vocab_data.get('num_output_features')
             
             # Load preprocessed data
@@ -445,7 +469,8 @@ class AlchemyDataset(Dataset):
         
         # For classification_multi_label
         self.all_output_features_list = None
-        self.feature_to_idx_map = None
+        self.feature_to_idx_map_input = None
+        self.feature_to_idx_map_output = None
         self.num_output_features = None
         if self.task_type == "classification_multi_label":
             all_features_in_dataset: Set[str] = set()
@@ -462,9 +487,17 @@ class AlchemyDataset(Dataset):
                     except IndexError:
                         print(f"Warning: Malformed example string in episode {episode_id}: {example_str}")
             
-            self.all_output_features_list = sorted(list(all_features_in_dataset))
-            self.feature_to_idx_map = {feature: idx for idx, feature in enumerate(self.all_output_features_list)}
-            self.num_output_features = len(self.all_output_features_list)
+            self.all_input_features_list = sorted(list(all_features_in_dataset))
+            self.feature_to_idx_map_input = {feature: idx for idx, feature in enumerate(self.all_input_features_list)}
+            
+            # The following is hardcoded for multi-label classification. This is to ensure that a set of output features always belong to the same group of features. 
+            # For example, the first three features are always the color, the next three are always the shape, etc.
+            self.feature_to_idx_map_output = {'blue': 0, 'red': 1, 'purple': 2,
+                                              'small': 3, 'medium': 4, 'large': 5,
+                                              'pointy': 6, 'round': 7, 'medium_round': 8,
+                                              '-1': 9, '-3': 10, '1': 11, '3': 12}
+            
+            self.num_output_features = len(self.feature_to_idx_map_output)
             print(f"Built output feature mapping for multi-label classification: {self.num_output_features} unique features.")
 
         self.data = self._load_and_preprocess_data(json_file_path, self.num_workers, self.chunk_size)
@@ -621,8 +654,8 @@ class AlchemyDataset(Dataset):
                            self.sos_token_id, self.eos_token_id, self.unk_token_id)
         
         # Add feature mapping for multi-label task to worker args
-        all_output_features_list_arg = self.all_output_features_list if self.task_type == "classification_multi_label" else None
-        feature_to_idx_map_arg = self.feature_to_idx_map if self.task_type == "classification_multi_label" else None
+        all_output_features_list_arg = list(self.feature_to_idx_map_output.keys()) if self.task_type == "classification_multi_label" else None
+        feature_to_idx_map_arg = (self.feature_to_idx_map_input, self.feature_to_idx_map_output) if self.task_type == "classification_multi_label" else None
 
         episode_args = []
         # c = 0
@@ -854,70 +887,70 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_typ
 if __name__ == '__main__':
     # FILE_PATH = "/home/rsaha/projects/dm_alchemy/src/data/chemistry_samples.json" 
     # Using the provided context file for testing
-    FILE_PATH = "/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_val_shop_2_qhop_1.json"
+    FILE_PATH = "/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0.json"
     
     # Test Seq2Seq
-    print("\n--- Testing Seq2Seq Task ---")
-    try:
-        dataset_s2s = AlchemyDataset(json_file_path=FILE_PATH, task_type="seq2seq")
-        print(f"Dataset (Seq2Seq) initialized. Number of samples: {len(dataset_s2s)}")
-        print(f"Feature/Potion Vocabulary size: {len(dataset_s2s.word2idx)}")
+    # print("\n--- Testing Seq2Seq Task ---")
+    # try:
+    #     dataset_s2s = AlchemyDataset(json_file_path=FILE_PATH, task_type="seq2seq")
+    #     print(f"Dataset (Seq2Seq) initialized. Number of samples: {len(dataset_s2s)}")
+    #     print(f"Feature/Potion Vocabulary size: {len(dataset_s2s.word2idx)}")
         
-        custom_collate_s2s = partial(collate_fn, pad_token_id=dataset_s2s.pad_token_id, task_type="seq2seq")
-        dataloader_s2s = DataLoader(dataset_s2s, batch_size=2, shuffle=False, collate_fn=custom_collate_s2s)
-        print("DataLoader (Seq2Seq) created.")
+    #     custom_collate_s2s = partial(collate_fn, pad_token_id=dataset_s2s.pad_token_id, task_type="seq2seq")
+    #     dataloader_s2s = DataLoader(dataset_s2s, batch_size=2, shuffle=False, collate_fn=custom_collate_s2s)
+    #     print("DataLoader (Seq2Seq) created.")
 
-        for i, batch_data in enumerate(dataloader_s2s):
-            if i >= 1: break
-            print(f"\n--- Seq2Seq Batch {i+1} --- ")
-            print("Encoder Inputs Shape:", batch_data["encoder_input_ids"].shape)
-            print("Decoder Inputs Shape:", batch_data["decoder_input_ids"].shape)
-            print("Decoder Targets Shape:", batch_data["decoder_target_ids"].shape)
-            if len(batch_data["encoder_input_ids"]) > 0:
-                print("Encoder input (first sample):", batch_data["encoder_input_ids"][0])
-                print("Decoder target (first sample):", batch_data["decoder_target_ids"][0])
-        if len(dataset_s2s) == 0: print("WARNING: Seq2Seq dataset is empty.")
-    except Exception as e:
-        print(f"Error during Seq2Seq DataLoader testing: {e}")
-        import traceback
-        traceback.print_exc()
+    #     for i, batch_data in enumerate(dataloader_s2s):
+    #         if i >= 1: break
+    #         print(f"\n--- Seq2Seq Batch {i+1} --- ")
+    #         print("Encoder Inputs Shape:", batch_data["encoder_input_ids"].shape)
+    #         print("Decoder Inputs Shape:", batch_data["decoder_input_ids"].shape)
+    #         print("Decoder Targets Shape:", batch_data["decoder_target_ids"].shape)
+    #         if len(batch_data["encoder_input_ids"]) > 0:
+    #             print("Encoder input (first sample):", batch_data["encoder_input_ids"][0])
+    #             print("Decoder target (first sample):", batch_data["decoder_target_ids"][0])
+    #     if len(dataset_s2s) == 0: print("WARNING: Seq2Seq dataset is empty.")
+    # except Exception as e:
+    #     print(f"Error during Seq2Seq DataLoader testing: {e}")
+    #     import traceback
+    #     traceback.print_exc()
 
-    # Test Classification
-    print("\n\n--- Testing Classification Task ---")
-    try:
-        dataset_clf = AlchemyDataset(json_file_path=FILE_PATH, task_type="classification")
-        print(f"Dataset (Classification) initialized. Number of samples: {len(dataset_clf)}")
-        print(f"Feature/Potion Vocabulary size: {len(dataset_clf.word2idx)}")
-        if dataset_clf.stone_state_to_id:
-            print(f"Stone State Vocabulary (Num Classes): {len(dataset_clf.stone_state_to_id)}")
-            # print("Sample stone_state_to_id:", list(dataset_clf.stone_state_to_id.items())[:5])
+    # # Test Classification
+    # print("\n\n--- Testing Classification Task ---")
+    # try:
+    #     dataset_clf = AlchemyDataset(json_file_path=FILE_PATH, task_type="classification")
+    #     print(f"Dataset (Classification) initialized. Number of samples: {len(dataset_clf)}")
+    #     print(f"Feature/Potion Vocabulary size: {len(dataset_clf.word2idx)}")
+    #     if dataset_clf.stone_state_to_id:
+    #         print(f"Stone State Vocabulary (Num Classes): {len(dataset_clf.stone_state_to_id)}")
+    #         # print("Sample stone_state_to_id:", list(dataset_clf.stone_state_to_id.items())[:5])
 
-        custom_collate_clf = partial(collate_fn, pad_token_id=dataset_clf.pad_token_id, task_type="classification")
-        dataloader_clf = DataLoader(dataset_clf, batch_size=2, shuffle=False, collate_fn=custom_collate_clf)
-        print("DataLoader (Classification) created.")
+    #     custom_collate_clf = partial(collate_fn, pad_token_id=dataset_clf.pad_token_id, task_type="classification")
+    #     dataloader_clf = DataLoader(dataset_clf, batch_size=2, shuffle=False, collate_fn=custom_collate_clf)
+    #     print("DataLoader (Classification) created.")
 
-        for i, batch_data in enumerate(dataloader_clf):
-            if i >= 1: break
-            print(f"\n--- Classification Batch {i+1} --- ")
-            print("Encoder Inputs Shape:", batch_data["encoder_input_ids"].shape)
-            print("Target Class ID Shape:", batch_data["target_class_id"].shape)
-            if len(batch_data["encoder_input_ids"]) > 0:
-                 print("Encoder input (first sample):", batch_data["encoder_input_ids"][0])
-                 print("Target class ID (first sample):", batch_data["target_class_id"][0])
+    #     for i, batch_data in enumerate(dataloader_clf):
+    #         if i >= 1: break
+    #         print(f"\n--- Classification Batch {i+1} --- ")
+    #         print("Encoder Inputs Shape:", batch_data["encoder_input_ids"].shape)
+    #         print("Target Class ID Shape:", batch_data["target_class_id"].shape)
+    #         if len(batch_data["encoder_input_ids"]) > 0:
+    #              print("Encoder input (first sample):", batch_data["encoder_input_ids"][0])
+    #              print("Target class ID (first sample):", batch_data["target_class_id"][0])
 
-        if len(dataset_clf) == 0: print("WARNING: Classification dataset is empty.")
+    #     if len(dataset_clf) == 0: print("WARNING: Classification dataset is empty.")
 
-    except FileNotFoundError:
-        print(f"ERROR: JSON data file not found at {FILE_PATH}. Please ensure the file exists.")
-    except Exception as e:
-        print(f"An error occurred during Classification DataLoader testing: {e}")
-        import traceback
-        traceback.print_exc()
+    # except FileNotFoundError:
+    #     print(f"ERROR: JSON data file not found at {FILE_PATH}. Please ensure the file exists.")
+    # except Exception as e:
+    #     print(f"An error occurred during Classification DataLoader testing: {e}")
+    #     import traceback
+    #     traceback.print_exc()
 
     # Test Classification Multi-Label
     print("\n\n--- Testing Classification Multi-Label Task ---")
     try:
-        dataset_ml = AlchemyDataset(json_file_path=FILE_PATH, task_type="classification_multi_label", num_workers=1) # Using 1 worker for easier debugging if needed
+        dataset_ml = AlchemyDataset(json_file_path=FILE_PATH, task_type="classification_multi_label", num_workers=1, use_preprocessed=False) # Using 1 worker for easier debugging if needed
         print(f"Dataset (Multi-Label) initialized. Number of samples: {len(dataset_ml)}")
         print(f"Feature/Potion Vocabulary size: {len(dataset_ml.word2idx)}")
         if dataset_ml.num_output_features:
