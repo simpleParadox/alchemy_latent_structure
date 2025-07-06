@@ -90,7 +90,7 @@ def parse_args():
                         help="Store predictions during training and validation. Default is True.")
     
     # Add new preprocessing arguments
-    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed",
+    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_fixed_multi_label",
                         help="Directory to look for/store preprocessed data files.")
     parser.add_argument("--use_preprocessed", type=str, default="True", choices=["True", "False"],
                         help="Whether to use preprocessed data if available. Default is True.")
@@ -964,8 +964,8 @@ def main():
                     checkpoint['stone_state_to_id'] = full_dataset.stone_state_to_id
                     checkpoint['id_to_stone_state'] = full_dataset.id_to_stone_state
                 elif args.task_type == "classification_multi_label":
-                    checkpoint['feature_to_idx_map'] = full_dataset.feature_to_idx_map
-                    checkpoint['idx_to_feature_map'] = {v: k for k, v in full_dataset.feature_to_idx_map.items()}
+                    checkpoint['feature_to_idx_map_input'] = full_dataset.feature_to_idx_map_input
+                    checkpoint['feature_to_idx_map_output'] = full_dataset.feature_to_idx_map_output
                     checkpoint['num_output_features'] = full_dataset.num_output_features
                 
                 torch.save(checkpoint, model_save_path)

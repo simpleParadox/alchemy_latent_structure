@@ -63,7 +63,9 @@ def preprocess_and_save_dataset(
         filter_query_from_support=filter_query_from_support,
         num_workers=num_workers,
         chunk_size=chunk_size,
-        val_split=None  # Don't create splits during preprocessing
+        val_split=None, # Don't create splits during preprocessing
+        use_preprocessed=False # Initialize from scratch.
+        
     )
     
     # Generate output filenames based on input file and parameters
@@ -148,21 +150,32 @@ def preprocess_and_save_dataset(
 
 
 def main():
+    # python src/models/preprocess_dataset.py \
+    # --train_json_file /home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_0.json \
+    # --val_json_file /home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_5_qhop_1_seed_0.json \
+    # --task_type classification_multi_label \
+    # --output_dir src/data/preprocessed_fixed_multi_label \
+    # --filter_query_from_support \
+    # --num_workers 11 
     parser = argparse.ArgumentParser(description="Preprocess Alchemy datasets")
-    parser.add_argument("--train_json_file", type=str, required=True,
+    parser.add_argument("--train_json_file", type=str, required=False,
+                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0.json",
                         help="Path to the training JSON file")
-    parser.add_argument("--val_json_file", type=str, required=True,
+    parser.add_argument("--val_json_file", type=str, required=False,
+                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_0.json",
                         help="Path to the validation JSON file")
-    parser.add_argument("--task_type", type=str, required=True,
+    parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
+                        default="classification_multi_label",
                         help="Type of task")
-    parser.add_argument("--output_dir", type=str, default="src/data/preprocessed",
+    parser.add_argument("--output_dir", type=str, default="src/data/preprocessed_temp",
                         help="Directory to save preprocessed files")
     parser.add_argument("--filter_query_from_support", action="store_true",
+                        default=True,
                         help="Filter query examples from support sets")
-    parser.add_argument("--num_workers", type=int, default=4,
+    parser.add_argument("--num_workers", type=int, default=10,
                         help="Number of workers for multiprocessing")
-    parser.add_argument("--chunk_size", type=int, default=10000,
+    parser.add_argument("--chunk_size", type=int, default=50000,
                         help="Chunk size for processing")
     
     args = parser.parse_args()
@@ -181,7 +194,7 @@ def main():
         stone_state_to_id=None,
         filter_query_from_support=args.filter_query_from_support,
         num_workers=args.num_workers,
-        chunk_size=args.chunk_size
+        chunk_size=args.chunk_size, 
     )
     
     print("\n" + "="*60)
