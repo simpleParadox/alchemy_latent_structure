@@ -13,7 +13,6 @@ import gzip
 from typing import Dict, List, Tuple, Set, Any, Union
 from tqdm import tqdm
 
-
 def load_chemistry_graph(file_path: str) -> Dict[str, Dict]:
     """Load and parse the chemistry graph JSON file with multiple episodes.
     Supports both compressed (.gz) and uncompressed JSON files.
@@ -178,6 +177,91 @@ def is_reverse_trajectory(sample1: Dict, sample2: Dict) -> bool:
         # NOTE: the reverse would actually never happen because the colors always paired together.
     )
 
+
+def generate_held_out_color_pair_data(graph: Dict) -> Dict[str, Any]:
+    """
+    Generates a support and query set by holding out one pair of colors.
+    The support set contains all transitions for other color pairs, plus one
+    example transition from the held-out pair. The query set contains the
+    remaining transitions for the held-out pair.
+    """
+    # Define the color pairs. This might need to be adjusted if they are not static.
+    color_pairs = [('RED', 'GREEN'), ('PINK', 'CYAN'), ('ORANGE', 'YELLOw')]
+    
+    # 1. Randomly select one color pair to hold out
+    held_out_pair = random.choice(color_pairs)
+    support_colors = [color for pair in color_pairs if pair != held_out_pair for color in pair]
+    
+    print(f"Holding out color pair: {held_out_pair}")
+
+    # 2. Find all transitions for the held-out pair
+    held_out_transitions = []
+    support_transitions = []
+
+    for node_id, node_data in graph.items():
+        if not node_data.get("transitions"):
+            continue
+        for transition in node_data["transitions"]:
+            potion = transition["potion_color"]
+            next_node_id = transition["next_node_str"]
+            if next_node_id not in graph:
+                continue
+            
+            start_desc = get_stone_description(graph[node_id])
+            end_desc = get_stone_description(graph[next_node_id])
+            sample_str = f"{start_desc} {potion} -> {end_desc}"
+            sample_info = {
+                "start_node": node_id, "end_node": next_node_id, "potions": [potion]
+            }
+
+            if potion in held_out_pair:
+                held_out_transitions.append((sample_str, sample_info))
+            else:
+                support_transitions.append((sample_str, sample_info))
+
+    # Group held-out transitions by the pair of stones they connect
+    held_out_stone_pairs = {}
+    for s_str, s_info in held_out_transitions:
+        # Create a key that is consistent regardless of direction (start, end) vs (end, start)
+        pair_key = tuple(sorted((s_info["start_node"], s_info["end_node"])))
+        if pair_key not in held_out_stone_pairs:
+            held_out_stone_pairs[pair_key] = []
+        held_out_stone_pairs[pair_key].append((s_str, s_info))
+
+    # 3. Randomly select one stone pair from the held-out set to add to support
+    held_out_pair_keys = list(held_out_stone_pairs.keys())
+    random.shuffle(held_out_pair_keys)
+    
+    if not held_out_pair_keys:
+        print("Warning: No transitions found for the held-out color pair.")
+        return {"support": [], "query": []}
+
+    support_example_key = held_out_pair_keys.pop(0)
+    support_example_transitions = held_out_stone_pairs[support_example_key]
+    
+    # Add the single held-out example to the main support transitions
+    support_transitions.extend(support_example_transitions)
+
+    # 4. The remaining held-out transitions form the query set
+    query_transitions = []
+    for key in held_out_pair_keys:
+        query_transitions.extend(held_out_stone_pairs[key])
+
+    # Finalize support and query sets
+    support_samples = [s[0] for s in support_transitions]
+    query_samples = [q[0] for q in query_transitions]
+    
+    # To maintain consistency with the other function's return type
+    return {
+        "support": support_samples,
+        "query": query_samples,
+        "support_num_generated": len(support_samples),
+        "query_num_generated": len(query_samples),
+        "support_samples_info": [s[1] for s in support_transitions],
+        "query_samples_info": [q[1] for q in query_transitions],
+        "held_out_pair": held_out_pair
+    }
+
     
 def generate_support_and_query_examples(
     graph: Dict, 
@@ -314,13 +398,21 @@ def main():
                         help="Number of samples to generate for each episode")
     parser.add_argument("--support_steps", type=int, default=1,
                         help="Minimum number of transformation steps in each sample")
-    parser.add_argument("--query_steps", type=int, default=5,
+    parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
     parser.add_argument("--seed", type=int, default=2,
                         help="Random seed for reproducibility")
     parser.add_argument("--create_val_from_train", action="store_true",
                         help="Create a validation set from the training set", default=True)
+    parser.add_argument("--process_complete_graph_only", action="store_true",
+                        help="Process the complete graphs only", default=True)
+    parser.add_argument("--output_dir", default=".",
+                        help="Directory to save the output files. Default is current directory.")
     
+    # Add a new argument for your experiment
+    parser.add_argument("--held_out_color_exp", action="store_true",
+                        help="Generate data for the held-out color pair experiment.", default=True)
+
     args = parser.parse_args()
     
     output_file = args.output
@@ -368,11 +460,19 @@ def main():
         # Add seed to the filename
         base_train = os.path.splitext(train_output_file)[0]
         ext_train = os.path.splitext(train_output_file)[1]
-        train_output_file = f"{base_train}_seed_{args.seed}{ext_train}"
+        if args.held_out_color_exp:
+            train_output_file = f"{base_train}_held_out_color_exp_seed_{args.seed}{ext_train}"
+        else:
+            train_output_file = f"{base_train}_seed_{args.seed}{ext_train}"
+        
         
         base_val = os.path.splitext(val_output_file)[0]
         ext_val = os.path.splitext(val_output_file)[1]
-        val_output_file = f"{base_val}_seed_{args.seed}{ext_val}"
+        if args.held_out_color_exp:
+            val_output_file = f"{base_val}_held_out_color_exp_seed_{args.seed}{ext_val}"
+        else:
+            val_output_file = f"{base_val}_seed_{args.seed}{ext_val}"
+        
         
         train_output_file, val_output_file = [os.path.join(os.path.dirname(f), prefix + os.path.basename(f)) for f in [train_output_file, val_output_file]]
         
@@ -414,6 +514,14 @@ def main():
         for episode_id, episode_data in tqdm(train_graphs.items(), desc="Processing Training Episodes"):
             
             # Extract the graph for this episode
+            
+            # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
+            if args.process_complete_graph_only and not episode_data.get("is_complete", False):
+                print(f"Skipping episode {episode_id} as it is not a complete graph.")
+                continue
+            print(f"Processing Training Episode {episode_id}...")
+            # Extract the graph for this episode
+
             graph = episode_data["graph"]
             
             # Estimate maximum unique samples for this episode
@@ -428,12 +536,15 @@ def main():
             if args.samples_per_episode > max_unique_query:
                 print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
             
-            support_and_query_samples = generate_support_and_query_examples(
-                graph, 
-                args.samples_per_episode,
-                args.support_steps,
-                args.query_steps,
-            )
+            if args.held_out_color_exp:
+                support_and_query_samples = generate_held_out_color_pair_data(graph)
+            else:
+                support_and_query_samples = generate_support_and_query_examples(
+                    graph, 
+                    args.samples_per_episode,
+                    args.support_steps,
+                    args.query_steps,
+                )
             
             # Store the episode samples
             train_output_data["episodes"][episode_id] = {
@@ -442,15 +553,26 @@ def main():
                 "support_num_generated": support_and_query_samples["support_num_generated"],
                 "query_num_generated": support_and_query_samples["query_num_generated"],
                 "support_samples_info": support_and_query_samples["support_samples_info"],
-                "query_samples_info": support_and_query_samples["query_samples_info"]
+                "query_samples_info": support_and_query_samples["query_samples_info"],
+                "is_complete": episode_data.get("is_complete", False)  # Store graph completeness status
             }
             
             # Update total samples
             support_num_generated = support_and_query_samples["support_num_generated"]
             query_num_generated = support_and_query_samples["query_num_generated"]
             total_train_samples += support_num_generated + query_num_generated
-        
+            
+            # Check if the total number of samples = 24 if the graph is complete.
+            if episode_data.get("is_complete", False):
+                if support_num_generated + query_num_generated != 24:
+                    print(f"WARNING: Total samples for complete episode {episode_id} is {support_num_generated + query_num_generated}, expected 24.")
+                    
+                    
         # Write training output to JSON file
+        # Ensure the output directory exists
+        # args.output_dir = os.getcwd() + '/' + args.output_dir if not args.output_dir == '.' else args.output_dir
+        # os.makedirs(os.path.dirname(args.output_dir), exist_ok=True)
+        # train_output_file = os.path.join(args.output_dir, train_output_file)
         with open(train_output_file, 'w') as f:
             json.dump(train_output_data, f)
         
@@ -478,6 +600,12 @@ def main():
         for episode_id, episode_data in val_graphs.items():
             print(f"Processing Validation Episode {episode_id}...")
             
+            # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
+            if args.process_complete_graph_only and not episode_data.get("is_complete", False):
+                print(f"Skipping episode {episode_id} as it is not a complete graph.")
+                continue
+            # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
+            
             # Extract the graph for this episode
             graph = episode_data["graph"]
             
@@ -489,12 +617,15 @@ def main():
                 print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
             
             
-            support_and_query_samples = generate_support_and_query_examples(
-                graph, 
-                args.samples_per_episode,
-                args.support_steps,
-                args.query_steps,
-            )
+            if args.held_out_color_exp:
+                support_and_query_samples = generate_held_out_color_pair_data(graph)
+            else:
+                support_and_query_samples = generate_support_and_query_examples(
+                    graph, 
+                    args.samples_per_episode,
+                    args.support_steps,
+                    args.query_steps,
+                )
             
             # Store the episode samples
             val_output_data["episodes"][episode_id] = {
@@ -513,6 +644,7 @@ def main():
             total_val_samples += support_num_generated + query_num_generated
         
         # Write validation output to JSON file
+        # val_output_file = os.path.join(args.output_dir, val_output_file)
         with open(val_output_file, 'w') as f:
             json.dump(val_output_data, f)
         

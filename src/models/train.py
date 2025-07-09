@@ -32,25 +32,25 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum", 'none'],
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
-    parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
+    parser.add_argument("--task_type", type=str, default="classification", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
-    parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
+    parser.add_argument("--train_data_path", type=str, default="src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_held_out_color_exp.json",
                         help="Path to the training JSON data file.")
-    parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1.json",
+    parser.add_argument("--val_data_path", type=str, default="src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_held_out_color_exp.json",
                         help="Path to the validation JSON data file (optional).")
     parser.add_argument("--val_split", type=float, default=None,
                         help="Validation split ratio (e.g., 0.1 for 10%%). If provided, validation set will be created from training data instead of loading separate file. Default is None.")
     parser.add_argument("--val_split_seed", type=int, default=42,
                         help="Seed for reproducible train/val splits.")
-    parser.add_argument("--data_split_seed", type=int, default=0,
+    parser.add_argument("--data_split_seed", type=int, default=42,
                         help="Seed value that gets appended to the data path to load the approapriate training / validation.")
     parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"],
                         help="Size of the transformer model.")
     parser.add_argument("--max_seq_len", type=int, default=2048, # Max length for support + query + separators
                         help="Maximum sequence length for the model.")
-    parser.add_argument("--epochs", type=int, default=20,
+    parser.add_argument("--epochs", type=int, default=600,
                         help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=32,
+    parser.add_argument("--batch_size", type=int, default=256,
                         help="Batch size for training and validation.")
     parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
@@ -94,6 +94,11 @@ def parse_args():
                         help="Directory to look for/store preprocessed data files.")
     parser.add_argument("--use_preprocessed", type=str, default="True", choices=["True", "False"],
                         help="Whether to use preprocessed data if available. Default is True.")
+    
+    parser.add_argument("--save_checkpoints", type=str, default="True", choices=["True", "False"],
+                        help="Whether to save model checkpoints during training. Default is True.")
+    parser.add_argument("--is_held_out_color_exp", type=str, default="False", choices=["True", "False"],
+                        help="Whether the dataset is a held-out color experiment. Default is True.")
     
     return parser.parse_args()
 
@@ -613,7 +618,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
         # Save using numpy compressed format
         np.savez_compressed(pred_path, predictions=predictions_array)
         np.savez_compressed(target_path, targets=targets_array)
-        
+    
         if all_encoder_inputs is not None:
             inputs_array = np.array(all_encoder_inputs, dtype=object)
             np.savez_compressed(input_path, inputs=inputs_array)
@@ -641,6 +646,15 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
 
 def main():
     args = parse_args()
+   
+        
+    args.is_held_out_color_exp = str(args.is_held_out_color_exp) == 'True'  # Convert to boolean
+    if args.is_held_out_color_exp:  
+        print("Running held-out color experiment.")
+        
+    args.save_checkpoints = str(args.save_checkpoints) == 'True'  # Convert to boolean
+    if args.save_checkpoints:
+        print("Saving checkpoints during training.")
     
     base_path = None
     if cluster == 'cirrus':
@@ -967,8 +981,9 @@ def main():
                     checkpoint['feature_to_idx_map_input'] = full_dataset.feature_to_idx_map_input
                     checkpoint['feature_to_idx_map_output'] = full_dataset.feature_to_idx_map_output
                     checkpoint['num_output_features'] = full_dataset.num_output_features
-                
-                torch.save(checkpoint, model_save_path)
+                    
+                if args.save_checkpoints:
+                    torch.save(checkpoint, model_save_path)
                 print(f"New best validation loss: {best_val_loss:.4f}. Model saved to {model_save_path}")
                 wandb.save(model_save_path) 
         else: 
@@ -994,7 +1009,8 @@ def main():
                     checkpoint['feature_to_idx_map'] = full_dataset.feature_to_idx_map
                     checkpoint['idx_to_feature_map'] = {v: k for k, v in full_dataset.feature_to_idx_map.items()}
                     checkpoint['num_output_features'] = full_dataset.num_output_features
-                torch.save(checkpoint, model_save_path)
+                if args.save_checkpoints:
+                    torch.save(checkpoint, model_save_path)
                 print(f"Model saved to {model_save_path} (no validation)")
         
         if accelerator.is_local_main_process:
