@@ -439,6 +439,8 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     with torch.no_grad():
         pbar = tqdm(dataloader, disable=not accelerator.is_local_main_process)
         for _, batch in enumerate(pbar):
+            # Move batch to device manually since dataloader is not prepared with accelerator
+            batch = {k: v.to(accelerator.device) if torch.is_tensor(v) else v for k, v in batch.items()}
             encoder_input_ids = batch["encoder_input_ids"]
             
             if args.task_type == "seq2seq":
@@ -602,26 +604,14 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             total_correct_preds += correct
             total_considered_items += considered
 
-    # Gather predictions from all processes
+    # Convert predictions and targets to numpy arrays for single GPU validation
     if args.store_predictions:
-        gathered_predictions = accelerator.gather_for_metrics(all_predictions)
-        gathered_targets = accelerator.gather_for_metrics(all_targets)
-        
-        # Flatten the lists of lists
-        all_predictions = [item for sublist in gathered_predictions for item in sublist.cpu().numpy()]
-        all_targets = [item for sublist in gathered_targets for item in sublist.cpu().numpy()]
+        # Convert tensor lists to numpy arrays directly
+        all_predictions = [item.cpu().numpy() for item in all_predictions]
+        all_targets = [item.cpu().numpy() for item in all_targets]
 
         if all_encoder_inputs is not None:
-            gathered_encoder_inputs = accelerator.gather_for_metrics(all_encoder_inputs)
-            all_encoder_inputs = [item for sublist in gathered_encoder_inputs for item in sublist.cpu().numpy()]
-            
-        
-        # Now truncate to the lenght of the dataloader.dataset. This is 
-        # necessary because gather_for_metrics will add extra batches at the end.
-        all_predictions = all_predictions[:len(dataloader.dataset)]
-        all_targets = all_targets[:len(dataloader.dataset)]
-        if all_encoder_inputs is not None:
-            all_encoder_inputs = all_encoder_inputs[:len(dataloader.dataset)]
+            all_encoder_inputs = [item.cpu().numpy() for item in all_encoder_inputs]
 
     # Save predictions and targets if requested and we're on the main process
     if args.store_predictions and accelerator.is_local_main_process:
@@ -921,8 +911,7 @@ def main():
         model, optimizer, train_dataloader, scheduler
     )
     
-    if val_dataloader is not None:
-        val_dataloader = accelerator.prepare(val_dataloader)
+    # Note: val_dataloader is NOT prepared with accelerator for single GPU validation
 
     if accelerator.is_local_main_process:
         print(f"Model initialized: {args.model_size}, Architecture: {args.model_architecture}, Task: {args.task_type}")
