@@ -438,7 +438,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     
     with torch.no_grad():
         pbar = tqdm(dataloader, disable=not accelerator.is_local_main_process)
-        for batch_idx, batch in enumerate(pbar):
+        for _, batch in enumerate(pbar):
             encoder_input_ids = batch["encoder_input_ids"]
             
             if args.task_type == "seq2seq":
@@ -465,14 +465,13 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
 
                 # Store predictions and targets if requested
                 if args.store_predictions:
-                    all_predictions.extend(generated_ids.cpu().numpy())
-                    all_targets.extend(decoder_target_ids.cpu().numpy())
+                    all_predictions.append(generated_ids)
+                    all_targets.append(decoder_target_ids)
                     if all_encoder_inputs is not None:
-                        all_encoder_inputs.extend(encoder_input_ids.cpu().numpy())
+                        all_encoder_inputs.append(encoder_input_ids)
 
                 # Calculate loss and accuracy (existing logic)
                 batch_size = decoder_target_ids.size(0)
-                min_len = min(generated_ids.size(1), decoder_target_ids.size(1))
                 max_len = max(generated_ids.size(1), decoder_target_ids.size(1))
 
                 # Pad both to the same length
@@ -516,10 +515,10 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 # Store predictions and targets if requested
                 if args.store_predictions:
                     predicted_classes = output_logits.argmax(dim=-1)  # Get predicted class IDs
-                    all_predictions.extend(predicted_classes.cpu().numpy())
-                    all_targets.extend(target_class_ids.cpu().numpy())
+                    all_predictions.append(predicted_classes)
+                    all_targets.append(target_class_ids)
                     if all_encoder_inputs is not None:
-                        all_encoder_inputs.extend(encoder_input_ids.cpu().numpy())
+                        all_encoder_inputs.append(encoder_input_ids)
                 
             elif args.task_type == "classification_multi_label":
                 target_feature_vector = batch["target_feature_vector"]
@@ -575,10 +574,10 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                         # Place a '1' at the predicted index for each sample in the group
                         predicted_multi_hot.scatter_(1, (start_idx + predicted_indices_group).unsqueeze(1), 1)
 
-                    all_predictions.extend(predicted_multi_hot.cpu().numpy())
-                    all_targets.extend(target_feature_vector.cpu().numpy())
+                    all_predictions.append(predicted_multi_hot)
+                    all_targets.append(target_feature_vector)
                     if all_encoder_inputs is not None:
-                        all_encoder_inputs.extend(encoder_input_ids.cpu().numpy())
+                        all_encoder_inputs.append(encoder_input_ids)
                 
             elif args.task_type == "seq2seq_stone_state":
                 decoder_input_ids = batch["decoder_input_ids"]
@@ -591,10 +590,10 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 # Store predictions and targets if requested
                 if args.store_predictions:
                     predicted_tokens = output_logits.argmax(dim=-1)  # Get predicted token IDs
-                    all_predictions.extend(predicted_tokens.cpu().numpy())
-                    all_targets.extend(decoder_target_ids.cpu().numpy())
+                    all_predictions.append(predicted_tokens)
+                    all_targets.append(decoder_target_ids)
                     if all_encoder_inputs is not None:
-                        all_encoder_inputs.extend(encoder_input_ids.cpu().numpy())
+                        all_encoder_inputs.append(encoder_input_ids)
                         
             else:
                 raise ValueError(f"Unknown task_type: {args.task_type}")
@@ -605,16 +604,24 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
 
     # Gather predictions from all processes
     if args.store_predictions:
-        gathered_predictions = accelerator.gather_object(all_predictions)
-        gathered_targets = accelerator.gather_object(all_targets)
+        gathered_predictions = accelerator.gather_for_metrics(all_predictions)
+        gathered_targets = accelerator.gather_for_metrics(all_targets)
         
         # Flatten the lists of lists
-        all_predictions = [item for sublist in gathered_predictions for item in sublist]
-        all_targets = [item for sublist in gathered_targets for item in sublist]
+        all_predictions = [item for sublist in gathered_predictions for item in sublist.cpu().numpy()]
+        all_targets = [item for sublist in gathered_targets for item in sublist.cpu().numpy()]
 
         if all_encoder_inputs is not None:
-            gathered_encoder_inputs = accelerator.gather_object(all_encoder_inputs)
-            all_encoder_inputs = [item for sublist in gathered_encoder_inputs for item in sublist]
+            gathered_encoder_inputs = accelerator.gather_for_metrics(all_encoder_inputs)
+            all_encoder_inputs = [item for sublist in gathered_encoder_inputs for item in sublist.cpu().numpy()]
+            
+        
+        # Now truncate to the lenght of the dataloader.dataset. This is 
+        # necessary because gather_for_metrics will add extra batches at the end.
+        all_predictions = all_predictions[:len(dataloader.dataset)]
+        all_targets = all_targets[:len(dataloader.dataset)]
+        if all_encoder_inputs is not None:
+            all_encoder_inputs = all_encoder_inputs[:len(dataloader.dataset)]
 
     # Save predictions and targets if requested and we're on the main process
     if args.store_predictions and accelerator.is_local_main_process:
@@ -635,7 +642,6 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
         # Convert lists to numpy arrays
         predictions_array = np.array(all_predictions, dtype=object) if args.task_type == "seq2seq" else np.array(all_predictions)
         targets_array = np.array(all_targets, dtype=object) if args.task_type in ["seq2seq", "seq2seq_stone_state"] else np.array(all_targets)
-        import pdb; pdb.set_trace()
         
         # Save using numpy compressed format
         np.savez_compressed(pred_path, predictions=predictions_array)

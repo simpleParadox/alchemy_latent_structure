@@ -298,68 +298,75 @@ class StoneStateDecoderClassifier(nn.Module):
         else:
             last_token_output = decoder_output[:, -1, :]
 
-        logits = self.classification_head(last_token_output)
-        return logits
+        next_token_logits = self.classification_head(last_token_output)
+        return next_token_logits  # Shape: (batch_size, num_classes)
     
     
     def generate(self, src, start_symbol_id, end_symbol_id, max_len, device, pad_token_id):
         """
-            Autoregressive generation method.
-            
-            Args:
-                src: Source sequence tensor, shape (batch_size, src_seq_len)
-                start_symbol_id: Token ID to start generation (SOS token)
-                end_symbol_id: Token ID to end generation (EOS token)
-                max_len: Maximum length of generated sequence
-                device: Device to create tensors on
-                pad_token_id: Padding token ID for creating masks
-                
-            Returns:
-                generated_ids: Generated token sequences, shape (batch_size, generated_seq_len)
+        Autoregressive generation method for a decoder-only model.
+        It takes a source sequence as a prompt and generates subsequent tokens.
+
+        Args:
+            src: Source sequence (prompt) tensor, shape (batch_size, src_seq_len)
+            start_symbol_id: Not used in this implementation, but kept for API consistency.
+            end_symbol_id: Token ID to end generation (EOS token)
+            max_len: Maximum length of the *entire* sequence (prompt + generated)
+            device: Device to create tensors on
+            pad_token_id: Padding token ID for creating masks
+
+        Returns:
+            generated_ids: The full sequence including the prompt and generated tokens,
+                           shape (batch_size, generated_seq_len)
         """
-        self.eval()  # Set model to evaluation mode]
-        
-        # First create a padding mask and pass it through the encoder.
-        src_padding_mask = (src == pad_token_id)  # Shape: (batch_size, src_seq_len)
-        # 'src' is the encoder input, so we encode it first.
-        memory = self.encode(src, src_padding_mask=src_padding_mask)  # Shape: (batch_size, src_seq_len, emb_size)
+        self.eval()  # Set model to evaluation mode
         
         batch_size = src.size(0)
-        # Initialize the target sequence with the start symbol.
-        tgt = torch.full((batch_size, 1), start_symbol_id, dtype=torch.long, device=device)
-        finished = torch.zeros(batch_size, dtype=torch.bool, device=device)  # Track finished sequences.
-        
+        # The target sequence starts with the provided source (prompt).
+        tgt = src.clone()
+        finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
+
         # Generate the sequence step by step.
-        for i in range(max_len - 1):
-            # Create the target mask for the current step.
-            tgt_mask = self.generate_square_subsequent_mask(tgt.size(1), device=device)
-            tgt_len = tgt.size(1)
+        for _ in range(max_len - src.size(1)): # Only generate up to max_len
+            # Create padding mask for the current sequence
+            tgt_padding_mask = (tgt == pad_token_id)
             
-            # Decode the current target sequence.
-            decoder_output = self.decode(
-                tgt=tgt, 
-                memory=memory, 
-                tgt_mask=tgt_mask, 
-                memory_key_padding_mask=src_padding_mask
+            # Create a causal mask for self-attention.
+            tgt_seq_len = tgt.size(1)
+            causal_mask = self._generate_causal_mask(tgt_seq_len, device)
+
+            # Embed and apply positional encoding
+            tgt_emb = self.src_tok_emb(tgt) * math.sqrt(self.emb_size)
+            tgt_emb_permuted = tgt_emb.permute(1, 0, 2)
+            tgt_emb_pe = self.positional_encoding(tgt_emb_permuted)
+            tgt_emb = tgt_emb_pe.permute(1, 0, 2)
+
+            # Pass through the decoder. For a decoder-only model, 'tgt' is used as 'memory'.
+            decoder_output = self.transformer_decoder(
+                tgt=tgt_emb, 
+                memory=tgt_emb, 
+                tgt_mask=causal_mask,
+                tgt_key_padding_mask=tgt_padding_mask,
+                memory_key_padding_mask=tgt_padding_mask
             )
             
             # Get the logits for the last token logits only.
             last_token_logits = self.generator(decoder_output[:, -1, :]) # Generator is the linear layer over the vocabulary.
             
-            # Get the token predictions using greedy decoding.
+            # Get the most likely next token (greedy decoding).
             next_token = last_token_logits.argmax(dim=-1)
             
-            # Now append the newly predicted token to the target sequence.
+            # Append the newly predicted token to the target sequence.
             tgt = torch.cat([tgt, next_token.unsqueeze(1)], dim=1)
             
+            # Check if any sequence has finished.
             just_finished = (next_token == end_symbol_id)
-            finished = finished | just_finished  # Update finished sequences.
+            finished = finished | just_finished
             
             if finished.all():
                 break
            
-        # Will remove the start symbol in the function that calls this.
-        return tgt  # Shape: (batch_size, generated_seq_len)
+        return tgt
 
         
 
