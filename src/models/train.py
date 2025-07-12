@@ -34,9 +34,9 @@ def parse_args():
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
     parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
-    parser.add_argument("--train_data_path", type=str, default="src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2.json",
+    parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2.json",
                         help="Path to the training JSON data file.")
-    parser.add_argument("--val_data_path", type=str, default="src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2.json",
+    parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2.json",
                         help="Path to the validation JSON data file (optional).")
     parser.add_argument("--val_split", type=float, default=None,
                         help="Validation split ratio (e.g., 0.1 for 10%%). If provided, validation set will be created from training data instead of loading separate file. Default is None.")
@@ -99,7 +99,7 @@ def parse_args():
     
     parser.add_argument("--save_checkpoints", type=str, default="False", choices=["True", "False"],
                         help="Whether to save model checkpoints during training. Default is True.")
-    parser.add_argument("--is_held_out_color_exp", type=str, default="True", choices=["True", "False"],
+    parser.add_argument("--is_held_out_color_exp", type=str, default="False", choices=["True", "False"],
                         help="Whether the dataset is a held-out color experiment. Default is True.")
     
     return parser.parse_args()
@@ -628,10 +628,17 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
         pred_path = os.path.join(predictions_dir, pred_filename)
         target_path = os.path.join(predictions_dir, target_filename)
         input_path = os.path.join(predictions_dir, input_filename)
-        
         # Convert lists to numpy arrays
-        predictions_array = np.array(all_predictions, dtype=object) if args.task_type == "seq2seq" else np.array(all_predictions)
-        targets_array = np.array(all_targets, dtype=object) if args.task_type in ["seq2seq", "seq2seq_stone_state"] else np.array(all_targets)
+        # predictions_array = np.array(all_predictions, dtype=object) if args.task_type == "seq2seq" else np.array(all_predictions)
+        # targets_array = np.array(all_targets, dtype=object) if args.task_type in ["seq2seq", "seq2seq_stone_state"] else np.array(all_targets)
+        
+        predictions_array = np.concatenate(all_predictions, axis=0) if all_predictions else np.array([])
+        targets_array = np.concatenate(all_targets, axis=0) if all_targets else np.array([])
+        # if all_encoder_inputs is not None:
+        #     all_encoder_inputs = np.concatenate(all_encoder_inputs, axis=0) if all_encoder_inputs else np.array([])
+        
+        print("Shape of predictions array:", predictions_array.shape)
+        print("Shape of targets array:", targets_array.shape)
         
         # Save using numpy compressed format
         np.savez_compressed(pred_path, predictions=predictions_array)
