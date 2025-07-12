@@ -19,7 +19,7 @@ from accelerate import Accelerator
 # Assuming train.py is in src/models/, so data_loaders and models are siblings
 from data_loaders import AlchemyDataset, collate_fn
 import re
-from models import create_transformer_model, create_classifier_model # Added create_classifier_model
+from models import create_transformer_model, create_classifier_model, create_decoder_classifier_model
 
 def set_seed(seed_value):
     random.seed(seed_value)
@@ -32,23 +32,25 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum", 'none'],
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
-    parser.add_argument("--task_type", type=str, default="classification", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
+    parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
-    parser.add_argument("--train_data_path", type=str, default="src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_held_out_color_exp.json",
+    parser.add_argument("--train_data_path", type=str, default="src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2.json",
                         help="Path to the training JSON data file.")
-    parser.add_argument("--val_data_path", type=str, default="src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_held_out_color_exp.json",
+    parser.add_argument("--val_data_path", type=str, default="src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2.json",
                         help="Path to the validation JSON data file (optional).")
     parser.add_argument("--val_split", type=float, default=None,
                         help="Validation split ratio (e.g., 0.1 for 10%%). If provided, validation set will be created from training data instead of loading separate file. Default is None.")
     parser.add_argument("--val_split_seed", type=int, default=42,
                         help="Seed for reproducible train/val splits.")
-    parser.add_argument("--data_split_seed", type=int, default=42,
+    parser.add_argument("--data_split_seed", type=int, default=0,
                         help="Seed value that gets appended to the data path to load the approapriate training / validation.")
     parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"],
                         help="Size of the transformer model.")
+    parser.add_argument("--model_architecture", type=str, default="encoder", choices=["encoder", "decoder"],
+                        help="Model architecture: 'encoder' for encoder-only classifier, 'decoder' for decoder-only classifier.")
     parser.add_argument("--max_seq_len", type=int, default=2048, # Max length for support + query + separators
                         help="Maximum sequence length for the model.")
-    parser.add_argument("--epochs", type=int, default=600,
+    parser.add_argument("--epochs", type=int, default=60,
                         help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=256,
                         help="Batch size for training and validation.")
@@ -95,9 +97,9 @@ def parse_args():
     parser.add_argument("--use_preprocessed", type=str, default="True", choices=["True", "False"],
                         help="Whether to use preprocessed data if available. Default is True.")
     
-    parser.add_argument("--save_checkpoints", type=str, default="True", choices=["True", "False"],
+    parser.add_argument("--save_checkpoints", type=str, default="False", choices=["True", "False"],
                         help="Whether to save model checkpoints during training. Default is True.")
-    parser.add_argument("--is_held_out_color_exp", type=str, default="False", choices=["True", "False"],
+    parser.add_argument("--is_held_out_color_exp", type=str, default="True", choices=["True", "False"],
                         help="Whether the dataset is a held-out color experiment. Default is True.")
     
     return parser.parse_args()
@@ -565,9 +567,15 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 
                 # Store predictions and targets if requested
                 if args.store_predictions:
-                    predicted_probs = torch.sigmoid(output_logits)  # Convert logits to probabilities
-                    predicted_binary = (predicted_probs > 0.5).float()  # Apply threshold
-                    all_predictions.extend(predicted_binary.cpu().numpy())
+                    # To store predictions, we need to convert the group-wise logits back to a single multi-hot vector
+                    predicted_multi_hot = torch.zeros_like(target_feature_vector)
+                    for start_idx, end_idx in feature_groups:
+                        logits_group = output_logits[:, start_idx:end_idx]
+                        predicted_indices_group = logits_group.argmax(dim=-1)
+                        # Place a '1' at the predicted index for each sample in the group
+                        predicted_multi_hot.scatter_(1, (start_idx + predicted_indices_group).unsqueeze(1), 1)
+
+                    all_predictions.extend(predicted_multi_hot.cpu().numpy())
                     all_targets.extend(target_feature_vector.cpu().numpy())
                     if all_encoder_inputs is not None:
                         all_encoder_inputs.extend(encoder_input_ids.cpu().numpy())
@@ -594,7 +602,20 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             total_loss += loss.item()
             total_correct_preds += correct
             total_considered_items += considered
-    
+
+    # Gather predictions from all processes
+    if args.store_predictions:
+        gathered_predictions = accelerator.gather_object(all_predictions)
+        gathered_targets = accelerator.gather_object(all_targets)
+        
+        # Flatten the lists of lists
+        all_predictions = [item for sublist in gathered_predictions for item in sublist]
+        all_targets = [item for sublist in gathered_targets for item in sublist]
+
+        if all_encoder_inputs is not None:
+            gathered_encoder_inputs = accelerator.gather_object(all_encoder_inputs)
+            all_encoder_inputs = [item for sublist in gathered_encoder_inputs for item in sublist]
+
     # Save predictions and targets if requested and we're on the main process
     if args.store_predictions and accelerator.is_local_main_process:
         predictions_dir = os.path.join(args.save_dir, "predictions")
@@ -614,6 +635,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
         # Convert lists to numpy arrays
         predictions_array = np.array(all_predictions, dtype=object) if args.task_type == "seq2seq" else np.array(all_predictions)
         targets_array = np.array(all_targets, dtype=object) if args.task_type in ["seq2seq", "seq2seq_stone_state"] else np.array(all_targets)
+        import pdb; pdb.set_trace()
         
         # Save using numpy compressed format
         np.savez_compressed(pred_path, predictions=predictions_array)
@@ -793,7 +815,7 @@ def main():
         print(f"Number of ungrouped output features (for Multi-label Classification): {num_output_features}")
 
     # Create data loaders
-    custom_collate_train = partial(collate_fn, pad_token_id=pad_token_id, task_type=args.task_type)
+    custom_collate_train = partial(collate_fn, pad_token_id=pad_token_id, task_type=args.task_type, model_architecture=args.model_architecture)
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -804,7 +826,7 @@ def main():
 
     val_dataloader = None
     if val_dataset is not None:
-        custom_collate_val = partial(collate_fn, pad_token_id=pad_token_id, task_type=args.task_type)
+        custom_collate_val = partial(collate_fn, pad_token_id=pad_token_id, task_type=args.task_type, model_architecture=args.model_architecture)
         val_dataloader = DataLoader(
             val_dataset,
             batch_size=args.batch_size,
@@ -825,22 +847,40 @@ def main():
         )
         criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id, reduction=args.multi_label_reduction) # Use CrossEntropyLoss for seq2seq, ignoring PAD_ID
     elif args.task_type == "classification":
-        model = create_classifier_model(
-            config_name=args.model_size,
-            src_vocab_size=src_vocab_size,
-            num_classes=num_classes,
-            device=accelerator.device,
-            max_len=args.max_seq_len
-        )
+        if args.model_architecture == "decoder":
+            model = create_decoder_classifier_model(
+                config_name=args.model_size,
+                src_vocab_size=src_vocab_size,
+                num_classes=num_classes,
+                device=accelerator.device,
+                max_len=args.max_seq_len
+            )
+        else:  # encoder architecture
+            model = create_classifier_model(
+                config_name=args.model_size,
+                src_vocab_size=src_vocab_size,
+                num_classes=num_classes,
+                device=accelerator.device,
+                max_len=args.max_seq_len
+            )
         criterion = nn.CrossEntropyLoss(reduction=args.multi_label_reduction) # Use CrossEntropyLoss for classification
     elif args.task_type == "classification_multi_label":
-        model = create_classifier_model( # Using the same StoneStateClassifier model
-            config_name=args.model_size,
-            src_vocab_size=src_vocab_size,
-            num_classes=num_output_features, # Output layer size is num_output_features
-            device=accelerator.device,
-            max_len=args.max_seq_len
-        )
+        if args.model_architecture == "decoder":
+            model = create_decoder_classifier_model(
+                config_name=args.model_size,
+                src_vocab_size=src_vocab_size,
+                num_classes=num_output_features, # Output layer size is num_output_features
+                device=accelerator.device,
+                max_len=args.max_seq_len
+            )
+        else:  # encoder architecture
+            model = create_classifier_model( # Using the same StoneStateClassifier model
+                config_name=args.model_size,
+                src_vocab_size=src_vocab_size,
+                num_classes=num_output_features, # Output layer size is num_output_features
+                device=accelerator.device,
+                max_len=args.max_seq_len
+            )
         criterion = nn.BCEWithLogitsLoss(reduction=args.multi_label_reduction) # Use BCEWithLogitsLoss for multi-label
     else:
         raise ValueError(f"Unknown task_type: {args.task_type}")
@@ -879,7 +919,7 @@ def main():
         val_dataloader = accelerator.prepare(val_dataloader)
 
     if accelerator.is_local_main_process:
-        print(f"Model initialized: {args.model_size}, Task: {args.task_type}")
+        print(f"Model initialized: {args.model_size}, Architecture: {args.model_architecture}, Task: {args.task_type}")
         print(f"Optimizer: AdamW, LR: {args.learning_rate}, Weight Decay: {args.weight_decay}")
         
         if scheduler:
@@ -917,6 +957,7 @@ def main():
     hierarchical_save_dir = os.path.join(
         args.save_dir,
         args.model_size,
+        args.model_architecture,
         args.task_type,
         f"shop_{support_hop}_qhop_{query_hop}",
         f"seed_{args.data_split_seed}"

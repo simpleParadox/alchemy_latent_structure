@@ -853,9 +853,31 @@ class AlchemyDataset(Dataset):
         
         return result
 
-def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_type: str = "seq2seq") -> Dict[str, torch.Tensor]:
+def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_type: str = "seq2seq", model_architecture: str = "encoder") -> Dict[str, torch.Tensor]:
+    """
+    Collates data samples into a batch.
+    Args:
+        batch: A list of data samples.
+        pad_token_id: The ID of the padding token.
+        task_type: The type of task ("seq2seq", "classification", etc.).
+        model_architecture: The model architecture ("encoder" or "decoder"). 
+                           "decoder" uses left-padding, "encoder" uses right-padding.
+    """
     encoder_inputs = [item["encoder_input_ids"] for item in batch]
-    padded_encoder_inputs = torch.nn.utils.rnn.pad_sequence(encoder_inputs, batch_first=True, padding_value=pad_token_id)
+    
+    # Use left-padding for decoder models, right-padding for encoder models
+    if model_architecture == "decoder":
+        # Left-padding for decoder models
+        max_len = max(len(seq) for seq in encoder_inputs)
+        padded_sequences = []
+        for seq in encoder_inputs:
+            num_pads = max_len - len(seq)
+            padded_seq = torch.cat([torch.full((num_pads,), pad_token_id, dtype=seq.dtype), seq])
+            padded_sequences.append(padded_seq)
+        padded_encoder_inputs = torch.stack(padded_sequences)
+    else:
+        # Right-padding for encoder models (default behavior)
+        padded_encoder_inputs = torch.nn.utils.rnn.pad_sequence(encoder_inputs, batch_first=True, padding_value=pad_token_id)
     
     if task_type == "seq2seq" or task_type == "seq2seq_stone_state":  # Handle both seq2seq variants
         decoder_inputs = [item["decoder_input_ids"] for item in batch]

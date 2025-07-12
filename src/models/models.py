@@ -175,6 +175,7 @@ class StoneStateClassifier(nn.Module):
                  max_len: int = 5000): # Added max_len for PositionalEncoding consistency
         super(StoneStateClassifier, self).__init__()
         self.emb_size = emb_size
+        self.architecture = "encoder"  # Add architecture attribute
         self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
         # Assuming PositionalEncoding class is available in the scope
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_len)
@@ -232,6 +233,135 @@ class StoneStateClassifier(nn.Module):
         # Pass pooled output through classification head
         logits = self.classification_head(pooled_output) # (batch_size, num_classes)
         return logits
+
+class StoneStateDecoderClassifier(nn.Module):
+    """
+    A Transformer-based decoder-only model for classification.
+    """
+    def __init__(self, num_decoder_layers: int, emb_size: int, nhead: int,
+                 src_vocab_size: int, num_classes: int,
+                 dim_feedforward: int = 512, dropout: float = 0.1,
+                 max_len: int = 5000):
+        super(StoneStateDecoderClassifier, self).__init__()
+        self.emb_size = emb_size
+        self.architecture = "decoder"  # Add architecture attribute
+        self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
+        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_len)
+
+        decoder_layer = nn.TransformerDecoderLayer(d_model=emb_size, nhead=nhead,
+                                                   dim_feedforward=dim_feedforward, dropout=dropout,
+                                                   batch_first=True)
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
+
+        self.classification_head = nn.Linear(emb_size, num_classes)
+        self.max_len = max_len
+
+    def _generate_causal_mask(self, sz: int, device: torch.device) -> torch.Tensor:
+        """Generates a square causal mask for the sequence."""
+        mask = (torch.triu(torch.ones((sz, sz), device=device)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def forward(self, src: torch.Tensor, src_padding_mask: torch.Tensor = None) -> torch.Tensor:
+        """
+        Forward pass for the StoneStateDecoderClassifier.
+        Args:
+            src: source sequence, shape (batch_size, src_seq_len)
+            src_padding_mask: the ByteTensor mask for src keys per batch, shape (batch_size, src_seq_len)
+        Returns:
+            Output tensor of shape (batch_size, num_classes) representing logits.
+        """
+        # Embed and apply positional encoding
+        src_emb = self.src_tok_emb(src) * math.sqrt(self.emb_size)
+        src_emb_permuted = src_emb.permute(1, 0, 2)
+        src_emb_pe = self.positional_encoding(src_emb_permuted)
+        src_emb = src_emb_pe.permute(1, 0, 2)
+
+        # Create causal mask
+        tgt_seq_len = src.size(1)
+        causal_mask = self._generate_causal_mask(tgt_seq_len, src.device)
+
+        # The nn.TransformerDecoder expects a 'memory' tensor from the encoder.
+        # To make it a decoder-only model, we pass the source embeddings as both
+        # the target and the memory.
+        decoder_output = self.transformer_decoder(tgt=src_emb, memory=src_emb,
+                                                  tgt_mask=causal_mask,
+                                                  tgt_key_padding_mask=src_padding_mask,
+                                                  memory_key_padding_mask=src_padding_mask)
+        
+        # Use the output of the last token for classification
+        # We need to find the last non-padded token for each sequence
+        if src_padding_mask is not None:
+            sequence_lengths = (~src_padding_mask).sum(dim=1) - 1
+            batch_indices = torch.arange(src.size(0), device=src.device)
+            last_token_output = decoder_output[batch_indices, sequence_lengths]
+        else:
+            last_token_output = decoder_output[:, -1, :]
+
+        logits = self.classification_head(last_token_output)
+        return logits
+    
+    
+    def generate(self, src, start_symbol_id, end_symbol_id, max_len, device, pad_token_id):
+        """
+            Autoregressive generation method.
+            
+            Args:
+                src: Source sequence tensor, shape (batch_size, src_seq_len)
+                start_symbol_id: Token ID to start generation (SOS token)
+                end_symbol_id: Token ID to end generation (EOS token)
+                max_len: Maximum length of generated sequence
+                device: Device to create tensors on
+                pad_token_id: Padding token ID for creating masks
+                
+            Returns:
+                generated_ids: Generated token sequences, shape (batch_size, generated_seq_len)
+        """
+        self.eval()  # Set model to evaluation mode]
+        
+        # First create a padding mask and pass it through the encoder.
+        src_padding_mask = (src == pad_token_id)  # Shape: (batch_size, src_seq_len)
+        # 'src' is the encoder input, so we encode it first.
+        memory = self.encode(src, src_padding_mask=src_padding_mask)  # Shape: (batch_size, src_seq_len, emb_size)
+        
+        batch_size = src.size(0)
+        # Initialize the target sequence with the start symbol.
+        tgt = torch.full((batch_size, 1), start_symbol_id, dtype=torch.long, device=device)
+        finished = torch.zeros(batch_size, dtype=torch.bool, device=device)  # Track finished sequences.
+        
+        # Generate the sequence step by step.
+        for i in range(max_len - 1):
+            # Create the target mask for the current step.
+            tgt_mask = self.generate_square_subsequent_mask(tgt.size(1), device=device)
+            tgt_len = tgt.size(1)
+            
+            # Decode the current target sequence.
+            decoder_output = self.decode(
+                tgt=tgt, 
+                memory=memory, 
+                tgt_mask=tgt_mask, 
+                memory_key_padding_mask=src_padding_mask
+            )
+            
+            # Get the logits for the last token logits only.
+            last_token_logits = self.generator(decoder_output[:, -1, :]) # Generator is the linear layer over the vocabulary.
+            
+            # Get the token predictions using greedy decoding.
+            next_token = last_token_logits.argmax(dim=-1)
+            
+            # Now append the newly predicted token to the target sequence.
+            tgt = torch.cat([tgt, next_token.unsqueeze(1)], dim=1)
+            
+            just_finished = (next_token == end_symbol_id)
+            finished = finished | just_finished  # Update finished sequences.
+            
+            if finished.all():
+                break
+           
+        # Will remove the start symbol in the function that calls this.
+        return tgt  # Shape: (batch_size, generated_seq_len)
+
+        
 
 def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_size: int, device="cpu", max_len=1024):
     """
@@ -360,6 +490,55 @@ def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: 
     
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model '{config_name}' (Classifier: src_vocab={src_vocab_size}, num_classes={num_classes}) on {device} has {total_params/1e6:.2f}M parameters.")
+    
+    return model
+
+def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048):
+    """
+    Creates a StoneStateDecoderClassifier model based on a configuration name.
+    """
+    configs = {
+        "tiny": { 
+            "num_decoder_layers": 2, "emb_size": 128, "nhead": 4, 
+            "dim_feedforward": 256, "dropout": 0.1
+        },
+        "xsmall": { 
+            "num_decoder_layers": 4, "emb_size": 256, "nhead": 4, 
+            "dim_feedforward": 512, "dropout": 0.1
+        },
+        "small": { 
+            "num_decoder_layers": 4, "emb_size": 256, "nhead": 4, 
+            "dim_feedforward": 1024, "dropout": 0.1
+        },
+        "medium": { 
+            "num_decoder_layers": 6, "emb_size": 512, "nhead": 8, 
+            "dim_feedforward": 1024, "dropout": 0.1
+        },
+        "large": { 
+            "num_decoder_layers": 6, "emb_size": 512, "nhead": 8, 
+            "dim_feedforward": 2048, "dropout": 0.1
+        }
+    }
+
+    if config_name not in configs:
+        raise ValueError(f"Unknown configuration name: {config_name}. Choose from {list(configs.keys())}")
+
+    config = configs[config_name]
+    model = StoneStateDecoderClassifier(
+        num_decoder_layers=config["num_decoder_layers"],
+        emb_size=config["emb_size"],
+        nhead=config["nhead"],
+        src_vocab_size=src_vocab_size,
+        num_classes=num_classes,
+        dim_feedforward=config["dim_feedforward"],
+        dropout=config["dropout"],
+        max_len=max_len
+    )
+    
+    model.to(device)
+    
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model '{config_name}' (Decoder-Only Classifier: src_vocab={src_vocab_size}, num_classes={num_classes}) on {device} has {total_params/1e6:.2f}M parameters.")
     
     return model
 
