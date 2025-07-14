@@ -705,6 +705,21 @@ def main():
     print("Updated train data path: ", args.train_data_path)
     print("Updated validation data path: ", args.val_data_path if args.val_data_path else "None")
     
+    # Extract the 'shop' and 'qhop' length from the args.train_data_path.
+    # the train_data_path is expected to be in the format:
+    # src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json'
+    match = re.search(r'shop_(\d+)_qhop_(\d+)', args.train_data_path)
+    if match:
+        args.shop_length = int(match.group(1))
+        args.qhop_length = int(match.group(2))
+        if args.shop_length < args.qhop_length:
+            args.way = 'composition'
+        elif args.shop_length > args.qhop_length:
+            args.way = 'decomposition'
+        else:
+            args.way = 'equal'
+
+    
     # Initialize Accelerator
     accelerator = Accelerator()
     
