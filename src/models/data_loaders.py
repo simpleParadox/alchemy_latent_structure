@@ -16,9 +16,9 @@ import os
 
 def process_episode_worker(args):
     """Worker function for processing a single episode. Must be at module level for multiprocessing."""
-    (episode_id, episode_content, task_type, word2idx, stone_state_to_id, 
+    (episode_id, episode_content, task_type, input_word2idx, output_word2idx, stone_state_to_id, 
      special_token_ids, filter_query_from_support, 
-     all_output_features_list, feature_to_idx_map) = args # Added new args for multi-label
+     all_output_features_list, feature_to_idx_map, input_format, output_format) = args
     
     if not episode_content:
         return []
@@ -35,15 +35,15 @@ def process_episode_worker(args):
         filtered_support_examples_str = filter_support_examples_helper(
             support_examples_str, query_ex_str, filter_query_from_support)
         
-        # Tokenize query example
-        query_tokens = tokenize_single_example_str_helper(query_ex_str, word2idx, unk_token_id, io_sep_token_id)
+        # Tokenize query example using input vocabulary
+        query_tokens = tokenize_single_example_str_helper(query_ex_str, input_word2idx, unk_token_id, io_sep_token_id)
         _, query_input_tokens, query_output_feature_tokens, query_initial_state_str, query_output_state_str = query_tokens
         
         if task_type == "seq2seq":
-            # For seq2seq, use existing tokenization (features as individual tokens)
+            # For seq2seq, both input and output use features vocabulary
             tokenized_support_full_for_encoder = []
             for sup_ex_str in filtered_support_examples_str:
-                full_sup_tokens, _, _, _, _ = tokenize_single_example_str_helper(sup_ex_str, word2idx, unk_token_id, io_sep_token_id)
+                full_sup_tokens, _, _, _, _ = tokenize_single_example_str_helper(sup_ex_str, input_word2idx, unk_token_id, io_sep_token_id)
                 tokenized_support_full_for_encoder.append(full_sup_tokens)
             
             encoder_input_ids = []
@@ -66,51 +66,64 @@ def process_episode_worker(args):
             })
             
         elif task_type == "classification":
-            # For classification, convert stone states to single tokens
+            # Process support examples based on input_format
             tokenized_support_for_encoder = []
             for sup_ex_str in filtered_support_examples_str:
-                # Parse the support example
-                parts = sup_ex_str.split(" -> ")
-                input_part_str = parts[0]
-                output_state_str = parts[1]
-                
-                # Extract input stone state and potions
-                first_brace_end = input_part_str.find("}")
-                input_stone_state = input_part_str[:first_brace_end+1]
-                potions_str = input_part_str[first_brace_end+1:].strip()
-                
-                # Convert input stone state to single token
-                input_state_token_id = word2idx.get(input_stone_state, unk_token_id)
-                
-                # Convert potions to tokens 
-                tokenized_potions = []
-                if potions_str:
-                    potions = potions_str.split(" ")
-                    tokenized_potions = [word2idx.get(p, unk_token_id) for p in potions]
-                
-                # Convert output stone state to single token
-                output_state_token_id = word2idx.get(output_state_str, unk_token_id)
-                
-                # Build full support example: input_state + potions + separator + output_state
-                full_sup_tokens = [input_state_token_id] + tokenized_potions + [io_sep_token_id] + [output_state_token_id]
-                tokenized_support_for_encoder.append(full_sup_tokens)
+                if input_format == "stone_states":
+                    # Original classification approach: stone states as single tokens
+                    parts = sup_ex_str.split(" -> ")
+                    input_part_str = parts[0]
+                    output_state_str = parts[1]
+                    
+                    # Extract input stone state and potions
+                    first_brace_end = input_part_str.find("}")
+                    input_stone_state = input_part_str[:first_brace_end+1]
+                    potions_str = input_part_str[first_brace_end+1:].strip()
+                    
+                    # Convert input stone state to single token
+                    input_state_token_id = input_word2idx.get(input_stone_state, unk_token_id)
+                    
+                    # Convert potions to tokens 
+                    tokenized_potions = []
+                    if potions_str:
+                        potions = potions_str.split(" ")
+                        tokenized_potions = [input_word2idx.get(p, unk_token_id) for p in potions]
+                    
+                    # For support examples, we still need to show the output for context
+                    # Use input vocabulary for output stone state too (since it's part of input context)
+                    output_state_token_id = input_word2idx.get(output_state_str, unk_token_id)
+                    
+                    # Build full support example: input_state + potions + separator + output_state
+                    full_sup_tokens = [input_state_token_id] + tokenized_potions + [io_sep_token_id] + [output_state_token_id]
+                    tokenized_support_for_encoder.append(full_sup_tokens)
+                    
+                elif input_format == "features":
+                    # Feature input: use input vocabulary for features
+                    full_sup_tokens, _, _, _, _ = tokenize_single_example_str_helper(sup_ex_str, input_word2idx, unk_token_id, io_sep_token_id)
+                    tokenized_support_for_encoder.append(full_sup_tokens)
             
-            # Process query input similarly - convert input state to single token
-            query_parts = query_ex_str.split(" -> ")
-            query_input_part_str = query_parts[0]
-            query_first_brace_end = query_input_part_str.find("}")
-            query_potions_str = query_input_part_str[query_first_brace_end+1:].strip()
-            
-            # Convert query input stone state to single token
-            query_input_state_token_id = word2idx.get(query_initial_state_str, unk_token_id)
-            
-            # Convert query potions to tokens
-            query_tokenized_potions = []
-            if query_potions_str:
-                query_potions = query_potions_str.split(" ")
-                query_tokenized_potions = [word2idx.get(p, unk_token_id) for p in query_potions]
-            
-            query_input_tokens_classification = [query_input_state_token_id] + query_tokenized_potions
+            # Process query input based on input_format
+            if input_format == "stone_states":
+                # Original classification query processing
+                query_parts = query_ex_str.split(" -> ")
+                query_input_part_str = query_parts[0]
+                query_first_brace_end = query_input_part_str.find("}")
+                query_potions_str = query_input_part_str[query_first_brace_end+1:].strip()
+                
+                # Convert query input stone state to single token
+                query_input_state_token_id = input_word2idx.get(query_initial_state_str, unk_token_id)
+                
+                # Convert query potions to tokens
+                query_tokenized_potions = []
+                if query_potions_str:
+                    query_potions = query_potions_str.split(" ")
+                    query_tokenized_potions = [input_word2idx.get(p, unk_token_id) for p in query_potions]
+                
+                query_input_tokens_classification = [query_input_state_token_id] + query_tokenized_potions
+                
+            elif input_format == "features":
+                # Feature-based query processing
+                query_input_tokens_classification = query_input_tokens  # Already feature-based
             
             # Build encoder input
             encoder_input_ids = []
@@ -123,6 +136,7 @@ def process_episode_worker(args):
                 encoder_input_ids.append(item_sep_token_id)  # Separator before query
             encoder_input_ids.extend(query_input_tokens_classification)
 
+            # Output is always stone state classification
             target_class_id = stone_state_to_id.get(query_output_state_str, -1)
             if target_class_id == -1:
                 continue 
@@ -132,41 +146,84 @@ def process_episode_worker(args):
             })
             
         elif task_type == "classification_multi_label":
-            # For multi-label classification, tokenize inputs like seq2seq (features as individual tokens)
-            # but target is a multi-hot vector of output features.
-            tokenized_support_full_for_encoder = []
+            # Process support examples based on input_format
+            tokenized_support_for_encoder = []
             for sup_ex_str in filtered_support_examples_str:
-                full_sup_tokens, _, _, _, _ = tokenize_single_example_str_helper(sup_ex_str, word2idx, unk_token_id, io_sep_token_id)
-                tokenized_support_full_for_encoder.append(full_sup_tokens)
+                if input_format == "features":
+                    # Original multi-label approach: features as individual tokens
+                    full_sup_tokens, _, _, _, _ = tokenize_single_example_str_helper(sup_ex_str, input_word2idx, unk_token_id, io_sep_token_id)
+                    tokenized_support_for_encoder.append(full_sup_tokens)
+                    
+                elif input_format == "stone_states":
+                    # Stone state approach: stone states as single tokens
+                    parts = sup_ex_str.split(" -> ")
+                    input_part_str = parts[0]
+                    output_state_str = parts[1]
+                    
+                    # Extract input stone state and potions
+                    first_brace_end = input_part_str.find("}")
+                    input_stone_state = input_part_str[:first_brace_end+1]
+                    potions_str = input_part_str[first_brace_end+1:].strip()
+                    
+                    # Convert input stone state to single token
+                    input_state_token_id = input_word2idx.get(input_stone_state, unk_token_id)
+                    
+                    # Convert potions to tokens 
+                    tokenized_potions = []
+                    if potions_str:
+                        potions = potions_str.split(" ")
+                        tokenized_potions = [input_word2idx.get(p, unk_token_id) for p in potions]
+                    
+                    # For context, include output in input vocabulary
+                    output_state_token_id = input_word2idx.get(output_state_str, unk_token_id)
+                    
+                    # Build full support example: input_state + potions + separator + output_state
+                    full_sup_tokens = [input_state_token_id] + tokenized_potions + [io_sep_token_id] + [output_state_token_id]
+                    tokenized_support_for_encoder.append(full_sup_tokens)
             
+            # Process query input based on input_format
+            if input_format == "features":
+                # Feature-based query processing (original)
+                query_input_tokens_multi_label = query_input_tokens  # Already feature-based
+                
+            elif input_format == "stone_states":
+                # Stone state query processing
+                query_parts = query_ex_str.split(" -> ")
+                query_input_part_str = query_parts[0]
+                query_first_brace_end = query_input_part_str.find("}")
+                query_potions_str = query_input_part_str[query_first_brace_end+1:].strip()
+                
+                # Convert query input stone state to single token
+                query_input_state_token_id = input_word2idx.get(query_initial_state_str, unk_token_id)
+                
+                # Convert query potions to tokens
+                query_tokenized_potions = []
+                if query_potions_str:
+                    query_potions = query_potions_str.split(" ")
+                    query_tokenized_potions = [input_word2idx.get(p, unk_token_id) for p in query_potions]
+                
+                query_input_tokens_multi_label = [query_input_state_token_id] + query_tokenized_potions
+            
+            # Build encoder input
             encoder_input_ids = []
-            for i, sup_tokens in enumerate(tokenized_support_full_for_encoder):
+            for i, sup_tokens in enumerate(tokenized_support_for_encoder):
                 encoder_input_ids.extend(sup_tokens)
-                if i < len(tokenized_support_full_for_encoder) - 1:
+                if i < len(tokenized_support_for_encoder) - 1:
                     encoder_input_ids.append(item_sep_token_id)
             
-            if tokenized_support_full_for_encoder:
+            if tokenized_support_for_encoder:
                 encoder_input_ids.append(item_sep_token_id)  # Separator before query
-            encoder_input_ids.extend(query_input_tokens) # query_input_tokens are already feature-based
+            encoder_input_ids.extend(query_input_tokens_multi_label)
 
-            # Create multi-hot target vector for output features
+            # Output is always multi-hot feature vector
             output_feature_strings = re.findall(r':\s*([\w-]+)', query_output_state_str)
-            target_feature_vector = [0] * len(all_output_features_list)
-            # The following line is only applicable for the classification_multi_label task.
-            # The way the code design works is by having groups of features,
-            # where the first three are always color, the next three are shape, etc.
-            # This way the target_feature_vector will always have groups of features,
-            # where at least one feature from each group is activated (set to 1).
+            target_feature_vector = [0] * len(all_output_features_list) # Should be 13 features.
             feature_to_idx_map_input, feature_to_idx_map_output = feature_to_idx_map[0], feature_to_idx_map[1]
             for feature_str in output_feature_strings:
                 if feature_str in feature_to_idx_map_output:
                     target_feature_vector[feature_to_idx_map_output[feature_str]] = 1
             
-            # Add a check here. The check should ensure that
-            # 1. At most one feature from each group is activated.
-            # 2. The groups should be tested separately.
-            # The groups are: (0,3), (3,6), (6,9), (9,13) - the second index is exclusive.
-            
+            # Validation checks for feature groups
             groups = [(0, 3), (3, 6), (6, 9), (9, 13)]
             for start, end in groups:
                 group_features = target_feature_vector[start:end]
@@ -174,7 +231,6 @@ def process_episode_worker(args):
                     print(f"Warning: More than one feature activated in group {start}-{end} for episode {episode_id}. Features: {group_features}")
                 if sum(group_features) == 0:
                     print(f"Warning: No features activated in group {start}-{end} for episode {episode_id}. Features: {group_features}")
-            # Ensure the target_feature_vector is of the correct length
             
             processed_data.append({
                 "encoder_input_ids": encoder_input_ids,
@@ -197,16 +253,16 @@ def process_episode_worker(args):
                 potions_str = input_part_str[first_brace_end+1:].strip()
                 
                 # Convert input stone state to single token
-                input_state_token_id = word2idx.get(input_stone_state, unk_token_id)
+                input_state_token_id = input_word2idx.get(input_stone_state, unk_token_id)
                 
                 # Convert potions to tokens 
                 tokenized_potions = []
                 if potions_str:
                     potions = potions_str.split(" ")
-                    tokenized_potions = [word2idx.get(p, unk_token_id) for p in potions]
+                    tokenized_potions = [input_word2idx.get(p, unk_token_id) for p in potions]
                 
                 # Convert output stone state to single token
-                output_state_token_id = word2idx.get(output_state_str, unk_token_id)
+                output_state_token_id = input_word2idx.get(output_state_str, unk_token_id)
                 
                 # Build full support example: input_state + potions + separator + output_state
                 full_sup_tokens = [input_state_token_id] + tokenized_potions + [io_sep_token_id] + [output_state_token_id]
@@ -216,16 +272,14 @@ def process_episode_worker(args):
             query_parts = query_ex_str.split(" -> ")
             query_input_part_str = query_parts[0]
             query_first_brace_end = query_input_part_str.find("}")
-            query_potions_str = query_input_part_str[query_first_brace_end+1:].strip()
-    
-            # Convert query input stone state to single token
-            query_input_state_token_id = word2idx.get(query_initial_state_str, unk_token_id)
-    
+            query_potions_str = query_input_part_str[query_first_brace_end+1:].strip()            # Convert query input stone state to single token
+            query_input_state_token_id = input_word2idx.get(query_initial_state_str, unk_token_id)
+
             # Convert query potions to tokens
             query_tokenized_potions = []
             if query_potions_str:
                 query_potions = query_potions_str.split(" ")
-                query_tokenized_potions = [word2idx.get(p, unk_token_id) for p in query_potions]
+                query_tokenized_potions = [input_word2idx.get(p, unk_token_id) for p in query_potions]
     
             query_input_tokens_stone_state = [query_input_state_token_id] + query_tokenized_potions
     
@@ -240,8 +294,8 @@ def process_episode_worker(args):
                 encoder_input_ids.append(item_sep_token_id)  # Separator before query
             encoder_input_ids.extend(query_input_tokens_stone_state)
 
-            # For decoder: output stone state as single token + EOS
-            output_state_token_id = word2idx.get(query_output_state_str, unk_token_id)
+            # For decoder output: use output vocabulary for stone state
+            output_state_token_id = output_word2idx.get(query_output_state_str, unk_token_id)
 
             decoder_input_ids = [sos_token_id, output_state_token_id]  # [<sos>, stone_state]
             decoder_target_ids = [output_state_token_id, eos_token_id]  # [stone_state, <eos>]
@@ -313,7 +367,9 @@ class AlchemyDataset(Dataset):
                  val_split: Optional[float] = None,
                  val_split_seed: int = 42,
                  preprocessed_dir: str = "src/data/preprocessed", 
-                 use_preprocessed: bool = True):
+                 use_preprocessed: bool = True,
+                 input_format: Optional[str] = None,
+                 output_format: Optional[str] = None):
         
         self.task_type = task_type
         self.filter_query_from_support = filter_query_from_support
@@ -323,6 +379,41 @@ class AlchemyDataset(Dataset):
         self.val_split_seed = val_split_seed
         self.preprocessed_dir = preprocessed_dir 
         self.use_preprocessed = use_preprocessed 
+        
+        # Set default input/output formats based on task_type if not specified
+        if input_format is None:
+            if task_type in ["classification", "seq2seq_stone_state"]:
+                self.input_format = "stone_states"
+            elif task_type in ["seq2seq", "classification_multi_label"]:
+                self.input_format = "features"
+            else:
+                raise ValueError(f"Unknown task_type: {task_type}")
+        else:
+            self.input_format = input_format
+            
+        if output_format is None:
+            if task_type in ["classification", "seq2seq_stone_state"]:
+                self.output_format = "stone_states"
+            elif task_type in ["seq2seq", "classification_multi_label"]:
+                self.output_format = "features"
+            else:
+                raise ValueError(f"Unknown task_type: {task_type}")
+        else:
+            self.output_format = output_format
+        
+        # Validate format combinations
+        if self.input_format not in ["stone_states", "features"]:
+            raise ValueError(f"input_format must be 'stone_states' or 'features', got {self.input_format}")
+        if self.output_format not in ["stone_states", "features"]:
+            raise ValueError(f"output_format must be 'stone_states' or 'features', got {self.output_format}")
+        
+        # Validate task_type and output_format compatibility
+        if task_type == "classification" and self.output_format != "stone_states":
+            raise ValueError(f"task_type 'classification' requires output_format 'stone_states', got {self.output_format}")
+        if task_type == "classification_multi_label" and self.output_format != "features":
+            raise ValueError(f"task_type 'classification_multi_label' requires output_format 'features', got {self.output_format}")
+        
+        print(f"Dataset configuration: task_type={task_type}, input_format={self.input_format}, output_format={self.output_format}")
         
         self.PAD_TOKEN_STR = "<pad>"
         self.SOS_TOKEN_STR = "<sos>"
@@ -356,10 +447,12 @@ class AlchemyDataset(Dataset):
         """Generate filenames for preprocessed data based on parameters."""
         base_name = os.path.splitext(os.path.basename(json_file_path))[0]
         
-        # Create a unique suffix based on parameters
+        # Create a unique suffix based on parameters including new formats
         suffix_parts = [
             self.task_type,
             f"filter_{self.filter_query_from_support}",
+            f"input_{self.input_format}",
+            f"output_{self.output_format}",
         ]
         suffix = "_".join(suffix_parts)
         
@@ -385,12 +478,14 @@ class AlchemyDataset(Dataset):
             with open(metadata_file, 'r') as f:
                 metadata = json.load(f)
             
-            # Verify compatibility
+            # Verify compatibility including new format parameters
             if (metadata['task_type'] != self.task_type or 
-                metadata['filter_query_from_support'] != self.filter_query_from_support):
+                metadata['filter_query_from_support'] != self.filter_query_from_support or
+                metadata.get('input_format', 'default') != self.input_format or
+                metadata.get('output_format', 'default') != self.output_format):
                 print(f"Preprocessed data parameters don't match current settings:")
-                print(f"  Expected: task_type={self.task_type}, filter={self.filter_query_from_support}")
-                print(f"  Found: task_type={metadata['task_type']}, filter={metadata['filter_query_from_support']}")
+                print(f"  Expected: task_type={self.task_type}, filter={self.filter_query_from_support}, input_format={self.input_format}, output_format={self.output_format}")
+                print(f"  Found: task_type={metadata['task_type']}, filter={metadata['filter_query_from_support']}, input_format={metadata.get('input_format', 'default')}, output_format={metadata.get('output_format', 'default')}")
                 return False
             
             print(f"Loading preprocessed data from {data_file}")
@@ -402,8 +497,27 @@ class AlchemyDataset(Dataset):
             with open(vocab_file, 'rb') as f:
                 vocab_data = pickle.load(f)
             
-            self.word2idx = vocab_data['word2idx']
-            self.idx2word = vocab_data['idx2word']
+            # Handle both old (unified) and new (separate) vocabulary formats
+            if 'input_word2idx' in vocab_data:
+                # New format with separate vocabularies
+                print("Using separate input/output vocabularies")
+                self.input_word2idx = vocab_data['input_word2idx']
+                self.input_idx2word = vocab_data['input_idx2word']
+                self.output_word2idx = vocab_data['output_word2idx']
+                self.output_idx2word = vocab_data['output_idx2word']
+                # For backward compatibility
+                self.word2idx = self.input_word2idx
+                self.idx2word = self.input_idx2word
+            else:
+                # Old format with unified vocabulary
+                self.word2idx = vocab_data['word2idx']
+                self.idx2word = vocab_data['idx2word']
+                # For new separate vocabulary approach, use unified vocab for both
+                self.input_word2idx = self.word2idx
+                self.input_idx2word = self.idx2word
+                self.output_word2idx = self.word2idx
+                self.output_idx2word = self.idx2word
+            
             self.pad_token_id = vocab_data['pad_token_id']
             self.sos_token_id = vocab_data['sos_token_id']
             self.eos_token_id = vocab_data['eos_token_id']
@@ -415,7 +529,7 @@ class AlchemyDataset(Dataset):
             self.stone_state_to_id = vocab_data.get('stone_state_to_id')
             self.id_to_stone_state = vocab_data.get('id_to_stone_state')
             self.all_output_features_list = vocab_data.get('all_output_features_list')
-            if self.task_type == "classification_multi_label":
+            if self.output_format == "features":
                 self.feature_to_idx_map_input = vocab_data.get('feature_to_idx_map_input')
                 self.feature_to_idx_map_output = vocab_data.get('feature_to_idx_map_output')
             else:
@@ -435,44 +549,51 @@ class AlchemyDataset(Dataset):
 
     def _initialize_from_scratch(self, json_file_path: str, vocab_word2idx: Dict[str, int] = None, 
                                 vocab_idx2word: Dict[int, str] = None, stone_state_to_id: Dict[str, int] = None):
-        """Initialize dataset from scratch (original behavior)."""
+        """Initialize dataset from scratch with separate input/output vocabularies."""
         
         if vocab_word2idx and vocab_idx2word:
-            self.word2idx = vocab_word2idx
+            # Use provided vocabulary for both input and output (unified approach)
+            self.input_word2idx = vocab_word2idx
+            self.input_idx2word = vocab_idx2word
+            self.output_word2idx = vocab_word2idx  # Use same vocabulary for output when provided
+            self.output_idx2word = vocab_idx2word
+            # For backward compatibility, also set the old names
+            self.word2idx = vocab_word2idx  
             self.idx2word = vocab_idx2word
         else:
-            if self.task_type == "classification" or self.task_type == "seq2seq_stone_state":
-                self.word2idx, self.idx2word = self._build_classification_vocab(json_file_path)
-            elif self.task_type == "seq2seq" or self.task_type == "classification_multi_label":
-                self.word2idx, self.idx2word = self._build_feature_potion_vocab(json_file_path)
-            else:
-                raise ValueError(f"Unknown task_type for vocab building: {self.task_type}")
+            # Build separate input and output vocabularies
+            self._build_separate_vocabularies(json_file_path)
 
-        self.pad_token_id = self.word2idx[self.PAD_TOKEN_STR]
-        self.sos_token_id = self.word2idx[self.SOS_TOKEN_STR]
-        self.eos_token_id = self.word2idx[self.EOS_TOKEN_STR]
-        self.io_sep_token_id = self.word2idx[self.IO_SEP_TOKEN_STR]
-        self.item_sep_token_id = self.word2idx[self.ITEM_SEP_TOKEN_STR]
-        self.unk_token_id = self.word2idx[self.UNK_TOKEN_STR]
+        # Set token IDs from input vocabulary (since these are used for processing)
+        self.pad_token_id = self.input_word2idx[self.PAD_TOKEN_STR]
+        self.sos_token_id = self.input_word2idx[self.SOS_TOKEN_STR]
+        self.eos_token_id = self.input_word2idx[self.EOS_TOKEN_STR]
+        self.io_sep_token_id = self.input_word2idx[self.IO_SEP_TOKEN_STR]
+        self.item_sep_token_id = self.input_word2idx[self.ITEM_SEP_TOKEN_STR]
+        self.unk_token_id = self.input_word2idx[self.UNK_TOKEN_STR]
 
         # Initialize task-specific attributes
         self.stone_state_to_id = None
         self.id_to_stone_state = None
-        if self.task_type == "classification":
+        if self.output_format == "stone_states":
             if stone_state_to_id:
                 self.stone_state_to_id = stone_state_to_id
                 self.id_to_stone_state = {v: k for k, v in stone_state_to_id.items()}
             else:
-                self.stone_state_to_id = {state: token_id for state, token_id in self.word2idx.items() 
-                                         if state.startswith('{') and state.endswith('}')}
+                # Build from output vocabulary
+                self.stone_state_to_id = {state: idx for idx, state in enumerate(
+                    [state for state in self.output_word2idx.keys() 
+                     if state.startswith('{') and state.endswith('}')]
+                )}
                 self.id_to_stone_state = {v: k for k, v in self.stone_state_to_id.items()}
         
-        # For classification_multi_label
+        # For multi-label features output
         self.all_output_features_list = None
         self.feature_to_idx_map_input = None
         self.feature_to_idx_map_output = None
         self.num_output_features = None
-        if self.task_type == "classification_multi_label":
+        if self.output_format == "features":
+            # Build feature mappings from data
             all_features_in_dataset: Set[str] = set()
             with open(json_file_path, 'r') as f:
                 raw_data_for_features = json.load(f)
@@ -490,8 +611,7 @@ class AlchemyDataset(Dataset):
             self.all_input_features_list = sorted(list(all_features_in_dataset))
             self.feature_to_idx_map_input = {feature: idx for idx, feature in enumerate(self.all_input_features_list)}
             
-            # The following is hardcoded for multi-label classification. This is to ensure that a set of output features always belong to the same group of features. 
-            # For example, the first three features are always the color, the next three are always the shape, etc.
+            # Hardcoded for multi-label classification to ensure consistent feature grouping
             self.feature_to_idx_map_output = {'blue': 0, 'red': 1, 'purple': 2,
                                               'small': 3, 'medium': 4, 'large': 5,
                                               'pointy': 6, 'round': 7, 'medium_round': 8,
@@ -501,12 +621,6 @@ class AlchemyDataset(Dataset):
             print(f"Built output feature mapping for multi-label classification: {self.num_output_features} unique features.")
 
         self.data = self._load_and_preprocess_data(json_file_path, self.num_workers, self.chunk_size)
-        
-        # Create train/val splits if requested
-        self.train_set = None
-        self.val_set = None
-        if self.val_split is not None:
-            self._create_train_val_splits()
 
     def _parse_stone_string_to_tokens(self, stone_str: str) -> List[int]:
         features = re.findall(r':\s*([\w-]+)', stone_str) 
@@ -621,6 +735,185 @@ class AlchemyDataset(Dataset):
         
         return word2idx, idx2word
 
+    def _build_mixed_vocab(self, json_file_path: str) -> Tuple[Dict[str, int], Dict[int, str]]:
+        """Build vocabulary that includes both individual features AND complete stone states."""
+        all_features: Set[str] = set()
+        all_potions: Set[str] = set()
+        unique_stone_states: Set[str] = set()
+        
+        with open(json_file_path, 'r') as f:
+            raw_data = json.load(f)
+        
+        for episode_id, episode_content in raw_data["episodes"].items():
+            if not episode_content: continue
+            all_example_strings = episode_content.get("support", []) + episode_content.get("query", [])
+            
+            for example_str in all_example_strings:
+                parts = example_str.split(" -> ")
+                if len(parts) != 2:
+                    continue
+                    
+                input_part_str = parts[0]
+                output_state_str = parts[1]
+
+                # Extract features from input stone state
+                first_brace_end = input_part_str.find("}")
+                initial_state_str = input_part_str[:first_brace_end+1]
+                features_initial = re.findall(r':\s*([\w-]+)', initial_state_str)
+                all_features.update(features_initial)
+                
+                # Extract potions
+                potions_str = input_part_str[first_brace_end+1:].strip()
+                if potions_str:
+                    potion_list = potions_str.split(" ")
+                    all_potions.update(potion_list)
+                
+                # Extract features from output stone state
+                features_output = re.findall(r':\s*([\w-]+)', output_state_str)
+                all_features.update(features_output)
+                
+                # Extract complete stone states
+                unique_stone_states.add(initial_state_str)
+                unique_stone_states.add(output_state_str)
+        
+        # Build vocabulary: features + potions + stone_states + special_tokens
+        sorted_features = sorted(list(all_features))
+        sorted_potions = sorted(list(all_potions))
+        sorted_states = sorted(list(unique_stone_states))
+        
+        all_tokens = sorted_features + sorted_potions + sorted_states + self.special_tokens
+        word2idx = {token: i for i, token in enumerate(all_tokens)}
+        idx2word = {i: token for token, i in word2idx.items()}
+        
+        print(f"Built mixed vocabulary:")
+        print(f"  Features: {len(sorted_features)}")
+        print(f"  Potions: {len(sorted_potions)}")
+        print(f"  Stone states: {len(sorted_states)}")
+        print(f"  Special tokens: {len(self.special_tokens)}")
+        print(f"  Total vocabulary size: {len(word2idx)}")
+        
+        return word2idx, idx2word
+
+    def _build_separate_vocabularies(self, json_file_path: str):
+        """Build separate input and output vocabularies based on formats."""
+        
+        # Build input vocabulary
+        if self.input_format == "stone_states":
+            self.input_word2idx, self.input_idx2word = self._build_stone_state_potion_vocab(json_file_path, for_input=True)
+        elif self.input_format == "features":
+            self.input_word2idx, self.input_idx2word = self._build_feature_potion_vocab(json_file_path) # This adds the potions and the special tokens.
+        
+        # Build output vocabulary  
+        if self.output_format == "stone_states":
+            self.output_word2idx, self.output_idx2word = self._build_stone_state_vocab(json_file_path)
+        elif self.output_format == "features":
+            self.output_word2idx, self.output_idx2word = self._build_feature_vocab(json_file_path) # Only stone features, no potions or special tokens.
+        
+        # For backward compatibility, use input vocabulary as main vocabulary
+        self.word2idx = self.input_word2idx
+        self.idx2word = self.input_idx2word
+        
+        print(f"Built separate vocabularies:")
+        print(f"  Input vocabulary ({self.input_format}): {len(self.input_word2idx)} tokens")
+        print(f"  Output vocabulary ({self.output_format}): {len(self.output_word2idx)} tokens")
+
+    def _build_stone_state_potion_vocab(self, json_file_path: str, for_input: bool = True) -> Tuple[Dict[str, int], Dict[int, str]]:
+        """Build vocabulary for stone states and potions (used for input when input_format='stone_states')."""
+        potions: Set[str] = set()
+        unique_stone_states: Set[str] = set()
+        
+        with open(json_file_path, 'r') as f:
+            raw_data = json.load(f)
+        
+        for episode_id, episode_content in raw_data["episodes"].items():
+            if not episode_content: continue
+            all_example_strings = episode_content.get("support", []) + episode_content.get("query", [])
+            
+            for example_str in all_example_strings:
+                parts = example_str.split(" -> ")
+                if len(parts) != 2:
+                    continue
+                    
+                input_part_str = parts[0]
+                output_state_str = parts[1]
+
+                # Extract potions
+                first_brace_end = input_part_str.find("}")
+                initial_state_str = input_part_str[:first_brace_end+1]
+                potions_str = input_part_str[first_brace_end+1:].strip()
+                
+                if potions_str:
+                    potion_list = potions_str.split(" ")
+                    potions.update(potion_list)
+                
+                # Extract stone states (for input, we need both input and output states for context)
+                unique_stone_states.add(initial_state_str)
+                if for_input:  # For input vocab, include output states for support examples
+                    unique_stone_states.add(output_state_str)
+        
+        # Build vocabulary: stone_states + potions + special_tokens
+        sorted_potions = sorted(list(potions))
+        sorted_states = sorted(list(unique_stone_states))
+        
+        all_tokens = sorted_states + sorted_potions + self.special_tokens
+        word2idx = {token: i for i, token in enumerate(all_tokens)}
+        idx2word = {i: token for token, i in word2idx.items()}
+        
+        return word2idx, idx2word
+
+    def _build_stone_state_vocab(self, json_file_path: str) -> Tuple[Dict[str, int], Dict[int, str]]:
+        """Build vocabulary for stone states only (used for output when output_format='stone_states')."""
+        unique_stone_states: Set[str] = set()
+        
+        with open(json_file_path, 'r') as f:
+            raw_data = json.load(f)
+        
+        for episode_id, episode_content in raw_data["episodes"].items():
+            if not episode_content: continue
+            all_example_strings = episode_content.get("support", []) + episode_content.get("query", [])
+            
+            for example_str in all_example_strings:
+                parts = example_str.split(" -> ")
+                if len(parts) != 2:
+                    continue
+                    
+                output_state_str = parts[1]
+                unique_stone_states.add(output_state_str)
+        
+        # Build vocabulary: only stone_states (no special tokens needed for output vocab)
+        sorted_states = sorted(list(unique_stone_states))
+        word2idx = {state: i for i, state in enumerate(sorted_states)}
+        idx2word = {i: state for state, i in word2idx.items()}
+        
+        return word2idx, idx2word
+
+    def _build_feature_vocab(self, json_file_path: str) -> Tuple[Dict[str, int], Dict[int, str]]:
+        """Build vocabulary for features only (used for output when output_format='features')."""
+        all_features: Set[str] = set()
+        
+        with open(json_file_path, 'r') as f:
+            raw_data = json.load(f)
+        
+        for episode_id, episode_content in raw_data["episodes"].items():
+            if not episode_content: continue
+            all_example_strings = episode_content.get("support", []) + episode_content.get("query", [])
+            
+            for example_str in all_example_strings:
+                parts = example_str.split(" -> ")
+                if len(parts) != 2:
+                    continue
+                    
+                output_state_str = parts[1]
+                features_output = re.findall(r':\s*([\w-]+)', output_state_str)
+                all_features.update(features_output)
+        
+        # Build vocabulary: only features (no special tokens needed for output vocab)
+        sorted_features = sorted(list(all_features))
+        word2idx = {feature: i for i, feature in enumerate(sorted_features)}
+        idx2word = {i: feature for feature, i in word2idx.items()}
+        
+        return word2idx, idx2word
+
     def _filter_support_examples(self, support_examples: List[str], query_examples: List[str]) -> List[str]:
         """
         Filter out support examples that appear in the query set to prevent data leakage.
@@ -654,25 +947,19 @@ class AlchemyDataset(Dataset):
                            self.sos_token_id, self.eos_token_id, self.unk_token_id)
         
         # Add feature mapping for multi-label task to worker args
-        all_output_features_list_arg = list(self.feature_to_idx_map_output.keys()) if self.task_type == "classification_multi_label" else None
-        feature_to_idx_map_arg = (self.feature_to_idx_map_input, self.feature_to_idx_map_output) if self.task_type == "classification_multi_label" else None
+        all_output_features_list_arg = list(self.feature_to_idx_map_output.keys()) if self.output_format == "features" else None
+        feature_to_idx_map_arg = (self.feature_to_idx_map_input, self.feature_to_idx_map_output) if self.output_format == "features" else None
 
         episode_args = []
-        # c = 0
         for episode_id, episode_content in raw_data["episodes"].items():
             if episode_content:  # Skip empty episodes
                 episode_args.append((
-                    episode_id, episode_content, self.task_type, self.word2idx, 
+                    episode_id, episode_content, self.task_type, 
+                    self.input_word2idx, self.output_word2idx,  # Pass separate vocabularies
                     self.stone_state_to_id, special_token_ids, self.filter_query_from_support,
-                    all_output_features_list_arg, feature_to_idx_map_arg # Pass new args
+                    all_output_features_list_arg, feature_to_idx_map_arg,
+                    self.input_format, self.output_format
                 ))
-                # c += 1
-                # if ('train' in json_file_path) and (c == 6000): # Uncomment this for debugging/testing.
-                #     print(f"Loaded {c} episodes from {json_file_path}. Stopping early for testing.")
-                #     break
-                # if ('val' in json_file_path) and (c == 100): # Uncomment this for debugging/testing.
-                #     print(f"Loaded {c} episodes from {json_file_path}. Stopping early for testing.")
-                #     break
         
         # Use multiprocessing to process episodes in parallel
         processed_data: List[Dict[str, Any]] = []
@@ -972,7 +1259,7 @@ if __name__ == '__main__':
     # Test Classification Multi-Label
     print("\n\n--- Testing Classification Multi-Label Task ---")
     try:
-        dataset_ml = AlchemyDataset(json_file_path=FILE_PATH, task_type="classification_multi_label", num_workers=1, use_preprocessed=False) # Using 1 worker for easier debugging if needed
+        dataset_ml = AlchemyDataset(json_file_path=FILE_PATH, task_type="classification_multi_label", num_workers=20, use_preprocessed=False) # Using 1 worker for easier debugging if needed
         print(f"Dataset (Multi-Label) initialized. Number of samples: {len(dataset_ml)}")
         print(f"Feature/Potion Vocabulary size: {len(dataset_ml.word2idx)}")
         if dataset_ml.num_output_features:

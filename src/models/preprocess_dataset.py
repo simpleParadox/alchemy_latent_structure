@@ -27,7 +27,9 @@ def preprocess_and_save_dataset(
     stone_state_to_id: Dict[str, int] = None,
     filter_query_from_support: bool = False,
     num_workers: int = 4,
-    chunk_size: int = 10000
+    chunk_size: int = 10000,
+    input_format: str = None,
+    output_format: str = None
 ):
     """
     Preprocess a dataset and save it to disk.
@@ -64,8 +66,9 @@ def preprocess_and_save_dataset(
         num_workers=num_workers,
         chunk_size=chunk_size,
         val_split=None, # Don't create splits during preprocessing
-        use_preprocessed=False # Initialize from scratch.
-        
+        use_preprocessed=False, # Initialize from scratch.
+        input_format=input_format,
+        output_format=output_format
     )
     
     # Generate output filenames based on input file and parameters
@@ -76,6 +79,10 @@ def preprocess_and_save_dataset(
         task_type,
         f"filter_{filter_query_from_support}",
     ]
+    if input_format:
+        suffix_parts.append(f"input_{input_format}")
+    if output_format:
+        suffix_parts.append(f"output_{output_format}")
     suffix = "_".join(suffix_parts)
     
     # Save the preprocessed data
@@ -100,7 +107,8 @@ def preprocess_and_save_dataset(
         'stone_state_to_id': getattr(dataset, 'stone_state_to_id', None),
         'id_to_stone_state': getattr(dataset, 'id_to_stone_state', None),
         'all_output_features_list': getattr(dataset, 'all_output_features_list', None),
-        'feature_to_idx_map': getattr(dataset, 'feature_to_idx_map', None),
+        'feature_to_idx_map_input': getattr(dataset, 'feature_to_idx_map_input', None),
+        'feature_to_idx_map_output': getattr(dataset, 'feature_to_idx_map_output', None),
         'num_output_features': getattr(dataset, 'num_output_features', None),
     }
     
@@ -112,6 +120,8 @@ def preprocess_and_save_dataset(
         'original_json_path': json_file_path,
         'task_type': task_type,
         'filter_query_from_support': filter_query_from_support,
+        'input_format': input_format,
+        'output_format': output_format,
         'num_samples': len(dataset.data),
         'vocab_size': len(dataset.word2idx),
         'num_classes': len(dataset.stone_state_to_id) if hasattr(dataset, 'stone_state_to_id') and dataset.stone_state_to_id else None,
@@ -177,6 +187,10 @@ def main():
                         help="Number of workers for multiprocessing")
     parser.add_argument("--chunk_size", type=int, default=50000,
                         help="Chunk size for processing")
+    parser.add_argument("--input_format", type=str, default='features', choices=["stone_states", "features"],
+                        help="Input format: 'stone_states' for complete states as tokens, 'features' for individual features as tokens. Default inferred from task_type.")
+    parser.add_argument("--output_format", type=str, default=None, choices=["stone_states", "features"],
+                        help="Output format: 'stone_states' for classification targets, 'features' for multi-hot vectors. Default inferred from task_type.")
     
     args = parser.parse_args()
     
@@ -194,7 +208,9 @@ def main():
         stone_state_to_id=None,
         filter_query_from_support=args.filter_query_from_support,
         num_workers=args.num_workers,
-        chunk_size=args.chunk_size, 
+        chunk_size=args.chunk_size,
+        input_format=args.input_format,
+        output_format=args.output_format
     )
     
     print("\n" + "="*60)
@@ -219,7 +235,9 @@ def main():
         stone_state_to_id=stone_state_to_id,
         filter_query_from_support=args.filter_query_from_support,
         num_workers=args.num_workers,
-        chunk_size=args.chunk_size
+        chunk_size=args.chunk_size,
+        input_format=args.input_format,
+        output_format=args.output_format
     )
     
     print("\n" + "="*60)

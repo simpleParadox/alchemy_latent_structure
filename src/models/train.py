@@ -97,6 +97,11 @@ def parse_args():
     parser.add_argument("--use_preprocessed", type=str, default="True", choices=["True", "False"],
                         help="Whether to use preprocessed data if available. Default is True.")
     
+    parser.add_argument("--input_format", type=str, default=None, choices=["stone_states", "features"],
+                        help="Input format: 'stone_states' for complete states as tokens, 'features' for individual features as tokens. Default inferred from task_type.")
+    parser.add_argument("--output_format", type=str, default=None, choices=["stone_states", "features"],
+                        help="Output format: 'stone_states' for classification targets, 'features' for multi-hot vectors. Default inferred from task_type.")
+    
     parser.add_argument("--save_checkpoints", type=str, default="False", choices=["True", "False"],
                         help="Whether to save model checkpoints during training. Default is True.")
     parser.add_argument("--is_held_out_color_exp", type=str, default="False", choices=["True", "False"],
@@ -771,7 +776,9 @@ def main():
             val_split=args.val_split,
             val_split_seed=args.val_split_seed,
             preprocessed_dir=args.preprocessed_dir,  # Add this line
-            use_preprocessed=args.use_preprocessed   # Add this line
+            use_preprocessed=args.use_preprocessed,   # Add this line
+            input_format=args.input_format,
+            output_format=args.output_format
         )
 
     # Get train and validation sets
@@ -801,33 +808,38 @@ def main():
         val_dataset = AlchemyDataset(
             json_file_path=args.val_data_path,
             task_type=args.task_type,
-            vocab_word2idx=full_dataset.word2idx,
-            vocab_idx2word=full_dataset.idx2word,
+            vocab_word2idx=full_dataset.input_word2idx,  # Use input vocabulary
+            vocab_idx2word=full_dataset.input_idx2word,
             stone_state_to_id=full_dataset.stone_state_to_id if args.task_type == "classification" else None,
             filter_query_from_support=args.filter_query_from_support,
             num_workers=args.num_workers,
             preprocessed_dir=args.preprocessed_dir,  # Add this line
-            use_preprocessed=args.use_preprocessed   # Add this line
+            use_preprocessed=args.use_preprocessed,   # Add this line
+            input_format=args.input_format,
+            output_format=args.output_format
         )
     else:
         print("No validation data specified. Skipping validation.")
 
     # Get vocabulary info from the main dataset
     pad_token_id = full_dataset.pad_token_id
-    src_vocab_size = len(full_dataset.word2idx)
+    src_vocab_size = len(full_dataset.input_word2idx)  # Use input vocabulary size
 
-    print(f"Source (Feature/Potion) Vocabulary size: {src_vocab_size}")
+    print(f"Source (Input) Vocabulary size: {src_vocab_size}")
     print(f"Pad token ID for encoder inputs: {pad_token_id}")
 
     if args.task_type == "seq2seq" or args.task_type == "seq2seq_stone_state":
         sos_token_id = full_dataset.sos_token_id
         eos_token_id = full_dataset.eos_token_id
-        tgt_vocab_size = src_vocab_size
-        print(f"Target (Feature) Vocabulary size (for Seq2Seq): {tgt_vocab_size}")
+        if args.task_type == "seq2seq":
+            tgt_vocab_size = src_vocab_size  # Features for both input and output
+        else:  # seq2seq_stone_state
+            tgt_vocab_size = len(full_dataset.output_word2idx)  # Use output vocabulary size
+        print(f"Target (Output) Vocabulary size: {tgt_vocab_size}")
         print(f"SOS ID: {sos_token_id}, EOS ID: {eos_token_id}")
     elif args.task_type == "classification":
-        num_classes = len(full_dataset.stone_state_to_id)
-        print(f"Number of classes (Stone States for Classification): {num_classes}")
+        num_classes = len(full_dataset.stone_state_to_id)  # Based on output stone states
+        print(f"Number of classes (Stone States): {num_classes}")
     elif args.task_type == "classification_multi_label":
         num_output_features = full_dataset.num_output_features
         print(f"Number of ungrouped output features (for Multi-label Classification): {num_output_features}")
