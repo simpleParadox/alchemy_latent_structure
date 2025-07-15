@@ -54,6 +54,17 @@ def preprocess_and_save_dataset(
     os.makedirs(output_dir, exist_ok=True)
     
     start_time = time.time()
+
+    if output_format is None:
+        # Default output format based on task type
+        if task_type == 'seq2seq':
+            output_format = 'features'
+        elif task_type == 'classification':
+            output_format = 'stone_states'
+        elif task_type == 'classification_multi_label':
+            output_format = 'features'
+        elif task_type == 'seq2seq_stone_state':
+            output_format = 'stone_states'
     
     # Create dataset (this will do all the preprocessing)
     dataset = AlchemyDataset(
@@ -81,8 +92,20 @@ def preprocess_and_save_dataset(
     ]
     if input_format:
         suffix_parts.append(f"input_{input_format}")
-    if output_format:
+    if output_format: 
         suffix_parts.append(f"output_{output_format}")
+    else:
+        # Default output format based on task type
+        if task_type == 'seq2seq':
+            suffix_parts.append("output_features")
+        elif task_type == 'classification':
+            suffix_parts.append("output_stone_states")
+        elif task_type == 'classification_multi_label':
+            suffix_parts.append("output_features")
+        elif task_type == 'seq2seq_stone_state':
+            suffix_parts.append("output_stone_states")
+            
+            
     suffix = "_".join(suffix_parts)
     
     # Save the preprocessed data
@@ -169,10 +192,10 @@ def main():
     # --num_workers 11 
     parser = argparse.ArgumentParser(description="Preprocess Alchemy datasets")
     parser.add_argument("--train_json_file", type=str, required=False,
-                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_2.json",
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
-                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_0.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_2.json",
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],

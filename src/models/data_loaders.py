@@ -448,12 +448,21 @@ class AlchemyDataset(Dataset):
         base_name = os.path.splitext(os.path.basename(json_file_path))[0]
         
         # Create a unique suffix based on parameters including new formats
-        suffix_parts = [
-            self.task_type,
-            f"filter_{self.filter_query_from_support}",
-            f"input_{self.input_format}",
-            f"output_{self.output_format}",
-        ]
+        if (self.input_format is not None) or (self.output_format is not None):
+            print("self.input_format:", self.input_format)
+            print("self.output_format:", self.output_format)
+            suffix_parts = [
+                self.task_type,
+                f"filter_{self.filter_query_from_support}",
+                f"input_{self.input_format}",
+                f"output_{self.output_format}",
+            ]
+        else:
+            print("no input/output format specified, using defaults")
+            suffix_parts = [
+                self.task_type,
+                f"filter_{self.filter_query_from_support}",
+            ]
         suffix = "_".join(suffix_parts)
         
         data_file = os.path.join(self.preprocessed_dir, f"{base_name}_{suffix}_data.pkl")
