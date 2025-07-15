@@ -695,6 +695,9 @@ def main():
         base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/projects/dm_alchemy/'
     elif cluster == 'rorqual':
         base_path = '/home/rsaha/links/projects/def-afyshe-ab/rsaha/projects/dm_alchemy/'
+    elif cluster == 'vulcan':
+        base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/'
+
     
     print("Base path: ", base_path)
     print("Profile cluster: ", cluster)
