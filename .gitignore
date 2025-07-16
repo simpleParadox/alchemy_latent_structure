@@ -25,4 +25,4 @@ src/models/test_seq2seq_comprehensive.py
 src/data/preprocessed/*
 src/data/preprocessed_other/*
 src/investigate_loss.py
-src/data/preprocessed_temp/
+src/data/preprocessed_separate/
