@@ -192,10 +192,10 @@ def main():
     # --num_workers 11 
     parser = argparse.ArgumentParser(description="Preprocess Alchemy datasets")
     parser.add_argument("--train_json_file", type=str, required=False,
-                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_0.json",
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
-                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_0.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_3_qhop_1_seed_0.json",
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
@@ -220,6 +220,12 @@ def main():
     print("="*60)
     print("PREPROCESSING TRAINING DATA")
     print("="*60)
+    
+    # Do some assertions here.
+    if args.output_format == 'features':
+        assert args.task_type in ['classification_multi_label', 'seq2seq']
+    if args.output_format == 'stone_states':
+        assert args.task_type in ['classification', 'seq2seq_stone_state']
     
     # Preprocess training data first (this will create the vocabulary)
     train_result = preprocess_and_save_dataset(
