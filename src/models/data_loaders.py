@@ -18,7 +18,7 @@ def process_episode_worker(args):
     """Worker function for processing a single episode. Must be at module level for multiprocessing."""
     (episode_id, episode_content, task_type, input_word2idx, output_word2idx, stone_state_to_id, 
      special_token_ids, filter_query_from_support, 
-     all_output_features_list, feature_to_idx_map, input_format, output_format) = args
+     all_output_features_list, feature_to_idx_map, input_format, output_format, model_architecture) = args
     
     if not episode_content:
         return []
@@ -135,10 +135,12 @@ def process_episode_worker(args):
             if tokenized_support_for_encoder:
                 encoder_input_ids.append(item_sep_token_id)  # Separator before query
             encoder_input_ids.extend(query_input_tokens_classification)
+            
 
             # Output is always stone state classification
             target_class_id = stone_state_to_id.get(query_output_state_str, -1)
             if target_class_id == -1:
+                print(f"Warning: Output state '{query_output_state_str}' not found in stone_state_to_id mapping for episode {episode_id}. Using -1 as target class ID.")
                 continue 
             processed_data.append({
                 "encoder_input_ids": encoder_input_ids,
@@ -215,7 +217,6 @@ def process_episode_worker(args):
                 encoder_input_ids.append(item_sep_token_id)  # Separator before query
             encoder_input_ids.extend(query_input_tokens_multi_label)
 
-            # Output is always multi-hot feature vector
             output_feature_strings = re.findall(r':\s*([\w-]+)', query_output_state_str)
             target_feature_vector = [0] * len(all_output_features_list) # Should be 13 features.
             feature_to_idx_map_input, feature_to_idx_map_output = feature_to_idx_map[0], feature_to_idx_map[1]
@@ -231,10 +232,22 @@ def process_episode_worker(args):
                     print(f"Warning: More than one feature activated in group {start}-{end} for episode {episode_id}. Features: {group_features}")
                 if sum(group_features) == 0:
                     print(f"Warning: No features activated in group {start}-{end} for episode {episode_id}. Features: {group_features}")
+                    
+            target_feature_vector_autoregressive = []
+            # For the autoregressive target vector, we convert features to tokens based on the 'input' vocabulary, not the output.
+            for feature_str in output_feature_strings:
+                target_feature_vector_autoregressive.append(
+                    input_word2idx.get(feature_str, unk_token_id)
+                )
+            # Ensure no unk tokens in target vector. If present, throw warning.
+            if unk_token_id in target_feature_vector_autoregressive:
+                print(f"Warning: UNK token ({unk_token_id}) found in target feature vector for episode {episode_id}. Features: {target_feature_vector}")
+                
             
             processed_data.append({
                 "encoder_input_ids": encoder_input_ids,
-                "target_feature_vector": target_feature_vector
+                "target_feature_vector": target_feature_vector,
+                "target_feature_vector_autoregressive": target_feature_vector_autoregressive
             })
 
         elif task_type == "seq2seq_stone_state":
@@ -369,7 +382,8 @@ class AlchemyDataset(Dataset):
                  preprocessed_dir: str = "src/data/preprocessed", 
                  use_preprocessed: bool = True,
                  input_format: Optional[str] = None,
-                 output_format: Optional[str] = None):
+                 output_format: Optional[str] = None,
+                 model_architecture: str = "encoder"):
         
         self.task_type = task_type
         self.filter_query_from_support = filter_query_from_support
@@ -379,6 +393,7 @@ class AlchemyDataset(Dataset):
         self.val_split_seed = val_split_seed
         self.preprocessed_dir = preprocessed_dir 
         self.use_preprocessed = use_preprocessed 
+        self.architecture = model_architecture
         
         # Set default input/output formats based on task_type if not specified
         if input_format is None:
@@ -967,7 +982,7 @@ class AlchemyDataset(Dataset):
                     self.input_word2idx, self.output_word2idx,  # Pass separate vocabularies
                     self.stone_state_to_id, special_token_ids, self.filter_query_from_support,
                     all_output_features_list_arg, feature_to_idx_map_arg,
-                    self.input_format, self.output_format
+                    self.input_format, self.output_format, self.architecture
                 ))
         
         # Use multiprocessing to process episodes in parallel
@@ -1149,7 +1164,8 @@ class AlchemyDataset(Dataset):
         
         return result
 
-def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_type: str = "seq2seq", model_architecture: str = "encoder") -> Dict[str, torch.Tensor]:
+def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, sos_token_id: int, eos_token_id: int, task_type: str = "seq2seq", model_architecture: str = "encoder", prediction_type: str = None,
+               dataset=None) -> Dict[str, torch.Tensor]:
     """
     Collates data samples into a batch.
     Args:
@@ -1164,7 +1180,9 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_typ
     # Use left-padding for decoder models, right-padding for encoder models
     if model_architecture == "decoder":
         # Left-padding for decoder models
+        encoder_inputs = [torch.cat([torch.tensor([sos_token_id], dtype=seq.dtype), seq]) for seq in encoder_inputs] # First prepend the SOS token.
         max_len = max(len(seq) for seq in encoder_inputs)
+        
         padded_sequences = []
         for seq in encoder_inputs:
             num_pads = max_len - len(seq)
@@ -1194,10 +1212,20 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, task_typ
     elif task_type == "classification_multi_label":
         # Target is a multi-hot vector, already a tensor in __getitem__
         # We just need to stack them into a batch tensor.
-        target_feature_vectors = torch.stack([item["target_feature_vector"] for item in batch])
+        if model_architecture == "decoder" and prediction_type == 'autoregressive':
+            target_feature_vectors = torch.stack([item["target_feature_vector"] for item in batch])
+            target_feature_vectors_autoregressive = [item['target_feature_vector_autoregressive'] for item in batch]
+            
+            # Append the EOS token to each target feature vector.
+            target_feature_vectors_autoregressive = [torch.cat([vec, torch.tensor([eos_token_id], dtype=vec.dtype)]) for vec in target_feature_vectors_autoregressive]
+            return {
+                "encoder_input_ids": padded_encoder_inputs,
+                "target_feature_vector_autoregressive": torch.nn.utils.rnn.pad_sequence(target_feature_vectors_autoregressive, batch_first=True, padding_value=pad_token_id)
+            }
+            
         return {
             "encoder_input_ids": padded_encoder_inputs,
-            "target_feature_vector": target_feature_vectors
+            "target_feature_vector": target_feature_vectors # This is for the general multi-label classification task.
         }
     else:
         raise ValueError(f"Unknown task_type in collate_fn: {task_type}")

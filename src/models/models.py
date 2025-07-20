@@ -4,6 +4,7 @@ import math
 
 class PositionalEncoding(nn.Module):
     """Injects positional information into the input embeddings."""
+    """Reference: https://pytorch-tutorials-preview.netlify.app/beginner/transformer_tutorial.html#define-the-model"""
     def __init__(self, d_model, dropout=0.1, max_len=5000):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -11,9 +12,10 @@ class PositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1) # Shape: (max_len, 1, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term) # Apply sine to even indices. The ::2 means every second element starting from index 0 which are the even indices.
+        pe[:, 1::2] = torch.cos(position * div_term) # Apply cosine to odd indices
+        pe = pe.unsqueeze(0).transpose(0, 1) # Shape: (max_len, 1, d_model) # This is similar to the implementation in the PyTorch documentation.
+        # https://pytorch-tutorials-preview.netlify.app/beginner/transformer_tutorial.html#define-the-model
         self.register_parameter('pe', nn.Parameter(pe, requires_grad=False)) # Register as a non-trainable parameter
 
     def forward(self, x):
@@ -225,10 +227,10 @@ class StoneStateClassifier(nn.Module):
             # actual_lengths: (batch_size, 1)
             actual_lengths = (~src_padding_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)
             
-            pooled_output = summed_output / actual_lengths # (batch_size, emb_size)
+            pooled_output = summed_output / actual_lengths # (batch_size, emb_size). Perform mean pooling over the sequence length, considering padding.
         else:
             # No padding mask provided, so perform a simple mean pool
-            pooled_output = transformer_output.mean(dim=1) # (batch_size, emb_size)
+            pooled_output = transformer_output.mean(dim=1) # (batch_size, emb_size). Mean pooling over the sequence length.
 
         # Pass pooled output through classification head
         logits = self.classification_head(pooled_output) # (batch_size, num_classes)
@@ -241,10 +243,11 @@ class StoneStateDecoderClassifier(nn.Module):
     def __init__(self, num_decoder_layers: int, emb_size: int, nhead: int,
                  src_vocab_size: int, num_classes: int,
                  dim_feedforward: int = 512, dropout: float = 0.1,
-                 max_len: int = 5000):
+                max_len: int = 5000, prediction_type=None):
         super(StoneStateDecoderClassifier, self).__init__()
         self.emb_size = emb_size
         self.architecture = "decoder"  # Add architecture attribute
+        self.prediction_type = prediction_type  # 'autoregressive' or 'feature'.
         self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_len)
 
@@ -258,6 +261,9 @@ class StoneStateDecoderClassifier(nn.Module):
 
     def _generate_causal_mask(self, sz: int, device: torch.device) -> torch.Tensor:
         """Generates a square causal mask for the sequence."""
+        """NOTE: In the https://github.com/pytorch/pytorch/blob/main/torch/ao/nn/quantizable/modules/activation.py#L14, the attention mask is 'additive' in nature.
+        This is done before the softmax calculation. After the -inf is applied, the softmax will ignore the positions where the value is -inf (because the addition of any value with -inf is -inf).
+        """
         mask = (torch.triu(torch.ones((sz, sz), device=device)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
@@ -291,13 +297,17 @@ class StoneStateDecoderClassifier(nn.Module):
         
         # Use the output of the last token for classification
         # We need to find the last non-padded token for each sequence
-        if src_padding_mask is not None:
-            sequence_lengths = (~src_padding_mask).sum(dim=1) - 1
-            batch_indices = torch.arange(src.size(0), device=src.device)
-            last_token_output = decoder_output[batch_indices, sequence_lengths]
-        else:
-            last_token_output = decoder_output[:, -1, :]
-
+        # if src_padding_mask is not None:
+        #     sequence_lengths = (~src_padding_mask).sum(dim=1) - 1 # Get the last valid token index because this is a decoder-only model. But do not consider the padding tokens.
+        #     batch_indices = torch.arange(src.size(0), device=src.device)
+        #     last_token_output = decoder_output[batch_indices, sequence_lengths]
+        # else:
+        # No need for if conditions because the padding is always on the left side in this implementation.
+        last_token_output = decoder_output[:, -1, :]
+        
+        if self.prediction_type == 'autoregressive':
+            return decoder_output  # Return the full decoder output for autoregressive tasks. The loss calculation will be handled in the train_epoch function.0    
+        
         next_token_logits = self.classification_head(last_token_output)
         return next_token_logits  # Shape: (batch_size, num_classes)
     
@@ -351,7 +361,7 @@ class StoneStateDecoderClassifier(nn.Module):
             )
             
             # Get the logits for the last token logits only.
-            last_token_logits = self.generator(decoder_output[:, -1, :]) # Generator is the linear layer over the vocabulary.
+            last_token_logits = self.classification_head(decoder_output[:, -1, :]) # Generator is the linear layer over the vocabulary.
             
             # Get the most likely next token (greedy decoding).
             next_token = last_token_logits.argmax(dim=-1)
@@ -500,7 +510,7 @@ def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: 
     
     return model
 
-def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048):
+def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048, prediction_type=None):
     """
     Creates a StoneStateDecoderClassifier model based on a configuration name.
     """
@@ -539,7 +549,8 @@ def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_c
         num_classes=num_classes,
         dim_feedforward=config["dim_feedforward"],
         dropout=config["dropout"],
-        max_len=max_len
+        max_len=max_len,
+        prediction_type=prediction_type 
     )
     
     model.to(device)

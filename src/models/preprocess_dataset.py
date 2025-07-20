@@ -79,7 +79,7 @@ def preprocess_and_save_dataset(
         val_split=None, # Don't create splits during preprocessing
         use_preprocessed=False, # Initialize from scratch.
         input_format=input_format,
-        output_format=output_format
+        output_format=output_format,
     )
     
     # Generate output filenames based on input file and parameters
@@ -133,6 +133,10 @@ def preprocess_and_save_dataset(
         'feature_to_idx_map_input': getattr(dataset, 'feature_to_idx_map_input', None),
         'feature_to_idx_map_output': getattr(dataset, 'feature_to_idx_map_output', None),
         'num_output_features': getattr(dataset, 'num_output_features', None),
+        'input_word2idx': getattr(dataset, 'input_word2idx', None),
+        'input_idx2word': getattr(dataset, 'input_idx2word', None),
+        'output_word2idx': getattr(dataset, 'output_word2idx', None),
+        'output_idx2word': getattr(dataset, 'output_idx2word', None),
     }
     
     with open(vocab_file, 'wb') as f:
@@ -192,16 +196,16 @@ def main():
     # --num_workers 11 
     parser = argparse.ArgumentParser(description="Preprocess Alchemy datasets")
     parser.add_argument("--train_json_file", type=str, required=False,
-                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_0.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_2.json",
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
-                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_3_qhop_1_seed_0.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_2.json",
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
-                        default="classification_multi_label",
+                        default="classification",
                         help="Type of task")
-    parser.add_argument("--output_dir", type=str, default="src/data/preprocessed_separate",
+    parser.add_argument("--output_dir", type=str, default="src/data/preprocessed_separate_with_autoregressive",
                         help="Directory to save preprocessed files")
     parser.add_argument("--filter_query_from_support", action="store_true",
                         default=True,

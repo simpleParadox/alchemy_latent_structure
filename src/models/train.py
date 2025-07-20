@@ -32,7 +32,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum", 'none'],
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
-    parser.add_argument("--task_type", type=str, default="classification_multi_label", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
+    parser.add_argument("--task_type", type=str, default="classification", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
     parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
                         help="Path to the training JSON data file.")
@@ -46,7 +46,7 @@ def parse_args():
                         help="Seed value that gets appended to the data path to load the approapriate training / validation.")
     parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"],
                         help="Size of the transformer model.")
-    parser.add_argument("--model_architecture", type=str, default="encoder", choices=["encoder", "decoder"],
+    parser.add_argument("--model_architecture", type=str, default="decoder", choices=["encoder", "decoder"],
                         help="Model architecture: 'encoder' for encoder-only classifier, 'decoder' for decoder-only classifier.")
     parser.add_argument("--max_seq_len", type=int, default=2048, # Max length for support + query + separators
                         help="Maximum sequence length for the model.")
@@ -92,20 +92,22 @@ def parse_args():
                         help="Store predictions during training and validation. Default is True.")
     
     # Add new preprocessing arguments
-    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_separate",
+    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_separate",#_for_autoregressive",
                         help="Directory to look for/store preprocessed data files.")
     parser.add_argument("--use_preprocessed", type=str, default="True", choices=["True", "False"],
                         help="Whether to use preprocessed data if available. Default is True.")
     
-    parser.add_argument("--input_format", type=str, default=None, choices=["stone_states", "features"],
+    parser.add_argument("--input_format", type=str, default='features', choices=["stone_states", "features"],
                         help="Input format: 'stone_states' for complete states as tokens, 'features' for individual features as tokens. Default inferred from task_type.")
-    parser.add_argument("--output_format", type=str, default=None, choices=["stone_states", "features"],
+    parser.add_argument("--output_format", type=str, default='stone_states', choices=["stone_states", "features"],
                         help="Output format: 'stone_states' for classification targets, 'features' for multi-hot vectors. Default inferred from task_type.")
     
     parser.add_argument("--save_checkpoints", type=str, default="False", choices=["True", "False"],
                         help="Whether to save model checkpoints during training. Default is True.")
     parser.add_argument("--is_held_out_color_exp", type=str, default="False", choices=["True", "False"],
                         help="Whether the dataset is a held-out color experiment. Default is True.")
+    parser.add_argument("--prediction_type", type=str, default="feature", choices=["default", "feature", "autoregressive"],
+                        help="Type of prediction: 'default' for standard full stone state classification, 'feature' for feature-wise classification, 'autoregressive' for autoregressive generation.")
     
     return parser.parse_args()
 
@@ -311,20 +313,41 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
                 output_logits = model(encoder_input_ids, decoder_input_ids)
                 
                 # The criterion will automatically ignore pad_token_id because it was initialized with ignore_index.
-                loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
+                # Also, for the shapes, look at Karpahty's video on implementing GPT from scratch.
+                loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1)) # Reshaping such that the output_logits is a 2d tensor of shape (batch_size * seq_len, vocab_size) and decoder_target_ids is a 1d tensor of shape (batch_size * seq_len).
                 
                 acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id, eos_token_id=None)
             
         elif args.task_type == "classification":
             target_class_ids = batch["target_class_id"]
+               
+            # For decoder-only model, the padding side is left. But for encoder-only model, it is right.
+            # This is a design decision and is generally how it is done in the literature.
             src_padding_mask = (encoder_input_ids == pad_token_id) 
+            
+            # For decoder only model, the model will only take the last token to predict the class.
             output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask) # (batch_size, num_classes)
+            
+            # For decoder-only architecture, we need to use the encoder_input_ids as input
+            # and treat the target_class_ids as the output.
+            # The model is designed to handle both cases - encoder and decoder.
+            # For both encoder and decoder, the loss is calculated on the prediction.
+            # This is unlike how generally we would train a decoder-only model to do next token prediction (which is shifting the logits by 1).
             loss = criterion(output_logits, target_class_ids) # CrossEntropyLoss expects (N, C) and (N)
             acc, correct, considered = calculate_accuracy_classification(output_logits, target_class_ids)
         elif args.task_type == "classification_multi_label":
             
-            target_feature_vector = batch["target_feature_vector"] # (batch_size, num_output_features)
-            src_padding_mask = (encoder_input_ids == pad_token_id)
+            if args.prediction_type == "autoregressive":
+                # TODO: Needs testing.
+                # We need to concatenate the encoder input ids and decoder input ids
+                # But we will only calculate the loss on the output of the query example.
+                # There will be some masking that's going to happen.
+                decoder_input_ids = batch["decoder_input_ids"]
+                encoder_input_ids = torch.cat([encoder_input_ids, decoder_input_ids], dim=1) 
+            else:
+                target_feature_vector = batch["target_feature_vector"] # (batch_size, num_output_features)
+                src_padding_mask = (encoder_input_ids == pad_token_id)
+            
             output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask) # (batch_size, num_output_features)
             
             
@@ -786,7 +809,8 @@ def main():
             preprocessed_dir=args.preprocessed_dir,  # Add this line
             use_preprocessed=args.use_preprocessed,   # Add this line
             input_format=args.input_format,
-            output_format=args.output_format
+            output_format=args.output_format,
+            model_architecture=args.model_architecture
         )
 
     # Get train and validation sets
@@ -824,7 +848,8 @@ def main():
             preprocessed_dir=args.preprocessed_dir,  # Add this line
             use_preprocessed=args.use_preprocessed,   # Add this line
             input_format=args.input_format,
-            output_format=args.output_format
+            output_format=args.output_format,
+            model_architecture=args.model_architecture
         )
     else:
         print("No validation data specified. Skipping validation.")
@@ -835,6 +860,9 @@ def main():
 
     print(f"Source (Input) Vocabulary size: {src_vocab_size}")
     print(f"Pad token ID for encoder inputs: {pad_token_id}")
+    
+    eos_token_id = full_dataset.eos_token_id if hasattr(full_dataset, 'eos_token_id') else None
+    sos_token_id = full_dataset.sos_token_id if hasattr(full_dataset, 'sos_token_id') else None
 
     if args.task_type == "seq2seq" or args.task_type == "seq2seq_stone_state":
         sos_token_id = full_dataset.sos_token_id
@@ -853,7 +881,10 @@ def main():
         print(f"Number of ungrouped output features (for Multi-label Classification): {num_output_features}")
 
     # Create data loaders
-    custom_collate_train = partial(collate_fn, pad_token_id=pad_token_id, task_type=args.task_type, model_architecture=args.model_architecture)
+    custom_collate_train = partial(collate_fn, pad_token_id=pad_token_id, eos_token_id = eos_token_id, 
+                                   task_type=args.task_type, model_architecture=args.model_architecture, 
+                                   sos_token_id=sos_token_id, prediction_type=args.prediction_type)
+
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -864,7 +895,9 @@ def main():
 
     val_dataloader = None
     if val_dataset is not None:
-        custom_collate_val = partial(collate_fn, pad_token_id=pad_token_id, task_type=args.task_type, model_architecture=args.model_architecture)
+        custom_collate_val = partial(collate_fn, pad_token_id=pad_token_id, eos_token_id = eos_token_id, 
+                                     task_type=args.task_type, model_architecture=args.model_architecture, 
+                                     sos_token_id=sos_token_id, prediction_type=args.prediction_type)
         val_dataloader = DataLoader(
             val_dataset,
             batch_size=args.batch_size,
@@ -872,7 +905,6 @@ def main():
             collate_fn=custom_collate_val,
             num_workers=args.num_workers
         )
-    
 
     # --- Model ---
     if args.task_type == "seq2seq" or args.task_type == "seq2seq_stone_state":
@@ -886,12 +918,14 @@ def main():
         criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id, reduction=args.multi_label_reduction) # Use CrossEntropyLoss for seq2seq, ignoring PAD_ID
     elif args.task_type == "classification":
         if args.model_architecture == "decoder":
+            print("Using decoder architecture for classification task.")
             model = create_decoder_classifier_model(
                 config_name=args.model_size,
                 src_vocab_size=src_vocab_size,
                 num_classes=num_classes,
                 device=accelerator.device,
-                max_len=args.max_seq_len
+                max_len=args.max_seq_len,
+                prediction_type=args.prediction_type
             )
         else:  # encoder architecture
             model = create_classifier_model(
@@ -904,12 +938,15 @@ def main():
         criterion = nn.CrossEntropyLoss(reduction=args.multi_label_reduction) # Use CrossEntropyLoss for classification
     elif args.task_type == "classification_multi_label":
         if args.model_architecture == "decoder":
+            print("Using decoder architecture for multi-label classification task.")
+            print("Prediction type:", args.prediction_type)
             model = create_decoder_classifier_model(
                 config_name=args.model_size,
                 src_vocab_size=src_vocab_size,
                 num_classes=num_output_features, # Output layer size is num_output_features
                 device=accelerator.device,
-                max_len=args.max_seq_len
+                max_len=args.max_seq_len,
+                prediction_type=args.prediction_type
             )
         else:  # encoder architecture
             model = create_classifier_model( # Using the same StoneStateClassifier model
