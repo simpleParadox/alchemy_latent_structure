@@ -396,11 +396,11 @@ def main():
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=1000,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=1,
+    parser.add_argument("--support_steps", type=int, default=5,
                         help="Minimum number of transformation steps in each sample")
     parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
-    parser.add_argument("--seed", type=int, default=2,
+    parser.add_argument("--seed", type=int, default=0,
                         help="Random seed for reproducibility")
     parser.add_argument("--create_val_from_train", action="store_true",
                         help="Create a validation set from the training set", default=True)
