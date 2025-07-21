@@ -288,21 +288,28 @@ class StoneStateDecoderClassifier(nn.Module):
 
         # Create causal mask for self-attention
         tgt_seq_len = src.size(1)
-        causal_mask = self._generate_causal_mask(tgt_seq_len, src.device)
+        # causal_mask = self._generate_causal_mask(tgt_seq_len, src.device)
+        
+        causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt_seq_len).to(src.device)
 
         # Pass through the transformer encoder layers with a causal mask
         # This makes it behave as a decoder-only model.
-        decoder_output = self.transformer_encoder(src=src_emb,
-                                                  mask=causal_mask,
-                                                  src_key_padding_mask=src_padding_mask,
-                                                  is_causal=True)  # is_causal=True ensures that the attention is masked correctly.
+        # decoder_output = self.transformer_encoder(src=src_emb, src_key_padding_mask=src_padding_mask)
+        # decoder_output = self.transformer_encoder(src=src_emb, src_key_padding_mask=src_padding_mask, mask=torch.nn.Transformer.generate_square_subsequent_mask(tgt_seq_len).to('cuda:0'), is_causal=True)
+        decoder_output = self.transformer_encoder(src=src_emb, src_key_padding_mask=src_padding_mask, mask=causal_mask, is_causal=True)
         
-        # Use the output of the last token for classification
-        # No need for if conditions because the padding is always on the left side in this implementation.
-        last_token_output = decoder_output[:, -1, :]
+        
+        if src_padding_mask is not None:
+            # If right padding, the last token is a pad token, so we need to find the index of the last valid token.
+            sequence_lengths = (~src_padding_mask).sum(dim=1) - 1 # Get the last valid token index because this is a decoder-only model. But do not consider the padding tokens.
+            last_token_output = decoder_output[:, sequence_lengths, :]
+        else:
+            # Use the output of the last token for classification
+            # No need for if conditions because the padding is always on the left side in this implementation.
+            last_token_output = decoder_output[:, -1, :]
         
         if self.prediction_type == 'autoregressive':
-            return decoder_output  # Return the full decoder output for autoregressive tasks. The loss calculation will be handled in the train_epoch function.0    
+            return self.classification_head(decoder_output)  # Return the full decoder output for autoregressive tasks. The loss calculation will be handled in the train_epoch function.0    
         
         next_token_logits = self.classification_head(last_token_output)
         return next_token_logits  # Shape: (batch_size, num_classes)

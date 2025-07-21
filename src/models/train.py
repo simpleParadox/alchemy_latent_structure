@@ -92,7 +92,7 @@ def parse_args():
                         help="Store predictions during training and validation. Default is True.")
     
     # Add new preprocessing arguments
-    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_separate",#_for_autoregressive",
+    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_separate", #_with_autoregressive",
                         help="Directory to look for/store preprocessed data files.")
     parser.add_argument("--use_preprocessed", type=str, default="True", choices=["True", "False"],
                         help="Whether to use preprocessed data if available. Default is True.")
@@ -335,6 +335,10 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             # This is unlike how generally we would train a decoder-only model to do next token prediction (which is shifting the logits by 1).
             loss = criterion(output_logits, target_class_ids) # CrossEntropyLoss expects (N, C) and (N)
             acc, correct, considered = calculate_accuracy_classification(output_logits, target_class_ids)
+            
+            break # Testing.
+            
+            
         elif args.task_type == "classification_multi_label":
             
             if args.prediction_type == "autoregressive":

@@ -1180,13 +1180,13 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, sos_toke
     # Use left-padding for decoder models, right-padding for encoder models
     if model_architecture == "decoder":
         # Left-padding for decoder models
-        encoder_inputs = [torch.cat([torch.tensor([sos_token_id], dtype=seq.dtype), seq]) for seq in encoder_inputs] # First prepend the SOS token.
+        # encoder_inputs = [torch.cat([torch.tensor([sos_token_id], dtype=seq.dtype), seq]) for seq in encoder_inputs] # First prepend the SOS token.
         max_len = max(len(seq) for seq in encoder_inputs)
         
         padded_sequences = []
         for seq in encoder_inputs:
             num_pads = max_len - len(seq)
-            padded_seq = torch.cat([torch.full((num_pads,), pad_token_id, dtype=seq.dtype), seq])
+            padded_seq = torch.cat([seq, torch.full((num_pads,), pad_token_id, dtype=seq.dtype)])
             padded_sequences.append(padded_seq)
         padded_encoder_inputs = torch.stack(padded_sequences)
     else:
