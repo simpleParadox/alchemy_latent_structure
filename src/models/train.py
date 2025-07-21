@@ -313,7 +313,7 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
                 output_logits = model(encoder_input_ids, decoder_input_ids)
                 
                 # The criterion will automatically ignore pad_token_id because it was initialized with ignore_index.
-                # Also, for the shapes, look at Karpahty's video on implementing GPT from scratch.
+                # Also, for the matrix shapes, look at Karpahty's video on implementing GPT from scratch.
                 loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1)) # Reshaping such that the output_logits is a 2d tensor of shape (batch_size * seq_len, vocab_size) and decoder_target_ids is a 1d tensor of shape (batch_size * seq_len).
                 
                 acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id, eos_token_id=None)

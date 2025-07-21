@@ -188,6 +188,7 @@ class StoneStateClassifier(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
 
         self.classification_head = nn.Linear(emb_size, num_classes)
+        self.max_len = max_len  # Store max_len for positional encoding
 
     def forward(self, src: torch.Tensor, src_padding_mask: torch.Tensor = None) -> torch.Tensor:
         """
@@ -239,6 +240,7 @@ class StoneStateClassifier(nn.Module):
 class StoneStateDecoderClassifier(nn.Module):
     """
     A Transformer-based decoder-only model for classification.
+    This implementation uses TransformerEncoder layers with a causal mask for efficiency.
     """
     def __init__(self, num_decoder_layers: int, emb_size: int, nhead: int,
                  src_vocab_size: int, num_classes: int,
@@ -251,10 +253,11 @@ class StoneStateDecoderClassifier(nn.Module):
         self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_len)
 
-        decoder_layer = nn.TransformerDecoderLayer(d_model=emb_size, nhead=nhead,
+        # Use TransformerEncoderLayer for a more efficient decoder-only implementation
+        encoder_layer = nn.TransformerEncoderLayer(d_model=emb_size, nhead=nhead,
                                                    dim_feedforward=dim_feedforward, dropout=dropout,
                                                    batch_first=True)
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_decoder_layers)
 
         self.classification_head = nn.Linear(emb_size, num_classes)
         self.max_len = max_len
@@ -283,25 +286,18 @@ class StoneStateDecoderClassifier(nn.Module):
         src_emb_pe = self.positional_encoding(src_emb_permuted)
         src_emb = src_emb_pe.permute(1, 0, 2)
 
-        # Create causal mask
+        # Create causal mask for self-attention
         tgt_seq_len = src.size(1)
         causal_mask = self._generate_causal_mask(tgt_seq_len, src.device)
 
-        # The nn.TransformerDecoder expects a 'memory' tensor from the encoder.
-        # To make it a decoder-only model, we pass the source embeddings as both
-        # the target and the memory.
-        decoder_output = self.transformer_decoder(tgt=src_emb, memory=src_emb,
-                                                  tgt_mask=causal_mask,
-                                                  tgt_key_padding_mask=src_padding_mask,
-                                                  memory_key_padding_mask=src_padding_mask)
+        # Pass through the transformer encoder layers with a causal mask
+        # This makes it behave as a decoder-only model.
+        decoder_output = self.transformer_encoder(src=src_emb,
+                                                  mask=causal_mask,
+                                                  src_key_padding_mask=src_padding_mask,
+                                                  is_causal=True)  # is_causal=True ensures that the attention is masked correctly.
         
         # Use the output of the last token for classification
-        # We need to find the last non-padded token for each sequence
-        # if src_padding_mask is not None:
-        #     sequence_lengths = (~src_padding_mask).sum(dim=1) - 1 # Get the last valid token index because this is a decoder-only model. But do not consider the padding tokens.
-        #     batch_indices = torch.arange(src.size(0), device=src.device)
-        #     last_token_output = decoder_output[batch_indices, sequence_lengths]
-        # else:
         # No need for if conditions because the padding is always on the left side in this implementation.
         last_token_output = decoder_output[:, -1, :]
         
@@ -351,13 +347,11 @@ class StoneStateDecoderClassifier(nn.Module):
             tgt_emb_pe = self.positional_encoding(tgt_emb_permuted)
             tgt_emb = tgt_emb_pe.permute(1, 0, 2)
 
-            # Pass through the decoder. For a decoder-only model, 'tgt' is used as 'memory'.
-            decoder_output = self.transformer_decoder(
-                tgt=tgt_emb, 
-                memory=tgt_emb, 
-                tgt_mask=causal_mask,
-                tgt_key_padding_mask=tgt_padding_mask,
-                memory_key_padding_mask=tgt_padding_mask
+            # Pass through the transformer encoder with a causal mask
+            decoder_output = self.transformer_encoder(
+                src=tgt_emb,
+                mask=causal_mask,
+                src_key_padding_mask=tgt_padding_mask
             )
             
             # Get the logits for the last token logits only.
