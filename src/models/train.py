@@ -336,7 +336,6 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             loss = criterion(output_logits, target_class_ids) # CrossEntropyLoss expects (N, C) and (N)
             acc, correct, considered = calculate_accuracy_classification(output_logits, target_class_ids)
             
-            break # Testing.
             
             
         elif args.task_type == "classification_multi_label":
