@@ -34,9 +34,9 @@ def parse_args():
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
     parser.add_argument("--task_type", type=str, default="classification", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
-    parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
+    parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1.json",
                         help="Path to the training JSON data file.")
-    parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1.json",
+    parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_5_qhop_1.json",
                         help="Path to the validation JSON data file (optional).")
     parser.add_argument("--val_split", type=float, default=None,
                         help="Validation split ratio (e.g., 0.1 for 10%%). If provided, validation set will be created from training data instead of loading separate file. Default is None.")
@@ -92,7 +92,7 @@ def parse_args():
                         help="Store predictions during training and validation. Default is True.")
     
     # Add new preprocessing arguments
-    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_separate", #_with_autoregressive",
+    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_separate_with_autoregressive",
                         help="Directory to look for/store preprocessed data files.")
     parser.add_argument("--use_preprocessed", type=str, default="True", choices=["True", "False"],
                         help="Whether to use preprocessed data if available. Default is True.")
@@ -824,10 +824,12 @@ def main():
     # Doing some changes to the sequence length based on the training data. The default sequence length is 2048 but
     # if the sequence length is longer than that, we will double the max_seq_len.
     max_length = max(len(item['encoder_input_ids']) for item in train_dataset)
+    all_lengths = [len(item['encoder_input_ids']) for item in train_dataset]
     print(f"Maximum sequence length in training data: {max_length}")
     if max_length > args.max_seq_len:
         print(f"Maximum sequence length {max_length} exceeds args.max_seq_len {args.max_seq_len}. Adjusting args.max_seq_len to be double than max_length.")
-        args.max_seq_len *= 2
+        print("Truncation will be applied to sequences longer than args.max_seq_len.")
+        # args.max_seq_len *= 2
         print(f"Adjusted args.max_seq_len: {args.max_seq_len}")
     else:
         print(f"Maximum sequence length {max_length} is within args.max_seq_len {args.max_seq_len}. No adjustment needed.")
@@ -886,7 +888,8 @@ def main():
     # Create data loaders
     custom_collate_train = partial(collate_fn, pad_token_id=pad_token_id, eos_token_id = eos_token_id, 
                                    task_type=args.task_type, model_architecture=args.model_architecture, 
-                                   sos_token_id=sos_token_id, prediction_type=args.prediction_type)
+                                   sos_token_id=sos_token_id, prediction_type=args.prediction_type,
+                                   max_seq_len=args.max_seq_len)
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -900,7 +903,8 @@ def main():
     if val_dataset is not None:
         custom_collate_val = partial(collate_fn, pad_token_id=pad_token_id, eos_token_id = eos_token_id, 
                                      task_type=args.task_type, model_architecture=args.model_architecture, 
-                                     sos_token_id=sos_token_id, prediction_type=args.prediction_type)
+                                     sos_token_id=sos_token_id, prediction_type=args.prediction_type,
+                                     max_seq_len=args.max_seq_len)
         val_dataloader = DataLoader(
             val_dataset,
             batch_size=args.batch_size,
