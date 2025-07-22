@@ -1165,7 +1165,7 @@ class AlchemyDataset(Dataset):
         return result
 
 def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, sos_token_id: int, eos_token_id: int, task_type: str = "seq2seq", model_architecture: str = "encoder", prediction_type: str = None,
-               dataset=None, max_seq_len=2048) -> Dict[str, torch.Tensor]:
+               dataset=None, max_seq_len=2048, truncate=False) -> Dict[str, torch.Tensor]:
     """
     Collates data samples into a batch.
     Args:
@@ -1179,7 +1179,7 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, sos_toke
     
     
     # Truncate sequences if they exceed max_seq_len
-    if max_seq_len > 0:
+    if truncate:
         encoder_inputs = [seq[:max_seq_len] for seq in encoder_inputs]
     
     # Use right-padding for both encoder and decoder models.

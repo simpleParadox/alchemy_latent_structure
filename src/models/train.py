@@ -52,7 +52,7 @@ def parse_args():
                         help="Maximum sequence length for the model.")
     parser.add_argument("--epochs", type=int, default=60,
                         help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=256,
+    parser.add_argument("--batch_size", type=int, default=32,
                         help="Batch size for training and validation.")
     parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
@@ -108,6 +108,10 @@ def parse_args():
                         help="Whether the dataset is a held-out color experiment. Default is True.")
     parser.add_argument("--prediction_type", type=str, default="feature", choices=["default", "feature", "autoregressive"],
                         help="Type of prediction: 'default' for standard full stone state classification, 'feature' for feature-wise classification, 'autoregressive' for autoregressive generation.")
+
+
+    parser.add_argument("--use_truncation", type=str, default="True", choices=["True", "False"],
+                        help="Whether to truncate sequences longer than max_seq_len. Default is True.")
     
     return parser.parse_args()
 
@@ -823,13 +827,18 @@ def main():
    
     # Doing some changes to the sequence length based on the training data. The default sequence length is 2048 but
     # if the sequence length is longer than that, we will double the max_seq_len.
+    args.use_truncation = str(args.use_truncation) == 'True'  # Convert to boolean
+
     max_length = max(len(item['encoder_input_ids']) for item in train_dataset)
-    all_lengths = [len(item['encoder_input_ids']) for item in train_dataset]
+    # all_lengths = [len(item['encoder_input_ids']) for item in train_dataset]
     print(f"Maximum sequence length in training data: {max_length}")
     if max_length > args.max_seq_len:
-        print(f"Maximum sequence length {max_length} exceeds args.max_seq_len {args.max_seq_len}. Adjusting args.max_seq_len to be double than max_length.")
-        print("Truncation will be applied to sequences longer than args.max_seq_len.")
-        # args.max_seq_len *= 2
+        if args.use_truncation:
+            print("Truncation will be applied to sequences longer than args.max_seq_len.")
+            print("Using truncation as per args.use_truncation.")
+        else:
+            print("Increasing args.max_seq_len to accommodate longer sequences without truncation.")
+            args.max_seq_len *= 2
         print(f"Adjusted args.max_seq_len: {args.max_seq_len}")
     else:
         print(f"Maximum sequence length {max_length} is within args.max_seq_len {args.max_seq_len}. No adjustment needed.")
@@ -889,7 +898,7 @@ def main():
     custom_collate_train = partial(collate_fn, pad_token_id=pad_token_id, eos_token_id = eos_token_id, 
                                    task_type=args.task_type, model_architecture=args.model_architecture, 
                                    sos_token_id=sos_token_id, prediction_type=args.prediction_type,
-                                   max_seq_len=args.max_seq_len)
+                                   max_seq_len=args.max_seq_len, truncate=args.use_truncation)
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -904,10 +913,10 @@ def main():
         custom_collate_val = partial(collate_fn, pad_token_id=pad_token_id, eos_token_id = eos_token_id, 
                                      task_type=args.task_type, model_architecture=args.model_architecture, 
                                      sos_token_id=sos_token_id, prediction_type=args.prediction_type,
-                                     max_seq_len=args.max_seq_len)
+                                     max_seq_len=args.max_seq_len, truncate=args.use_truncation)
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=args.batch_size,
+            batch_size=args.batch_size * 2,
             shuffle=False,
             collate_fn=custom_collate_val,
             num_workers=args.num_workers
