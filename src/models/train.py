@@ -916,7 +916,7 @@ def main():
                                      max_seq_len=args.max_seq_len, truncate=args.use_truncation)
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=args.batch_size * 2,
+            batch_size=args.batch_size,
             shuffle=False,
             collate_fn=custom_collate_val,
             num_workers=args.num_workers
