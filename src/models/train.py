@@ -34,9 +34,9 @@ def parse_args():
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
     parser.add_argument("--task_type", type=str, default="classification", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
-    parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1.json",
+    parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
                         help="Path to the training JSON data file.")
-    parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_5_qhop_1.json",
+    parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1.json",
                         help="Path to the validation JSON data file (optional).")
     parser.add_argument("--val_split", type=float, default=None,
                         help="Validation split ratio (e.g., 0.1 for 10%%). If provided, validation set will be created from training data instead of loading separate file. Default is None.")
@@ -52,7 +52,7 @@ def parse_args():
                         help="Maximum sequence length for the model.")
     parser.add_argument("--epochs", type=int, default=60,
                         help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=32,
+    parser.add_argument("--batch_size", type=int, default=96,
                         help="Batch size for training and validation.")
     parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
@@ -92,7 +92,7 @@ def parse_args():
                         help="Store predictions during training and validation. Default is True.")
     
     # Add new preprocessing arguments
-    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_separate_with_autoregressive",
+    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_separate",
                         help="Directory to look for/store preprocessed data files.")
     parser.add_argument("--use_preprocessed", type=str, default="True", choices=["True", "False"],
                         help="Whether to use preprocessed data if available. Default is True.")
@@ -108,7 +108,12 @@ def parse_args():
                         help="Whether the dataset is a held-out color experiment. Default is True.")
     parser.add_argument("--prediction_type", type=str, default="feature", choices=["default", "feature", "autoregressive"],
                         help="Type of prediction: 'default' for standard full stone state classification, 'feature' for feature-wise classification, 'autoregressive' for autoregressive generation.")
-
+    
+    
+    parser.add_argument("--override_num_classes", type=int, default=None,
+                        help="Override the number of classes for classification tasks. If None, will use dataset's class count.")
+    
+    
 
     parser.add_argument("--use_truncation", type=str, default="True", choices=["True", "False"],
                         help="Whether to truncate sequences longer than max_seq_len. Default is True.")
@@ -888,7 +893,11 @@ def main():
         print(f"Target (Output) Vocabulary size: {tgt_vocab_size}")
         print(f"SOS ID: {sos_token_id}, EOS ID: {eos_token_id}")
     elif args.task_type == "classification":
-        num_classes = len(full_dataset.stone_state_to_id)  # Based on output stone states
+        if args.override_num_classes is None:
+            num_classes = len(full_dataset.stone_state_to_id)  # Based on output stone states
+        else:
+            print(f"override_num_classes is set. Using a value of {args.override_num_classes} for classification.")
+            num_classes = args.override_num_classes
         print(f"Number of classes (Stone States): {num_classes}")
     elif args.task_type == "classification_multi_label":
         num_output_features = full_dataset.num_output_features
