@@ -174,7 +174,8 @@ class StoneStateClassifier(nn.Module):
     def __init__(self, num_encoder_layers: int, emb_size: int, nhead: int,
                  src_vocab_size: int, num_classes: int,
                  dim_feedforward: int = 512, dropout: float = 0.1,
-                 max_len: int = 5000): # Added max_len for PositionalEncoding consistency
+                 max_len: int = 5000, pooling_strategy='global', item_sep_token_id=None,
+                 io_sep_token_id=None): # Added max_len for PositionalEncoding consistency
         super(StoneStateClassifier, self).__init__()
         self.emb_size = emb_size
         self.architecture = "encoder"  # Add architecture attribute
@@ -189,6 +190,39 @@ class StoneStateClassifier(nn.Module):
 
         self.classification_head = nn.Linear(emb_size, num_classes)
         self.max_len = max_len  # Store max_len for positional encoding
+        self.pooling_strategy = pooling_strategy  # Store pooling strategy
+        self.item_sep_token = item_sep_token_id
+        self.io_sep_token_id = io_sep_token_id
+        
+    def _global_pooling(self, transformer_output: torch.Tensor, src_padding_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Applies global mean pooling over the sequence length, considering padding.
+        Args:
+            transformer_output: Output from the transformer encoder, shape (batch_size, src_seq_len, emb_size)
+            src_padding_mask: ByteTensor mask for src keys per batch, shape (batch_size, src_seq_len)
+        Returns:
+            Pooled output tensor of shape (batch_size, emb_size).
+        """
+        if src_padding_mask is not None:
+                # NOTE: What this essentially does is sums the embeddings of non-padded tokens and divides by the number of non-padded tokens.
+                # Create a mask to zero out padded tokens in transformer_output
+                # expanded_padding_mask: (batch_size, src_seq_len, 1), True for pad
+                expanded_padding_mask = src_padding_mask.unsqueeze(-1).expand_as(transformer_output)
+                masked_transformer_output = transformer_output.masked_fill(expanded_padding_mask, 0.0)
+                
+                # Sum the embeddings of non-padded tokens
+                summed_output = masked_transformer_output.sum(dim=1) # (batch_size, emb_size)
+                
+                # Count the number of non-padded tokens for each sequence
+                # actual_lengths: (batch_size, 1)
+                actual_lengths = (~src_padding_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)
+                
+                pooled_output = summed_output / actual_lengths # (batch_size, emb_size). Perform mean pooling over the sequence length, considering padding.
+        else:
+            # No padding mask provided, so perform a simple mean pool
+            pooled_output = transformer_output.mean(dim=1)
+        
+        return pooled_output  # Shape: (batch_size, emb_size)
 
     def forward(self, src: torch.Tensor, src_padding_mask: torch.Tensor = None) -> torch.Tensor:
         """
@@ -213,25 +247,65 @@ class StoneStateClassifier(nn.Module):
         # src_key_padding_mask needs to be (batch_size, src_seq_len) where True means pad
         transformer_output = self.transformer_encoder(src_emb, src_key_padding_mask=src_padding_mask)
         # transformer_output: (batch_size, src_seq_len, emb_size)
-
-        # Mean pooling over the sequence length, considering padding
-        if src_padding_mask is not None:
-            # Create a mask to zero out padded tokens in transformer_output
-            # expanded_padding_mask: (batch_size, src_seq_len, 1), True for pad
-            expanded_padding_mask = src_padding_mask.unsqueeze(-1).expand_as(transformer_output)
-            masked_transformer_output = transformer_output.masked_fill(expanded_padding_mask, 0.0)
+        
+        
+        if self.pooling_strategy == 'global':
             
-            # Sum the embeddings of non-padded tokens
-            summed_output = masked_transformer_output.sum(dim=1) # (batch_size, emb_size)
+            # Apply global mean pooling
+            pooled_output = self._global_pooling(transformer_output, src_padding_mask)
             
-            # Count the number of non-padded tokens for each sequence
-            # actual_lengths: (batch_size, 1)
-            actual_lengths = (~src_padding_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)
+        elif self.pooling_strategy == 'query_only':
+            # First find the last non-padding token in each sequence. This will give us the sequence length.
+            if src_padding_mask is not None:
+                # If right padding, the last token is a pad token, so we need to find the index of the last valid token.
+                sequence_lengths = (~src_padding_mask).sum(dim=1) - 1 # Get the last valid token index.
+                # Now for each sequence in the batch, we find the index of the last 'item_separator' token.
+                assert self.item_sep_token is not None, "item_sep_token must be provided for 'query_only' strategy."
+                
+                # Find the positions of item_sep_token_id (marks start of query)
+                # Find query tokens using for loop (easier to understand)
+                pooled_outputs = []
+                for i in range(src.size(0)):  # For each sequence in the batch
+                    seq = src[i]
+                    
+                    # Find the last occurrence of item_sep_token_id
+                    item_sep_positions = (seq == self.item_sep_token).nonzero(as_tuple=True)[0]
+                    if len(item_sep_positions) == 0:
+                        # Fallback to last token if no item separator found
+                        pooled_outputs.append(transformer_output[i, -1, :])
+                        continue
+                    
+                    last_item_sep_pos = item_sep_positions[-1].item()
+                    
+                    # Find the last occurrence of io_sep_token_id
+                    io_sep_positions = (seq == self.io_sep_token_id).nonzero(as_tuple=True)[0]
+                    if len(io_sep_positions) == 0:
+                        # Fallback to last token if no io separator found
+                        pooled_outputs.append(transformer_output[i, -1, :])
+                        continue
+                    
+                    last_io_sep_pos = io_sep_positions[-1].item()
+                    
+                    # Extract query tokens (between item_sep and io_sep)
+                    query_start = last_item_sep_pos + 1
+                    query_end = last_io_sep_pos
+                    
+                    if query_start >= query_end:
+                        # Invalid query region, fallback to last token
+                        pooled_outputs.append(transformer_output[i, -1, :])
+                    else:
+                        # Average the query token embeddings
+                        query_embeddings = transformer_output[i, query_start:query_end, :]
+                        pooled_outputs.append(query_embeddings.mean(dim=0))
+                
+                pooled_output = torch.stack(pooled_outputs)  # (batch_size, emb_size)
+            else:
+                print("Warning: src_padding_mask is None. Using mean pooling over the entire sequence.")
+                pooled_output = self._global_pooling(transformer_output, src_padding_mask=src_padding_mask)
             
-            pooled_output = summed_output / actual_lengths # (batch_size, emb_size). Perform mean pooling over the sequence length, considering padding.
         else:
-            # No padding mask provided, so perform a simple mean pool
-            pooled_output = transformer_output.mean(dim=1) # (batch_size, emb_size). Mean pooling over the sequence length.
+            raise ValueError(f"Unknown pooling strategy: {self.pooling_strategy}. Use 'global' or 'query_only'.")
+        
 
         # Pass pooled output through classification head
         logits = self.classification_head(pooled_output) # (batch_size, num_classes)
@@ -245,11 +319,12 @@ class StoneStateDecoderClassifier(nn.Module):
     def __init__(self, num_decoder_layers: int, emb_size: int, nhead: int,
                  src_vocab_size: int, num_classes: int,
                  dim_feedforward: int = 512, dropout: float = 0.1,
-                max_len: int = 5000, prediction_type=None):
+                max_len: int = 5000, prediction_type=None, padding_side: str = "left"):
         super(StoneStateDecoderClassifier, self).__init__()
         self.emb_size = emb_size
         self.architecture = "decoder"  # Add architecture attribute
         self.prediction_type = prediction_type  # 'autoregressive' or 'feature'.
+        self.padding_side = padding_side  # 'left' or 'right' - decoder models typically use left padding
         self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_len)
 
@@ -277,6 +352,7 @@ class StoneStateDecoderClassifier(nn.Module):
         Args:
             src: source sequence, shape (batch_size, src_seq_len)
             src_padding_mask: the ByteTensor mask for src keys per batch, shape (batch_size, src_seq_len)
+                              True values indicate padding tokens.
         Returns:
             Output tensor of shape (batch_size, num_classes) representing logits.
         """
@@ -287,31 +363,45 @@ class StoneStateDecoderClassifier(nn.Module):
         src_emb = src_emb_pe.permute(1, 0, 2)
 
         # Create causal mask for self-attention
-        tgt_seq_len = src.size(1)
-        # causal_mask = self._generate_causal_mask(tgt_seq_len, src.device)
-        
-        causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt_seq_len).to(src.device)
+        # Note: We create the mask for the full sequence length (including padding).
+        # The padding mask will handle masking out padding tokens separately.
+        # PyTorch's attention mechanism combines both masks correctly.
+        seq_len = src.size(1)
+        causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(seq_len).to(src.device)
 
-        # Pass through the transformer encoder layers with a causal mask
-        # This makes it behave as a decoder-only model.
-        # decoder_output = self.transformer_encoder(src=src_emb, src_key_padding_mask=src_padding_mask)
-        # decoder_output = self.transformer_encoder(src=src_emb, src_key_padding_mask=src_padding_mask, mask=torch.nn.Transformer.generate_square_subsequent_mask(tgt_seq_len).to('cuda:0'), is_causal=True)
-        decoder_output = self.transformer_encoder(src=src_emb, src_key_padding_mask=src_padding_mask, mask=causal_mask, is_causal=True)
+        # Pass through the transformer encoder layers with causal mask
+        # The combination of causal_mask and src_padding_mask ensures:
+        # 1. No attention to future positions (causal_mask)
+        # 2. No attention to padding tokens (src_padding_mask)
+        decoder_output = self.transformer_encoder(
+            src=src_emb, 
+            mask=causal_mask, 
+            src_key_padding_mask=src_padding_mask,
+            is_causal=True
+        )
         
-        
+        # For classification, we need the representation of the last valid token
         if src_padding_mask is not None:
-            # If right padding, the last token is a pad token, so we need to find the index of the last valid token.
-            sequence_lengths = (~src_padding_mask).sum(dim=1) - 1 # Get the last valid token index because this is a decoder-only model. But do not consider the padding tokens.
-            # Use the indices of the last valid token to get the last token output.
-            last_token_output = decoder_output[torch.arange(decoder_output.size(0)), sequence_lengths, :]
+            if self.padding_side == "left":
+                # For left-padding, the last token (rightmost) is always the last valid token
+                # since padding is on the left side
+                last_token_output = decoder_output[:, -1, :]
+            else:
+                # For right-padding, find the last valid (non-padding) token for each sequence
+                sequence_lengths = (~src_padding_mask).sum(dim=1) - 1  # -1 for 0-based indexing
+                # Clamp to ensure we don't go below 0 for edge cases
+                sequence_lengths = torch.clamp(sequence_lengths, min=0)
+                # Extract the last valid token's representation for each sequence
+                last_token_output = decoder_output[torch.arange(decoder_output.size(0)), sequence_lengths, :]
         else:
-            # Use the output of the last token for classification
-            # No need for if conditions because the padding is always on the left side in this implementation.
+            # No padding mask, use the last token
             last_token_output = decoder_output[:, -1, :]
         
         if self.prediction_type == 'autoregressive':
-            return self.classification_head(decoder_output)  # Return the full decoder output for autoregressive tasks. The loss calculation will be handled in the train_epoch function.0    
+            # Return full sequence output for autoregressive tasks
+            return self.classification_head(decoder_output)
         
+        # Return classification logits based on the last valid token
         next_token_logits = self.classification_head(last_token_output)
         return next_token_logits  # Shape: (batch_size, num_classes)
     
@@ -360,16 +450,21 @@ class StoneStateDecoderClassifier(nn.Module):
                 src=tgt_emb,
                 mask=causal_mask,
                 src_key_padding_mask=tgt_padding_mask,
-                is_causal=True  # This ensures the model behaves like a decoder-only model but this is a HINT. The causal_mask must still be provided.
+                is_causal=True
             )
             
-            if src_padding_mask is not None:
-                # If right padding, the last token is a pad token, so we need to find the index of the last valid token.
-                sequence_lengths = (~tgt_padding_mask).sum(dim=1) - 1 # Get the last valid token index because this is a decoder-only model. But do not consider the padding tokens.
-                last_token_output = decoder_output[:, sequence_lengths, :]
+            # Find the last valid token for next token prediction
+            if tgt_padding_mask is not None:
+                if self.padding_side == "left":
+                    # For left-padding, the last token is always the rightmost position
+                    last_token_output = decoder_output[:, -1, :]
+                else:
+                    # For right-padding, find the last valid (non-padding) token for each sequence
+                    sequence_lengths = (~tgt_padding_mask).sum(dim=1) - 1
+                    sequence_lengths = torch.clamp(sequence_lengths, min=0)
+                    last_token_output = decoder_output[torch.arange(decoder_output.size(0)), sequence_lengths, :]
             else:
-                # Use the output of the last token for classification
-                # No need for if conditions because the padding is always on the left side in this implementation.
+                # No padding, use the last token
                 last_token_output = decoder_output[:, -1, :]
             
 
@@ -523,9 +618,18 @@ def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: 
     
     return model
 
-def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048, prediction_type=None):
+def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048, prediction_type=None, padding_side: str = "left"):
     """
     Creates a StoneStateDecoderClassifier model based on a configuration name.
+    
+    Args:
+        config_name (str): Name of the configuration ('tiny', 'xsmall', 'small', 'medium', 'large').
+        src_vocab_size (int): Source vocabulary size.
+        num_classes (int): Number of classes.
+        device (str): Device to move the model to ('cpu', 'cuda').
+        max_len (int): Maximum sequence length for positional encoding.
+        prediction_type (str): Type of prediction ('autoregressive' or 'feature').
+        padding_side (str): Padding side ('left' or 'right'). Decoder models typically use 'left'.
     """
     configs = {
         "tiny": { 
@@ -563,7 +667,8 @@ def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_c
         dim_feedforward=config["dim_feedforward"],
         dropout=config["dropout"],
         max_len=max_len,
-        prediction_type=prediction_type 
+        prediction_type=prediction_type,
+        padding_side=padding_side
     )
     
     model.to(device)

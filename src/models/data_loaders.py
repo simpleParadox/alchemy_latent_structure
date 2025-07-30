@@ -379,7 +379,7 @@ class AlchemyDataset(Dataset):
                  chunk_size: int = 10000,
                  val_split: Optional[float] = None,
                  val_split_seed: int = 42,
-                 preprocessed_dir: str = "src/data/preprocessed", 
+                 preprocessed_dir: str = "src/data/preprocessed_separate", 
                  use_preprocessed: bool = True,
                  input_format: Optional[str] = None,
                  output_format: Optional[str] = None,

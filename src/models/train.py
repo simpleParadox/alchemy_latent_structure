@@ -113,7 +113,8 @@ def parse_args():
     parser.add_argument("--override_num_classes", type=int, default=None,
                         help="Override the number of classes for classification tasks. If None, will use dataset's class count.")
     
-    
+    parser.add_argument("--pooling_strategy", type=str, default="global", choices=["global", "query_only"],
+                        help="Pooling strategy for encoder-only models: 'global' for global average pooling, 'query_only' for pooling only over query tokens. Default is 'global'.")
 
     parser.add_argument("--use_truncation", type=str, default="True", choices=["True", "False"],
                         help="Whether to truncate sequences longer than max_seq_len. Default is True.")
@@ -400,7 +401,7 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             
                 
             # Average the loss across all groups
-            loss = total_loss / num_losses
+            loss = total_loss # / num_losses
                 
             # acc, correct, considered = calculate_accuracy_multilabel(output_logits, target_feature_vector)
             
@@ -958,7 +959,10 @@ def main():
                 src_vocab_size=src_vocab_size,
                 num_classes=num_classes,
                 device=accelerator.device,
-                max_len=args.max_seq_len
+                max_len=args.max_seq_len,
+                io_sep_token_id=full_dataset.io_sep_token_id if hasattr(full_dataset, 'io_sep_token_id') else None,
+                item_step_token_id=full_dataset.item_step_token_id if hasattr(full_dataset, 'item_step_token_id') else None,
+                pooling_strategy=args.pooling_strategy
             )
         criterion = nn.CrossEntropyLoss(reduction=args.multi_label_reduction) # Use CrossEntropyLoss for classification
     elif args.task_type == "classification_multi_label":
@@ -979,9 +983,12 @@ def main():
                 src_vocab_size=src_vocab_size,
                 num_classes=num_output_features, # Output layer size is num_output_features
                 device=accelerator.device,
-                max_len=args.max_seq_len
+                max_len=args.max_seq_len,
+                io_sep_token_id=full_dataset.io_sep_token_id if hasattr(full_dataset, 'io_sep_token_id') else None,
+                item_step_token_id=full_dataset.item_step_token_id if hasattr(full_dataset, 'item_step_token_id') else None,
+                pooling_strategy=args.pooling_strategy
             )
-        criterion = nn.BCEWithLogitsLoss(reduction=args.multi_label_reduction) # Use BCEWithLogitsLoss for multi-label
+        criterion = nn.CrossEntropyLoss(reduction=args.multi_label_reduction) # Use BCEWithLogitsLoss for multi-label
     else:
         raise ValueError(f"Unknown task_type: {args.task_type}")
     
