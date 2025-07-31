@@ -555,7 +555,8 @@ def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_si
     
     return model
 
-def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048):
+def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048,
+                            io_sep_token_id=None, item_sep_token_id=None, pooling_strategy='global'):
     """
     Creates a StoneStateClassifier model based on a configuration name.
     Uses similar encoder configurations as create_transformer_model.
@@ -608,7 +609,10 @@ def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: 
         num_classes=num_classes,
         dim_feedforward=config["dim_feedforward"],
         dropout=config["dropout"],
-        max_len=max_len
+        max_len=max_len,
+        pooling_strategy=pooling_strategy,
+        item_sep_token_id=item_sep_token_id,
+        io_sep_token_id=io_sep_token_id
     )
     
     model.to(device)

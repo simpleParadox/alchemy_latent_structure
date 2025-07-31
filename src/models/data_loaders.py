@@ -1217,8 +1217,9 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, sos_toke
     elif task_type == "classification_multi_label":
         # Target is a multi-hot vector, already a tensor in __getitem__
         # We just need to stack them into a batch tensor.
+        
+        target_feature_vectors = torch.stack([item["target_feature_vector"] for item in batch])
         if model_architecture == "decoder" and prediction_type == 'autoregressive':
-            target_feature_vectors = torch.stack([item["target_feature_vector"] for item in batch])
             target_feature_vectors_autoregressive = [item['target_feature_vector_autoregressive'] for item in batch]
             
             # Append the EOS token to each target feature vector.
