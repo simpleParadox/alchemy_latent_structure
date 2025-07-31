@@ -1036,14 +1036,14 @@ def main():
             elif args.scheduler_type == "exponential":
                 print(f"Scheduler: ExponentialLR, gamma: {args.gamma} (called per epoch)")
         else:
-            print("Scheduler: None")
+            print("Scheduler: ", scheduler)
             
         if args.task_type == "seq2seq":
             print(f"Criterion: CrossEntropyLoss (ignoring PAD_ID: {pad_token_id} for target sequences)")
         elif args.task_type == "classification":
             print(f"Criterion: CrossEntropyLoss (for class predictions)")
         elif args.task_type == "classification_multi_label":
-            print(f"Criterion: BCEWithLogitsLoss (for multi-label feature predictions)")
+            print(f"Criterion: CrossEntropyLoss (for group level multi-class predictions)")
 
     # --- Training Loop ---
     # Extract support and query hop values from train_data_path
