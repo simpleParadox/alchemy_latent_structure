@@ -29,3 +29,6 @@ src/data/preprocessed_separate/
 src/data/preprocessed_separate_with_autoregressive/
 src/tests/
 simple_decoder.py
+*.png
+test_kde_visualization.py
+visualize_encoder_lengths.py

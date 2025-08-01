@@ -961,7 +961,7 @@ def main():
                 device=accelerator.device,
                 max_len=args.max_seq_len,
                 io_sep_token_id=full_dataset.io_sep_token_id if hasattr(full_dataset, 'io_sep_token_id') else None,
-                item_step_token_id=full_dataset.item_step_token_id if hasattr(full_dataset, 'item_step_token_id') else None,
+                item_sep_token_id=full_dataset.item_sep_token_id if hasattr(full_dataset, 'item_sep_token_id') else None,
                 pooling_strategy=args.pooling_strategy
             )
         criterion = nn.CrossEntropyLoss(reduction=args.multi_label_reduction) # Use CrossEntropyLoss for classification
