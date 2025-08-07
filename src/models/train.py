@@ -119,6 +119,8 @@ def parse_args():
     parser.add_argument("--use_truncation", type=str, default="True", choices=["True", "False"],
                         help="Whether to truncate sequences longer than max_seq_len. Default is True.")
     
+    parser.add_argument("--fp16", type=str, default="False", choices=["True", "False"])
+    
     return parser.parse_args()
 
 def calculate_accuracy_seq2seq(predictions, targets, pad_token_id, eos_token_id=None):
@@ -765,7 +767,11 @@ def main():
 
     
     # Initialize Accelerator
-    accelerator = Accelerator()
+    if args.fp16:
+        # Use mixed precision training if specified
+        accelerator = Accelerator(mixed_precision='fp16')
+    else:
+        accelerator = Accelerator()
     
     # Set seed for reproducibility
     set_seed(args.seed)
@@ -841,7 +847,7 @@ def main():
     if max_length > args.max_seq_len:
         if args.use_truncation:
             print("Truncation will be applied to sequences longer than args.max_seq_len.")
-            print("Using truncation as per args.use_truncation.")
+            print("Using truncation as per args.max_seq_len = ", args.max_seq_len)
         else:
             print("Increasing args.max_seq_len to accommodate longer sequences without truncation.")
             args.max_seq_len = max_length
@@ -1000,6 +1006,14 @@ def main():
 
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     
+    # Load adafactor optimizer.
+    # optimizer = optim.Adafactor(
+    #     model.parameters(),
+    #     lr=args.learning_rate,
+    #     weight_decay=args.weight_decay,
+    # )
+    
+    
     use_scheduler = str(args.use_scheduler) == "True" or str(args.use_scheduler) == "true"
     print("Use scheduler: ", use_scheduler)
     scheduler = None
@@ -1084,9 +1098,9 @@ def main():
     for epoch in tqdm(range(args.epochs), disable=not accelerator.is_local_main_process):
         if accelerator.is_local_main_process:
             print(f"--- Epoch {epoch+1}/{args.epochs} ---")
-        
-        train_loss, train_acc = train_epoch(model, train_dataloader, optimizer, criterion, scheduler, accelerator, epoch, pad_token_id, args)
-        
+        with accelerator.autocast():
+            train_loss, train_acc = train_epoch(model, train_dataloader, optimizer, criterion, scheduler, accelerator, epoch, pad_token_id, args)
+            
         if accelerator.is_local_main_process:
             print(f"Epoch {epoch+1} Training Summary: Avg Loss: {train_loss:.4f}, Avg Acc: {train_acc:.4f}")
         
