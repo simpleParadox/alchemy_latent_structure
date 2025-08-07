@@ -844,8 +844,8 @@ def main():
             print("Using truncation as per args.use_truncation.")
         else:
             print("Increasing args.max_seq_len to accommodate longer sequences without truncation.")
-            args.max_seq_len *= 2
-        print(f"Adjusted args.max_seq_len: {args.max_seq_len}")
+            args.max_seq_len = max_length
+            print(f"Adjusted args.max_seq_len: {args.max_seq_len}")
     else:
         print(f"Maximum sequence length {max_length} is within args.max_seq_len {args.max_seq_len}. No adjustment needed.")
 
