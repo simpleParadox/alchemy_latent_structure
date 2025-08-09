@@ -767,12 +767,14 @@ def main():
 
     
     # Initialize Accelerator
+    args.fp16 = str(args.fp16) == 'True'  # Convert to boolean
     if args.fp16:
         # Use mixed precision training if specified
         accelerator = Accelerator(mixed_precision='fp16')
+        print("Using mixed precision training (fp16).")
     else:
         accelerator = Accelerator()
-    
+        print("Using full precision training (fp32).")
     # Set seed for reproducibility
     set_seed(args.seed)
     print("Seed: ", args.seed)
