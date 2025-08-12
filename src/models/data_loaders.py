@@ -1180,7 +1180,9 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, sos_toke
     
     # Truncate sequences if they exceed max_seq_len
     if truncate:
-        encoder_inputs = [seq[:max_seq_len] for seq in encoder_inputs]
+        # truncate from the left side
+        encoder_inputs = [seq[-max_seq_len:] for seq in encoder_inputs]
+        # encoder_inputs = [seq[:max_seq_len] for seq in encoder_inputs]
     
     # Use right-padding for both encoder and decoder models.
     if model_architecture == "decoder":
