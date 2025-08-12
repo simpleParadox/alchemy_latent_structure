@@ -34,9 +34,9 @@ def parse_args():
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
     parser.add_argument("--task_type", type=str, default="classification", choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         help="Type of task: 'seq2seq' for feature-wise prediction, 'classification' for whole state prediction, or 'classification_multi_label' for multi-label feature prediction.")
-    parser.add_argument("--train_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json",
+    parser.add_argument("--train_data_path", type=str, default="src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_1_edges_exp.json",
                         help="Path to the training JSON data file.")
-    parser.add_argument("--val_data_path", type=str, default="src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1.json",
+    parser.add_argument("--val_data_path", type=str, default="src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_1_edges_exp.json",
                         help="Path to the validation JSON data file (optional).")
     parser.add_argument("--val_split", type=float, default=None,
                         help="Validation split ratio (e.g., 0.1 for 10%%). If provided, validation set will be created from training data instead of loading separate file. Default is None.")
@@ -46,13 +46,13 @@ def parse_args():
                         help="Seed value that gets appended to the data path to load the approapriate training / validation.")
     parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"],
                         help="Size of the transformer model.")
-    parser.add_argument("--model_architecture", type=str, default="decoder", choices=["encoder", "decoder"],
+    parser.add_argument("--model_architecture", type=str, default="encoder", choices=["encoder", "decoder"],
                         help="Model architecture: 'encoder' for encoder-only classifier, 'decoder' for decoder-only classifier.")
     parser.add_argument("--max_seq_len", type=int, default=2048, # Max length for support + query + separators
                         help="Maximum sequence length for the model.")
     parser.add_argument("--epochs", type=int, default=60,
                         help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=96,
+    parser.add_argument("--batch_size", type=int, default=256,
                         help="Batch size for training and validation.")
     parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
@@ -92,7 +92,7 @@ def parse_args():
                         help="Store predictions during training and validation. Default is True.")
     
     # Add new preprocessing arguments
-    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_separate",
+    parser.add_argument("--preprocessed_dir", type=str, default="src/data/preprocessed_separate_held_out_exps",
                         help="Directory to look for/store preprocessed data files.")
     parser.add_argument("--use_preprocessed", type=str, default="True", choices=["True", "False"],
                         help="Whether to use preprocessed data if available. Default is True.")
@@ -104,19 +104,19 @@ def parse_args():
     
     parser.add_argument("--save_checkpoints", type=str, default="False", choices=["True", "False"],
                         help="Whether to save model checkpoints during training. Default is True.")
-    parser.add_argument("--is_held_out_color_exp", type=str, default="False", choices=["True", "False"],
+    parser.add_argument("--is_held_out_color_exp", type=str, default="True", choices=["True", "False"],
                         help="Whether the dataset is a held-out color experiment. Default is True.")
-    parser.add_argument("--prediction_type", type=str, default="feature", choices=["default", "feature", "autoregressive"],
+    parser.add_argument("--prediction_type", type=str, default="default", choices=["default", "feature", "autoregressive"],
                         help="Type of prediction: 'default' for standard full stone state classification, 'feature' for feature-wise classification, 'autoregressive' for autoregressive generation.")
     
     
-    parser.add_argument("--override_num_classes", type=int, default=None,
+    parser.add_argument("--override_num_classes", type=int, default=108,
                         help="Override the number of classes for classification tasks. If None, will use dataset's class count.")
     
     parser.add_argument("--pooling_strategy", type=str, default="global", choices=["global", "query_only"],
                         help="Pooling strategy for encoder-only models: 'global' for global average pooling, 'query_only' for pooling only over query tokens. Default is 'global'.")
 
-    parser.add_argument("--use_truncation", type=str, default="True", choices=["True", "False"],
+    parser.add_argument("--use_truncation", type=str, default="False", choices=["True", "False"],
                         help="Whether to truncate sequences longer than max_seq_len. Default is True.")
     
     parser.add_argument("--fp16", type=str, default="False", choices=["True", "False"])
@@ -716,7 +716,7 @@ def main():
     args = parse_args()
    
         
-    args.is_held_out_color_exp = str(args.is_held_out_color_exp) == 'True'  # Convert to boolean
+    args.is_held_out_color_exp = str(args.is_held_out_color_exp) == 'True' or str(args.is_held_out_color_exp) == 'true'  # Convert to boolean 
     if args.is_held_out_color_exp:  
         print("Running held-out color experiment.")
         
@@ -1078,6 +1078,21 @@ def main():
         query_hop = "2"
     
     # Create hierarchical save directory
+    
+    if args.is_held_out_color_exp:
+        # The train_data_path is of the form 'src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_1_edges_exp.json'
+        # You can see that towards the end, there's a '1_edges_exp' part. The number should also be a part of the args.save_dir.
+        # Let's first extract that number and then add it to the args.save_dir using os.path.join.
+        
+        
+        # Extract the held-out color number from the train_data_path
+        held_out_edge_match = re.search(r'_held_out_color_(\d+)_edges_exp', args.train_data_path)
+        if held_out_edge_match:
+            held_out_edge_number = held_out_edge_match.group(1)
+            print(f"Held-out color number extracted: {held_out_edge_number}")
+        args.save_dir = os.path.join(args.save_dir, f"held_out_color_exp")
+        args.save_dir = os.path.join(args.save_dir, f"held_out_edges_{held_out_edge_number}")
+        
     hierarchical_save_dir = os.path.join(
         args.save_dir,
         args.model_size,
