@@ -178,17 +178,18 @@ def is_reverse_trajectory(sample1: Dict, sample2: Dict) -> bool:
     )
 
 
-def generate_held_out_color_pair_data(graph: Dict) -> Dict[str, Any]:
+def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, seed=0) -> Dict[str, Any]:
     """
     Generates a support and query set by holding out one pair of colors.
     The support set contains all transitions for other color pairs, plus one
     example transition from the held-out pair. The query set contains the
     remaining transitions for the held-out pair.
     """
-    # Define the color pairs. This might need to be adjusted if they are not static.
+    # Define the color pairs. This should match with the colors used in the deterministic chemistry graphs.
     color_pairs = [('RED', 'GREEN'), ('PINK', 'CYAN'), ('ORANGE', 'YELLOw')]
     
     # 1. Randomly select one color pair to hold out
+    random.seed(seed)
     held_out_pair = random.choice(color_pairs)
     support_colors = [color for pair in color_pairs if pair != held_out_pair for color in pair]
     
@@ -215,14 +216,14 @@ def generate_held_out_color_pair_data(graph: Dict) -> Dict[str, Any]:
             }
 
             if potion in held_out_pair:
-                held_out_transitions.append((sample_str, sample_info))
+                held_out_transitions.append((sample_str, sample_info)) # This stores the transitions FOR EACH color in the held-out pair
             else:
                 support_transitions.append((sample_str, sample_info))
 
     # Group held-out transitions by the pair of stones they connect
     held_out_stone_pairs = {}
     for s_str, s_info in held_out_transitions:
-        # Create a key that is consistent regardless of direction (start, end) vs (end, start)
+        # Create a key that preserves the direction of the transition
         pair_key = tuple(sorted((s_info["start_node"], s_info["end_node"])))
         if pair_key not in held_out_stone_pairs:
             held_out_stone_pairs[pair_key] = []
@@ -235,14 +236,25 @@ def generate_held_out_color_pair_data(graph: Dict) -> Dict[str, Any]:
     if not held_out_pair_keys:
         print("Warning: No transitions found for the held-out color pair.")
         return {"support": [], "query": []}
-
-    support_example_key = held_out_pair_keys.pop(0)
-    support_example_transitions = held_out_stone_pairs[support_example_key]
     
-    # Add the single held-out example to the main support transitions
+    
+    if len(held_out_pair_keys) < num_held_out_edges:
+        print(f"Warning: Only {len(held_out_pair_keys)} transitions found for the held-out pair, which is less than the requested {num_held_out_edges}.")
+        num_held_out_edges = len(held_out_pair_keys)
+        print(f"Adjusting num_held_out_edges to {num_held_out_edges}.")
+        print("This will result in unexpected behavior if the held-out pair has fewer transitions than requested.")
+    # Get num_hled_out_edges transitions for the held-out pair
+    # The following is a generic way to select the num_held_out_edges transitions for the held-out pair.
+    support_example_keys = held_out_pair_keys[num_held_out_edges:] # Limit to the number of edges to hold out
+    support_example_transitions = []
+    for support_example_key in support_example_keys:
+        support_example_transitions.extend(held_out_stone_pairs[support_example_key])
+    
     support_transitions.extend(support_example_transitions)
+    
 
     # 4. The remaining held-out transitions form the query set
+    held_out_pair_keys = held_out_pair_keys[:num_held_out_edges] # Limit to the number of edges to hold out
     query_transitions = []
     for key in held_out_pair_keys:
         query_transitions.extend(held_out_stone_pairs[key])
@@ -251,6 +263,14 @@ def generate_held_out_color_pair_data(graph: Dict) -> Dict[str, Any]:
     support_samples = [s[0] for s in support_transitions]
     query_samples = [q[0] for q in query_transitions]
     
+    
+    # Check for overlap between support and query samples
+    support_set = set(support_samples)
+    query_set = set(query_samples)
+    overlap = support_set.intersection(query_set)
+    if overlap or len(overlap) > 0:
+        print(f"Warning: Found {len(overlap)} overlapping samples between support and query sets. This should not happen in a well-formed graph.")
+        print(f"Overlapping samples: {overlap}")
     # To maintain consistency with the other function's return type
     return {
         "support": support_samples,
@@ -261,7 +281,7 @@ def generate_held_out_color_pair_data(graph: Dict) -> Dict[str, Any]:
         "query_samples_info": [q[1] for q in query_transitions],
         "held_out_pair": held_out_pair
     }
-
+   
     
 def generate_support_and_query_examples(
     graph: Dict, 
@@ -396,7 +416,7 @@ def main():
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=1000,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=5,
+    parser.add_argument("--support_steps", type=int, default=1,
                         help="Minimum number of transformation steps in each sample")
     parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
@@ -406,12 +426,14 @@ def main():
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
                         help="Process the complete graphs only", default=True)
-    parser.add_argument("--output_dir", default=".",
+    parser.add_argument("--output_dir", default="held_out_exps_generated_data",
                         help="Directory to save the output files. Default is current directory.")
     
     # Add a new argument for your experiment
     parser.add_argument("--held_out_color_exp", action="store_true",
                         help="Generate data for the held-out color pair experiment.", default=True)
+    parser.add_argument("--num_held_out_edges", type=int, default=1,
+                        help="Number of edges to hold out for the held-out color pair experiment. Default is 1.")
 
     args = parser.parse_args()
     
@@ -461,7 +483,7 @@ def main():
         base_train = os.path.splitext(train_output_file)[0]
         ext_train = os.path.splitext(train_output_file)[1]
         if args.held_out_color_exp:
-            train_output_file = f"{base_train}_held_out_color_exp_seed_{args.seed}{ext_train}"
+            train_output_file = f"{base_train}_single_held_out_color_{args.num_held_out_edges}_edges_exp_seed_{args.seed}{ext_train}"
         else:
             train_output_file = f"{base_train}_seed_{args.seed}{ext_train}"
         
@@ -469,7 +491,7 @@ def main():
         base_val = os.path.splitext(val_output_file)[0]
         ext_val = os.path.splitext(val_output_file)[1]
         if args.held_out_color_exp:
-            val_output_file = f"{base_val}_held_out_color_exp_seed_{args.seed}{ext_val}"
+            val_output_file = f"{base_val}_single_held_out_color_{args.num_held_out_edges}_edges_exp_seed_{args.seed}{ext_val}"
         else:
             val_output_file = f"{base_val}_seed_{args.seed}{ext_val}"
         
@@ -491,6 +513,7 @@ def main():
         prefix = "compositional_" if args.support_steps <= args.query_steps else "decompositional_"
         train_output_file = os.path.splitext(output_file)[0] + f"_shop_{support_hop}_qhop_{query_hop}.json"
         train_output_file = os.path.join(os.path.dirname(train_output_file), prefix + os.path.basename(train_output_file))
+        
     
     # Process training episodes
     if train_graphs:
@@ -537,7 +560,7 @@ def main():
                 print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
             
             if args.held_out_color_exp:
-                support_and_query_samples = generate_held_out_color_pair_data(graph)
+                support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=args.seed)
             else:
                 support_and_query_samples = generate_support_and_query_examples(
                     graph, 
@@ -572,7 +595,7 @@ def main():
         # Ensure the output directory exists
         # args.output_dir = os.getcwd() + '/' + args.output_dir if not args.output_dir == '.' else args.output_dir
         # os.makedirs(os.path.dirname(args.output_dir), exist_ok=True)
-        # train_output_file = os.path.join(args.output_dir, train_output_file)
+        train_output_file = os.path.join(args.output_dir, train_output_file)
         with open(train_output_file, 'w') as f:
             json.dump(train_output_data, f)
         
@@ -618,7 +641,7 @@ def main():
             
             
             if args.held_out_color_exp:
-                support_and_query_samples = generate_held_out_color_pair_data(graph)
+                support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges)
             else:
                 support_and_query_samples = generate_support_and_query_examples(
                     graph, 
@@ -644,7 +667,7 @@ def main():
             total_val_samples += support_num_generated + query_num_generated
         
         # Write validation output to JSON file
-        # val_output_file = os.path.join(args.output_dir, val_output_file)
+        val_output_file = os.path.join(args.output_dir, val_output_file)
         with open(val_output_file, 'w') as f:
             json.dump(val_output_data, f)
         

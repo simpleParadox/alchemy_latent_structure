@@ -1007,6 +1007,7 @@ def main():
     print(f"Base learning rate: {args.learning_rate }, Weight decay: {args.weight_decay}")
 
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    print("Using AdamW optimizer.")
     
     # Load adafactor optimizer.
     # optimizer = optim.Adafactor(
@@ -1014,6 +1015,7 @@ def main():
     #     lr=args.learning_rate,
     #     weight_decay=args.weight_decay,
     # )
+    # print("Using Adafactor optimizer.")
     
     
     use_scheduler = str(args.use_scheduler) == "True" or str(args.use_scheduler) == "true"
