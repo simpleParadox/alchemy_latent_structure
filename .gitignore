@@ -33,3 +33,4 @@ simple_decoder.py
 *.png
 test_kde_visualization.py
 visualize_encoder_lengths.py
+saved_models/

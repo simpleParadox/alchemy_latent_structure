@@ -813,6 +813,7 @@ def main():
     
     # Update paths to be absolute
     args.preprocessed_dir = os.path.join(base_path, args.preprocessed_dir)  # Add this line
+    print("Preprocessed directory path: ", args.preprocessed_dir)  # Add this line
     
     if args.task_type == 'classification' and (args.input_format is not None):
         args.output_format = 'stone_states'
@@ -1160,14 +1161,13 @@ def main():
                     checkpoint['stone_state_to_id'] = full_dataset.stone_state_to_id
                     checkpoint['id_to_stone_state'] = full_dataset.id_to_stone_state
                 elif args.task_type == "classification_multi_label":
-                    checkpoint['feature_to_idx_map_input'] = full_dataset.feature_to_idx_map_input
+                    checkpoint['feature_to_idx_map_input'] = full_dataset.feature_tq_idx_map_input
                     checkpoint['feature_to_idx_map_output'] = full_dataset.feature_to_idx_map_output
                     checkpoint['num_output_features'] = full_dataset.num_output_features
                     
                 if args.save_checkpoints:
                     torch.save(checkpoint, model_save_path)
                 print(f"New best validation loss: {best_val_loss:.4f}. Model saved to {model_save_path}")
-                wandb.save(model_save_path) 
         else: 
             if accelerator.is_local_main_process:
                 model_save_path = os.path.join(args.save_dir, f"model_epoch_{epoch+1}_{args.task_type}_{args.model_size}.pt")
