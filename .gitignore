@@ -33,5 +33,9 @@ simple_decoder.py
 *.png
 test_kde_visualization.py
 visualize_encoder_lengths.py
+<<<<<<< HEAD
 *.pkl
 explicit_implicit_icl/
+=======
+saved_models/
+>>>>>>> 03dacc2 (Not saving the models to wandb)
