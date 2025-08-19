@@ -120,6 +120,7 @@ def parse_args():
                         help="Whether to truncate sequences longer than max_seq_len. Default is True.")
     
     parser.add_argument("--fp16", type=str, default="False", choices=["True", "False"])
+
     
     return parser.parse_args()
 
@@ -764,6 +765,7 @@ def main():
             args.way = 'decomposition'
         else:
             args.way = 'equal'
+        
 
     
     # Initialize Accelerator
@@ -785,6 +787,11 @@ def main():
 
     # Initialize wandb only on main process
     if accelerator.is_local_main_process:
+        if args.is_held_out_color_exp:
+            # Get the edges value from ''src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_1_edges_exp.json' from the path.
+            edges_value = args.train_data_path.split('edges_exp.json')[0].split('_')[-1]
+            args.num_held_out_edges = int(edges_value)
+
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
