@@ -1161,7 +1161,7 @@ def main():
                     checkpoint['stone_state_to_id'] = full_dataset.stone_state_to_id
                     checkpoint['id_to_stone_state'] = full_dataset.id_to_stone_state
                 elif args.task_type == "classification_multi_label":
-                    checkpoint['feature_to_idx_map_input'] = full_dataset.feature_tq_idx_map_input
+                    checkpoint['feature_to_idx_map_input'] = full_dataset.feature_to_idx_map_input
                     checkpoint['feature_to_idx_map_output'] = full_dataset.feature_to_idx_map_output
                     checkpoint['num_output_features'] = full_dataset.num_output_features
                     
