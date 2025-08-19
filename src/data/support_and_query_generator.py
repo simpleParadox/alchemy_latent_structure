@@ -12,11 +12,14 @@ import os
 import gzip
 from typing import Dict, List, Tuple, Set, Any, Union
 from tqdm import tqdm
+import pickle
 
 def load_chemistry_graph(file_path: str) -> Dict[str, Dict]:
     """Load and parse the chemistry graph JSON file with multiple episodes.
     Supports both compressed (.gz) and uncompressed JSON files.
     """
+    if file_path.endswith('.pkl') or file_path.endswith('.pickle'):
+       return pickle.load(open(file_path, 'rb')) 
     if file_path.endswith('.gz'):
         with gzip.open(file_path, 'rt', encoding='utf-8') as f:
             return json.load(f)
@@ -181,7 +184,7 @@ def is_reverse_trajectory(sample1: Dict, sample2: Dict) -> bool:
 def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, seed=0) -> Dict[str, Any]:
     """
     Generates a support and query set by holding out one pair of colors.
-    The support set contains all transitions for other color pairs, plus one
+    The support set contains all transitions for other color pairs, plus 'num_held_out_edges'
     example transition from the held-out pair. The query set contains the
     remaining transitions for the held-out pair.
     """
@@ -410,13 +413,14 @@ def calculate_max_unique_samples(graph: Dict, max_steps: int) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate samples from chemistry graph")
-    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/deterministic_chemistries_167424_80_unique_stones.json.gz",
-                        help="Path to the chemistry graph JSON file")
+    # parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/deterministic_chemistries_167424_80_unique_stones_aligned_stone.json.gz",
+    #                     help="Path to the chemistry graph JSON file")
+    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/enhanced_chemistries_with_transitions.pkl")
     parser.add_argument("--output", default="chemistry_samples_167424_80_unique_stones.json",
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=1000,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=1,
+    parser.add_argument("--support_steps", type=int, default=2,
                         help="Minimum number of transformation steps in each sample")
     parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
@@ -425,13 +429,13 @@ def main():
     parser.add_argument("--create_val_from_train", action="store_true",
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
-                        help="Process the complete graphs only", default=True)
-    parser.add_argument("--output_dir", default="held_out_exps_generated_data",
-                        help="Directory to save the output files. Default is current directory.")
+                        help="Process the complete graphs only", default=False)
+    parser.add_argument("--output_dir", default="generated_data_enhanced",
+                        help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced
     
     # Add a new argument for your experiment
     parser.add_argument("--held_out_color_exp", action="store_true",
-                        help="Generate data for the held-out color pair experiment.", default=True)
+                        help="Generate data for the held-out color pair experiment.", default=False)
     parser.add_argument("--num_held_out_edges", type=int, default=1,
                         help="Number of edges to hold out for the held-out color pair experiment. Default is 1.")
 
@@ -544,8 +548,8 @@ def main():
                 continue
             print(f"Processing Training Episode {episode_id}...")
             # Extract the graph for this episode
-
-            graph = episode_data["graph"]
+            if not (episode_id == '_metadata'):
+                graph = episode_data["graph"]
             
             # Estimate maximum unique samples for this episode
             max_unique_support = calculate_max_unique_samples(graph, args.support_steps)
@@ -586,9 +590,9 @@ def main():
             total_train_samples += support_num_generated + query_num_generated
             
             # Check if the total number of samples = 24 if the graph is complete.
-            if episode_data.get("is_complete", False):
-                if support_num_generated + query_num_generated != 24:
-                    print(f"WARNING: Total samples for complete episode {episode_id} is {support_num_generated + query_num_generated}, expected 24.")
+            # if episode_data.get("is_complete", False):
+            #     if support_num_generated + query_num_generated != 24:
+            #         print(f"WARNING: Total samples for complete episode {episode_id} is {support_num_generated + query_num_generated}, expected 24.")
                     
                     
         # Write training output to JSON file

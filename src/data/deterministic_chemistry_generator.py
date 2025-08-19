@@ -109,7 +109,7 @@ def generate_canonical_graph_string(chemistry) -> str:
         return ""
     
     parts = []
-    nodes = sorted(chemistry.graph.node_list.nodes, key=str)
+    nodes = chemistry.graph.node_list.nodes, key=str
     
     for node in nodes:
         node_str = str(node)
@@ -141,7 +141,8 @@ def generate_canonical_graph_string(chemistry) -> str:
         
         if node in chemistry.graph.edge_list.edges:
             graph_edges = chemistry.graph.edge_list.edges[node]
-            sorted_edges = sorted(graph_edges.items(), key=lambda x: str(x[0]))
+            # sorted_edges = sorted(graph_edges.items(), key=lambda x: str(x[0]))
+            sorted_edges = graph_edges.items()
 
             for next_node, edge_info in sorted_edges:
                 if len(edge_info) >= 2 and isinstance(edge_info[1], Potion):
@@ -182,8 +183,8 @@ def generate_canonical_graph_string_extended(chemistry) -> str:
         return ""
     
     parts = []
-    nodes = sorted(chemistry.graph.node_list.nodes, key=str)
-    
+    # nodes = sorted(chemistry.graph.node_list.nodes, key=str)
+    nodes = chemistry.graph.node_list.nodes
     for node in nodes:
         node_str = str(node)
         parts.append(f"NODE:{node_str}")
@@ -194,12 +195,12 @@ def generate_canonical_graph_string_extended(chemistry) -> str:
             aligned_stone_from_map = chemistry.stone_map.apply_inverse(latent_stone)
             
             # Create AlignedStone suitable for unaligning
-            aligned_stone_for_unalign = AlignedStone(
-                aligned_stone_from_map.reward,
-                aligned_stone_from_map.aligned_coords
-            )
+            # aligned_stone_for_unalign = AlignedStone(
+            #     aligned_stone_from_map.reward,
+            #     aligned_stone_from_map.aligned_coords
+            # )
             # Get perceived stone by applying rotation
-            perceived_stone = unalign(aligned_stone_for_unalign, chemistry.rotation)
+            perceived_stone = unalign(aligned_stone_from_map, chemistry.rotation)
             
             # Use perceived coordinates for visual features with get_stone_feature_name
             color = get_stone_feature_name(0, perceived_stone.perceived_coords[0])
@@ -217,7 +218,8 @@ def generate_canonical_graph_string_extended(chemistry) -> str:
         
         if node in chemistry.graph.edge_list.edges:
             graph_edges = chemistry.graph.edge_list.edges[node]
-            sorted_edges = sorted(graph_edges.items(), key=lambda x: str(x[0]))
+            # sorted_edges = sorted(graph_edges.items(), key=lambda x: str(x[0]))
+            sorted_edges = graph_edges.items()
 
             for next_node, edge_info in sorted_edges:
                 if len(edge_info) >= 2 and isinstance(edge_info[1], Potion):
@@ -229,12 +231,12 @@ def generate_canonical_graph_string_extended(chemistry) -> str:
                         next_aligned_stone_from_map = chemistry.stone_map.apply_inverse(next_latent_stone)
                         
                         # Create AlignedStone suitable for unaligning for the next stone
-                        next_aligned_stone_for_unalign = AlignedStone(
-                            next_aligned_stone_from_map.reward,
-                            next_aligned_stone_from_map.aligned_coords
-                        )
+                        # next_aligned_stone_for_unalign = AlignedStone(
+                        #     next_aligned_stone_from_map.reward,
+                        #     next_aligned_stone_from_map.aligned_coords
+                        # )
                         # Get perceived stone for the next stone
-                        next_perceived_stone = unalign(next_aligned_stone_for_unalign, chemistry.rotation)
+                        next_perceived_stone = unalign(aligned_stone=next_aligned_stone_from_map, rotation=chemistry.rotation)
 
                         # Use perceived coordinates for next stone's visual features
                         next_color = get_stone_feature_name(0, next_perceived_stone.perceived_coords[0])
@@ -300,7 +302,7 @@ def main():
     parser.add_argument(
         "--output_file",
         type=str,
-        default="deterministic_chemistries_167424_80_unique_stones.json",
+        default="deterministic_chemistries_167424_80_unique_stones_aligned_stone.json",
         help="Path to save the generated chemistries JSON file."
     )
     parser.add_argument(
@@ -392,15 +394,15 @@ def main():
                 for node_obj in nodes:
                     node_obj_str = str(node_obj)
                     try:
-                        latent_stone = LatentStone(node_obj.coords)
+                        latent_stone = LatentStone(node_obj.coords) # This means that the node_obj has the coords for the latent stone.
                         aligned_stone = current_chemistry.stone_map.apply_inverse(latent_stone)
-                        aligned_stone_with_reward = AlignedStone(aligned_stone.reward, aligned_stone.aligned_coords)
-                        perceived_stone = unalign(aligned_stone_with_reward, current_chemistry.rotation)
+                        # aligned_stone_with_reward = AlignedStone(aligned_stone.reward, aligned_stone.aligned_coords)
+                        perceived_stone = unalign(aligned_stone=aligned_stone, rotation=current_chemistry.rotation)
                         
                         color = get_stone_feature_name(0, perceived_stone.perceived_coords[0])
                         size = get_stone_feature_name(1, perceived_stone.perceived_coords[1])
                         roundness = get_stone_feature_name(2, perceived_stone.perceived_coords[2])
-                        current_stone_desc = f"{{color: {color}, size: {size}, roundness: {roundness},reward: {aligned_stone_with_reward.reward}}}"
+                        current_stone_desc = f"{{color: {color}, size: {size}, roundness: {roundness},reward: {perceived_stone.reward}}}"
                     except Exception as desc_e:
                         print(f"Warning: Could not generate description for node {node_obj_str}: {desc_e}")
                         current_stone_desc = "Error generating description"
