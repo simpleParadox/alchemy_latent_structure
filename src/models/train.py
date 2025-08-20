@@ -720,6 +720,9 @@ def main():
     args.is_held_out_color_exp = str(args.is_held_out_color_exp) == 'True' or str(args.is_held_out_color_exp) == 'true'  # Convert to boolean 
     if args.is_held_out_color_exp:  
         print("Running held-out color experiment.")
+        edges_value = args.train_data_path.split('_edges_exp.json')[0].split('_')[-1]
+        print("Held out edges value for held-out color experiment: ", edges_value)
+        args.num_held_out_edges = int(edges_value)
         
     args.save_checkpoints = str(args.save_checkpoints) == 'True'  # Convert to boolean
     if args.save_checkpoints:
@@ -787,10 +790,7 @@ def main():
 
     # Initialize wandb only on main process
     if accelerator.is_local_main_process:
-        if args.is_held_out_color_exp:
-            # Get the edges value from ''src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_1_edges_exp.json' from the path.
-            edges_value = args.train_data_path.split('edges_exp.json')[0].split('_')[-1]
-            args.num_held_out_edges = int(edges_value)
+        
 
         wandb.init(
             project=args.wandb_project,
