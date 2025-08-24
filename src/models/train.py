@@ -44,7 +44,8 @@ def parse_args():
                         help="Seed for reproducible train/val splits.")
     parser.add_argument("--data_split_seed", type=int, default=0,
                         help="Seed value that gets appended to the data path to load the approapriate training / validation.")
-    parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "small", "medium", "large"],
+
+    parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "xsmall_modified", "xsmall_deep", "small", "medium", "large"],
                         help="Size of the transformer model.")
     parser.add_argument("--model_architecture", type=str, default="encoder", choices=["encoder", "decoder"],
                         help="Model architecture: 'encoder' for encoder-only classifier, 'decoder' for decoder-only classifier.")
@@ -68,8 +69,9 @@ def parse_args():
                         help="Weights & Biases project name.")
     parser.add_argument("--use_scheduler", type=str, default="True", choices=["True", "False"],
                         help="Use learning rate scheduler. Default is True.")
+
     parser.add_argument("--scheduler_type", type=str, default="cosine", 
-                        choices=["cosine", "exponential", "none"],
+                        choices=["cosine", "exponential", "cosine_restarts", "none"],
                         help="Type of learning rate scheduler: 'cosine', 'exponential', or 'none'.")
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Multiplicative factor for ExponentialLR scheduler.")
@@ -245,6 +247,7 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
     start_time = time.time()
 
     pbar = tqdm(dataloader, disable=not accelerator.is_local_main_process)
+    iters = len(dataloader)
     for batch_idx, batch in enumerate(pbar):
         # No need to move to device explicitly - Accelerate handles this
         encoder_input_ids = batch["encoder_input_ids"]
@@ -432,6 +435,16 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
+
+        if scheduler and args.scheduler_call_location == 'after_batch':
+            # But for later versions of python, it might be possible to call scheduler.step() after the 
+            # epoch and still have no cycles. NOTE: If you use a different pytorch version, please verify this behavior
+            # as it may not hold.
+            if args.scheduler_type == 'cosine':
+                scheduler.step() # For python 2.4.x (which is the one being used here) this is where you call the scheduler. 
+            elif args.scheduler_type == 'cosine_restarts':
+                scheduler.step(epoch_num + batch_idx / iters) # For python 2.4.x (which is the one being used here) this is where you call the scheduler.
+
         total_loss += loss.item()
         total_correct_preds += correct
         total_considered_items += considered
@@ -449,8 +462,10 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
                 "batch_idx": batch_idx
             })
             start_time = time.time()
+        
     
-    if scheduler: scheduler.step()
+    if scheduler and args.scheduler_call_location == 'after_epoch':
+        scheduler.step()
     # Call scheduler after each epoch for ExponentialLR
     # if scheduler and args.scheduler_type == "exponential":
     #     scheduler.step()
@@ -1032,11 +1047,22 @@ def main():
     
     if use_scheduler and args.scheduler_type != "none":
         if args.scheduler_type == "cosine":
-            # For cosine annealing, T_max should be total number of batches
-            # num_training_steps = args.epochs * len(train_dataloader)
-            num_training_steps = args.epochs
+            # For cosine annealing no cycles, T_max should be total number of batches
+            # NOTE: The way you define the num_training_steps, it changes whether you have cyclic behaviour or not - but also depends on where you call scheduler.step().
+            if args.scheduler_call_location == "after_batch":
+                num_training_steps = args.epochs * len(train_dataloader)
+                print(f"Using CosineAnnealingLR with T_max={num_training_steps} (called per batch)")
+            elif args.scheduler_call_location == "after_epoch":
+                num_training_steps = args.epochs
+                print(f"Using CosineAnnealingLR with T_max={num_training_steps} (called per epoch)")
             scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-5)
             print(f"Using CosineAnnealingLR with T_max={num_training_steps}")
+        elif args.scheduler_type == 'cosine_restarts':
+            # For cosine annealing with restarts, T_0 is the number of epochs
+            t_0 = 10
+            print(f"Using CosineAnnealingWarmRestarts with T_0={t_0} (called per batch but will restart after every T_0 epochs)")
+            scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=t_0, eta_min=1e-5)
+            print(f"Using CosineAnnealingWarmRestarts with T_0={t_0}")
         elif args.scheduler_type == "exponential":
             scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.gamma)
             print(f"Using ExponentialLR with gamma={args.gamma}")

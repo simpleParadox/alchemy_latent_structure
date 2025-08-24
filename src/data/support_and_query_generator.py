@@ -291,96 +291,100 @@ def generate_support_and_query_examples(
     num_samples: int, 
     support_hop_length: int = 1, 
     query_hop_length: int = 1,
-) -> Dict[str, Any]: # Corrected return type hint
+) -> Dict[str, Any]:  # Corrected return type hint
     """Generate a set of random samples from a single episode's chemistry graph."""
     samples = []
     samples_info = []
     generated_samples = set()  # Tracks unique sample strings for support
-    
+
     query_samples = []
     query_samples_info = []
     query_generated_samples = set()  # Tracks unique sample strings for query
 
+    # Track coverage: which nodes have appeared as start nodes in support
+    support_start_nodes: Set[str] = set()
+
     node_ids_available = list(graph.keys())
-    random.shuffle(node_ids_available) # Shuffle to process nodes in a varied order: NOTE: We are shuffling because we want to ensure that the samples are not biased towards any particular node.
+    random.shuffle(node_ids_available)
 
-    processed_nodes_count = 0 # To ensure we don't loop indefinitely if nodes are exhausted
+    # Phase 1: collect support first (exhaustive per node, uniqueness-checked)
+    for start_node_id in node_ids_available:
+        if not graph.get(start_node_id) or not graph[start_node_id].get("transitions"):
+            continue
 
-    # Loop until enough samples for both support and query are collected, or nodes/attempts exhausted
-    while (len(samples) < num_samples or len(query_samples) < num_samples) and processed_nodes_count < len(node_ids_available):
-        if not node_ids_available: # Should be caught by processed_nodes_count check
+        potential_support_trajectories = []
+        if support_hop_length == 1:
+            potential_support_trajectories = generate_single_step_sample(
+                graph, start_node_id, generate_all_edges=True
+            )
+        else:
+            potential_support_trajectories = generate_multi_step_sample(
+                graph, start_node_id, support_hop_length
+            )
+
+        random.shuffle(potential_support_trajectories)
+
+        for s_str, s_info in potential_support_trajectories:
+            if len(samples) >= num_samples:
+                break
+
+            if s_str in generated_samples:
+                continue
+
+            samples.append(s_str)
+            samples_info.append(s_info)
+            generated_samples.add(s_str)
+
+            # Record the start node encountered in support
+            support_start_nodes.add(s_info["start_node"])
+
+    # Phase 2: collect queries with filtering based on support coverage
+    is_decompositional_1hop = (support_hop_length > query_hop_length and query_hop_length == 1)
+
+    for start_node_id in node_ids_available:
+        if len(query_samples) >= num_samples:
             break
 
-        start_node_id = node_ids_available[processed_nodes_count] # Pick next node
-        processed_nodes_count += 1
-
         if not graph.get(start_node_id) or not graph[start_node_id].get("transitions"):
-            print(f"Skipping node {start_node_id} as it has no transitions or is invalid.")
-            continue # Skip if node is invalid or has no transitions
+            continue
 
-        # --- Generate Support Samples from current start_node_id ---
-        if len(samples) < num_samples:
-            potential_support_trajectories = []
-            if support_hop_length == 1:
-                potential_support_trajectories = generate_single_step_sample(graph, start_node_id, generate_all_edges=True) # For this case, the reverse edge really does not matter because all the nodes are processed separately.
-            else:
-                potential_support_trajectories = generate_multi_step_sample(graph, start_node_id, support_hop_length)
-            
-            random.shuffle(potential_support_trajectories) # Process trajectories from this node in random order
+        potential_query_trajectories = []
+        if query_hop_length == 1:
+            potential_query_trajectories = generate_single_step_sample(
+                graph, start_node_id, generate_all_edges=True
+            )
+        else:
+            potential_query_trajectories = generate_multi_step_sample(
+                graph, start_node_id, query_hop_length
+            )
 
-            for s_str, s_info in potential_support_trajectories:
-                if len(samples) >= num_samples:
-                    break 
-                
-                is_duplicate = s_str in generated_samples
-                # if not is_duplicate:
-                #     for existing_info in samples_info: # Check against existing support samples
-                #         # if is_reverse_trajectory(existing_info, s_info):
-                #         is_duplicate = True
-                #         break
-                
-                if not is_duplicate:
-                    samples.append(s_str)
-                    samples_info.append(s_info)
-                    generated_samples.add(s_str)
+        random.shuffle(potential_query_trajectories)
 
-        # --- Generate Query Samples from current start_node_id ---
-        if len(query_samples) < num_samples:
-            potential_query_trajectories = []
+        for q_str, q_info in potential_query_trajectories:
+            if len(query_samples) >= num_samples:
+                break
+
+            # Uniqueness checks (preserve previous behavior)
             if query_hop_length == 1:
-                potential_query_trajectories = generate_single_step_sample(graph, start_node_id, generate_all_edges=True)
+                is_duplicate = (q_str in query_generated_samples)
             else:
-                potential_query_trajectories = generate_multi_step_sample(graph, start_node_id, query_hop_length)
+                is_duplicate = (q_str in generated_samples) or (q_str in query_generated_samples)
 
-            random.shuffle(potential_query_trajectories) # Process trajectories from this node in random order
+            if is_duplicate:
+                continue
 
-            for q_str, q_info in potential_query_trajectories:
-                if len(query_samples) >= num_samples:
-                    break
+            # Strict validity: both endpoints must be support start nodes for decompositional 1-hop
+            if is_decompositional_1hop:
+                q_start = q_info["start_node"]
+                q_end = q_info["end_node"]
+                if not (q_start in support_start_nodes and q_end in support_start_nodes):
+                    continue
 
-                # Check uniqueness against both support and existing query samples
-                if query_hop_length == 1:
-                    is_dup_in_query = q_str in query_generated_samples
-                else:
-                    is_dup_in_support = q_str in generated_samples
-                    is_dup_in_query = q_str in query_generated_samples
-                # is_dup_in_support = q_str in generated_samples if query_hop_length == 1 else False
-                # is_dup_in_query = q_str in query_generated_samples if query_hop_length == 1 else False
-                is_duplicate = is_dup_in_support or is_dup_in_query if query_hop_length != 1 else is_dup_in_query 
+            query_samples.append(q_str)
+            query_samples_info.append(q_info)
+            query_generated_samples.add(q_str)
 
-                # if not is_duplicate:
-                    # Check against all collected samples (support + query) for reverse
-                    # for existing_info in samples_info + query_samples_info:
-                    #     # if is_reverse_trajectory(existing_info, q_info):
-                    #     is_duplicate = True
-                    #     break
-                
-                if not is_duplicate:
-                    query_samples.append(q_str)
-                    query_samples_info.append(q_info)
-                    query_generated_samples.add(q_str)
-            
-    all_samples_data = { # Corrected to match original return structure
+    all_samples_data = {
         "support": samples,
         "query": query_samples,
         "support_num_generated": len(samples),
@@ -388,7 +392,7 @@ def generate_support_and_query_examples(
         "support_samples_info": samples_info,
         "query_samples_info": query_samples_info,
     }
-    return all_samples_data # Return the dictionary
+    return all_samples_data
 
 
 def calculate_max_unique_samples(graph: Dict, max_steps: int) -> int:
