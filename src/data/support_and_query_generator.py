@@ -310,6 +310,7 @@ def generate_support_and_query_examples(
     # Phase 1: collect support first (exhaustive per node, uniqueness-checked)
     for start_node_id in node_ids_available:
         if not graph.get(start_node_id) or not graph[start_node_id].get("transitions"):
+            print(f"Skipping node {start_node_id} as it has no transitions.")
             continue
 
         potential_support_trajectories = []
@@ -326,10 +327,13 @@ def generate_support_and_query_examples(
 
         for s_str, s_info in potential_support_trajectories:
             if len(samples) >= num_samples:
+                print("This condition is not supposed to be true but it happened here so might be worth investigating.")
                 break
 
             if s_str in generated_samples:
                 continue
+
+
 
             samples.append(s_str)
             samples_info.append(s_info)
