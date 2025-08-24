@@ -27,10 +27,12 @@ def extract_examples(data: Dict[str, Any]) -> tuple[Set[str], Set[str]]:
     """
     support_examples = []
     query_examples = []
+    episode_ids = []
     
     episodes = data.get('episodes', {})
     
     for episode_id, episode_data in episodes.items():
+        episode_ids.append(episode_id)
         # Extract support examples
         episode_samples = episode_data['support'] if 'support' in episode_data else print(f"⚠️  No support examples in episode {episode_id}")
         # Add the query examples
@@ -49,7 +51,7 @@ def extract_examples(data: Dict[str, Any]) -> tuple[Set[str], Set[str]]:
     print(f"  Unique support examples: {len(support_set)}")
     print(f"  Unique query examples: {len(query_set)}")
     
-    return support_set, query_set
+    return support_set, query_set, episode_ids
 
 def calculate_overlap(set1: Set[str], set2: Set[str], label1: str, label2: str) -> Dict[str, Any]:
     """Calculate overlap statistics between two sets."""
@@ -81,10 +83,10 @@ def analyze_seed_overlap(seed0_file: str, seed2_file: str, dataset_type: str = "
     
     # Extract examples
     print("\nExtracting examples from seed 0...")
-    seed0_support, seed0_query = extract_examples(seed0_data)
+    seed0_support, seed0_query, seed0_episode_ids = extract_examples(seed0_data)
     
     print("\nExtracting examples from seed 2...")
-    seed2_support, seed2_query = extract_examples(seed2_data)
+    seed2_support, seed2_query, seed2_episode_ids = extract_examples(seed2_data)
     
     # Calculate overlaps
     print("\n" + "=" * 60)
@@ -181,14 +183,16 @@ def analyze_seed_overlap(seed0_file: str, seed2_file: str, dataset_type: str = "
 def main():
     """Main function to run the analysis."""
     # Paths to the JSON files
-    base_path = "/home/rsaha/projects/dm_alchemy/src/data/generated_data"
+    base_path = "/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced"
     
     # Analyze both train and val datasets
     datasets = ["val"]
     
     for dataset_type in datasets:
-        seed0_file = f"{base_path}/compositional_chemistry_samples_167424_80_unique_stones_{dataset_type}_shop_1_qhop_2_seed_0.json"
-        seed2_file = f"{base_path}/compositional_chemistry_samples_167424_80_unique_stones_{dataset_type}_shop_1_qhop_2_seed_2.json"
+        # seed0_file = f"{base_path}/compositional_chemistry_samples_167424_80_unique_stones_{dataset_type}_shop_1_qhop_1_seed_0.json"
+        seed0_file = f"{base_path}/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_1_edges_exp_seed_0.json"
+        # seed2_file = f"{base_path}/compositional_chemistry_samples_167424_80_unique_stones_{dataset_type}_shop_1_qhop_1_seed_2.json"
+        seed2_file = f"{base_path}/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_1_edges_exp_seed_0.json"
         
         # Check if files exist
         if os.path.exists(seed0_file) and os.path.exists(seed2_file):

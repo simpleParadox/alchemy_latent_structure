@@ -197,22 +197,22 @@ def main():
     
     parser = argparse.ArgumentParser(description="Preprocess Alchemy datasets")
     parser.add_argument("--train_json_file", type=str, required=False,
-                        # default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_2.json",
-                        default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_3_edges_exp_seed_2.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_4_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_3_edges_exp_seed_.json",
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
-                        # default="/home/rsaha/projects/dm_alchemy/src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_5_qhop_1_seed_2.json",
-                        default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_3_edges_exp_seed_2.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_4_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_3_edges_exp_seed_.json",
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         default="classification",
                         help="Type of task")
-    parser.add_argument("--output_dir", type=str, default="src/data/preprocessed_separate_held_out_exps",
+    parser.add_argument("--output_dir", type=str, default="src/data/preprocessed_separate_enhanced",
                         help="Directory to save preprocessed files")
     parser.add_argument("--filter_query_from_support", action="store_true", default=True,
                         help="Filter query examples from support sets")
-    parser.add_argument("--num_workers", type=int, default=20,
+    parser.add_argument("--num_workers", type=int, default=10,
                         help="Number of workers for multiprocessing")
     parser.add_argument("--chunk_size", type=int, default=50000,
                         help="Chunk size for processing")
@@ -233,68 +233,71 @@ def main():
     if args.output_format == 'stone_states':
         assert args.task_type in ['classification', 'seq2seq_stone_state']
     
-    # Preprocess training data first (this will create the vocabulary)
-    train_result = preprocess_and_save_dataset(
-        json_file_path=args.train_json_file,
-        task_type=args.task_type,
-        output_dir=args.output_dir,
-        vocab_word2idx=None,  # Let training data create the vocabulary
-        vocab_idx2word=None,
-        stone_state_to_id=None,
-        filter_query_from_support=args.filter_query_from_support,
-        num_workers=args.num_workers,
-        chunk_size=args.chunk_size,
-        input_format=args.input_format,
-        output_format=args.output_format
-    )
-    
-    print("\n" + "="*60)
-    print("PREPROCESSING VALIDATION DATA")
-    print("="*60)
-    
-    # Load vocabulary from training data to ensure consistency
-    print(f"Loading vocabulary from training data: {train_result['vocab_file']}")
-    with open(train_result['vocab_file'], 'rb') as f:
-        vocab_data = pickle.load(f)
-        vocab_word2idx = vocab_data['word2idx']
-        vocab_idx2word = vocab_data['idx2word']
-        stone_state_to_id = vocab_data.get('stone_state_to_id')
-    
-    # Preprocess validation data using the training vocabulary
-    val_result = preprocess_and_save_dataset(
-        json_file_path=args.val_json_file,
-        task_type=args.task_type,
-        output_dir=args.output_dir,
-        vocab_word2idx=vocab_word2idx,  # Use training vocabulary
-        vocab_idx2word=vocab_idx2word,
-        stone_state_to_id=stone_state_to_id,
-        filter_query_from_support=args.filter_query_from_support,
-        num_workers=args.num_workers,
-        chunk_size=args.chunk_size,
-        input_format=args.input_format,
-        output_format=args.output_format
-    )
-    
-    print("\n" + "="*60)
-    print("PREPROCESSING COMPLETED SUCCESSFULLY!")
-    print("="*60)
-    print(f"Training data processed: {len(train_result['dataset'].data)} samples")
-    print(f"Validation data processed: {len(val_result['dataset'].data)} samples")
-    print(f"Shared vocabulary size: {len(vocab_word2idx)}")
-    
-    if args.task_type == "classification":
-        print(f"Number of classes: {len(stone_state_to_id) if stone_state_to_id else 'N/A'}")
-    
-    print(f"\nFiles created:")
-    print(f"Training files:")
-    print(f"  - Data: {train_result['data_file']}")
-    print(f"  - Vocab: {train_result['vocab_file']}")
-    print(f"  - Metadata: {train_result['metadata_file']}")
-    print(f"Validation files:")
-    print(f"  - Data: {val_result['data_file']}")
-    print(f"  - Vocab: {val_result['vocab_file']}")
-    print(f"  - Metadata: {val_result['metadata_file']}")
-    print("="*60)
+    for seed in [0, 1, 2]:
+        train_json_file = args.train_json_file.replace(f"seed_", f"seed_{seed}")
+        val_json_file = args.val_json_file.replace(f"seed_", f"seed_{seed}")
+        # Preprocess training data first (this will create the vocabulary)
+        train_result = preprocess_and_save_dataset(
+            json_file_path=train_json_file,
+            task_type=args.task_type,
+            output_dir=args.output_dir,
+            vocab_word2idx=None,  # Let training data create the vocabulary
+            vocab_idx2word=None,
+            stone_state_to_id=None,
+            filter_query_from_support=args.filter_query_from_support,
+            num_workers=args.num_workers,
+            chunk_size=args.chunk_size,
+            input_format=args.input_format,
+            output_format=args.output_format
+        )
+        
+        print("\n" + "="*60)
+        print("PREPROCESSING VALIDATION DATA")
+        print("="*60)
+        
+        # Load vocabulary from training data to ensure consistency
+        print(f"Loading vocabulary from training data: {train_result['vocab_file']}")
+        with open(train_result['vocab_file'], 'rb') as f:
+            vocab_data = pickle.load(f)
+            vocab_word2idx = vocab_data['word2idx']
+            vocab_idx2word = vocab_data['idx2word']
+            stone_state_to_id = vocab_data.get('stone_state_to_id')
+        
+        # Preprocess validation data using the training vocabulary
+        val_result = preprocess_and_save_dataset(
+            json_file_path=val_json_file,
+            task_type=args.task_type,
+            output_dir=args.output_dir,
+            vocab_word2idx=vocab_word2idx,  # Use training vocabulary
+            vocab_idx2word=vocab_idx2word,
+            stone_state_to_id=stone_state_to_id,
+            filter_query_from_support=args.filter_query_from_support,
+            num_workers=args.num_workers,
+            chunk_size=args.chunk_size,
+            input_format=args.input_format,
+            output_format=args.output_format
+        )
+        
+        print("\n" + "="*60)
+        print("PREPROCESSING COMPLETED SUCCESSFULLY!")
+        print("="*60)
+        print(f"Training data processed: {len(train_result['dataset'].data)} samples")
+        print(f"Validation data processed: {len(val_result['dataset'].data)} samples")
+        print(f"Shared vocabulary size: {len(vocab_word2idx)}")
+        
+        if args.task_type == "classification":
+            print(f"Number of classes: {len(stone_state_to_id) if stone_state_to_id else 'N/A'}")
+        
+        print(f"\nFiles created:")
+        print(f"Training files:")
+        print(f"  - Data: {train_result['data_file']}")
+        print(f"  - Vocab: {train_result['vocab_file']}")
+        print(f"  - Metadata: {train_result['metadata_file']}")
+        print(f"Validation files:")
+        print(f"  - Data: {val_result['data_file']}")
+        print(f"  - Vocab: {val_result['vocab_file']}")
+        print(f"  - Metadata: {val_result['metadata_file']}")
+        print("="*60)
 
 
 if __name__ == "__main__":

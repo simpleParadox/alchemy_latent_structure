@@ -193,6 +193,7 @@ def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, seed=0) -
     
     # 1. Randomly select one color pair to hold out
     random.seed(seed)
+    print("Seed for held-out color pair generation:", seed)
     held_out_pair = random.choice(color_pairs)
     support_colors = [color for pair in color_pairs if pair != held_out_pair for color in pair]
     
@@ -432,8 +433,8 @@ def main():
                         help="Minimum number of transformation steps in each sample")
     parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
-    parser.add_argument("--seed", type=int, default=0,
-                        help="Random seed for reproducibility")
+    # parser.add_argument("--seed", type=int, default=0,
+    #                     help="Random seed for reproducibility")
     parser.add_argument("--create_val_from_train", action="store_true",
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
@@ -452,265 +453,269 @@ def main():
     output_file = args.output
     
     # Set random seed for reproducibility
-    random.seed(args.seed)
+    seeds = [0,1,2]
+    for seed in seeds:
+        print("Using seed:", seed)
     
-    # Load chemistry graph with multiple episodes
-    print(f"Loading chemistry graph from {args.input}...")
-    chemistry_graphs = load_chemistry_graph(args.input)
-    num_episodes = len(chemistry_graphs)
-    print(f"Loaded data for {num_episodes} episodes")
+        random.seed(seed)
+        
+        # Load chemistry graph with multiple episodes
+        print(f"Loading chemistry graph from {args.input}...")
+        chemistry_graphs = load_chemistry_graph(args.input)
+        num_episodes = len(chemistry_graphs)
+        print(f"Loaded data for {num_episodes} episodes")
 
-    # Split episodes into training and validation sets if requested
-    if args.create_val_from_train:
-        # Determine the number of episodes for validation (10%)
-        num_val_episodes = max(1, int(num_episodes * 0.1))
-        num_train_episodes = num_episodes - num_val_episodes
-        
-        print(f"Creating {num_train_episodes} training episodes and {num_val_episodes} validation episodes")
-        
-        # Randomly select episodes for validation
-        episode_ids = list(chemistry_graphs.keys())
-        random.shuffle(episode_ids)
-        val_episode_ids = set(episode_ids[:num_val_episodes])
-        train_episode_ids = set(episode_ids[num_val_episodes:])
-        
-        ordered_train_episode_ids = sorted(list(train_episode_ids))
-        ordered_val_episode_ids = sorted(list(val_episode_ids))
-        
-        # Create separate dictionaries for training and validation
-        train_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in train_episode_ids}
-        val_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in val_episode_ids}
-        
-        # Output file names
-        support_hop = args.support_steps
-        query_hop = args.query_steps
-        train_output_file = os.path.splitext(output_file)[0] + "_train_" + f"shop_{support_hop}_qhop_{query_hop}.json"
-        # Validation output file
-        val_output_file = os.path.splitext(output_file)[0] + "_val_" + f"shop_{support_hop}_qhop_{query_hop}.json"
-        
-        # Change prefix based on support and query steps.
-        prefix = "compositional_" if args.support_steps <= args.query_steps else "decompositional_"
-        
-        # Add seed to the filename
-        base_train = os.path.splitext(train_output_file)[0]
-        ext_train = os.path.splitext(train_output_file)[1]
-        if args.held_out_color_exp:
-            train_output_file = f"{base_train}_single_held_out_color_{args.num_held_out_edges}_edges_exp_seed_{args.seed}{ext_train}"
-        else:
-            train_output_file = f"{base_train}_seed_{args.seed}{ext_train}"
-        
-        
-        base_val = os.path.splitext(val_output_file)[0]
-        ext_val = os.path.splitext(val_output_file)[1]
-        if args.held_out_color_exp:
-            val_output_file = f"{base_val}_single_held_out_color_{args.num_held_out_edges}_edges_exp_seed_{args.seed}{ext_val}"
-        else:
-            val_output_file = f"{base_val}_seed_{args.seed}{ext_val}"
-        
-        
-        train_output_file, val_output_file = [os.path.join(os.path.dirname(f), prefix + os.path.basename(f)) for f in [train_output_file, val_output_file]]
-        
-        print(f"Creating separate training ({num_train_episodes} episodes) and validation ({num_val_episodes} episodes) sets")
-        print(f"Training data will be saved to: {train_output_file}")
-        print(f"Validation data will be saved to: {output_file}")
-    else:
-        # Use all episodes for training
-        train_graphs = chemistry_graphs
-        val_graphs = {}
-        train_output_file = output_file
-        
-        # Change prefix and add hop information for single dataset case as well
-        support_hop = args.support_steps
-        query_hop = args.query_steps
-        prefix = "compositional_" if args.support_steps <= args.query_steps else "decompositional_"
-        train_output_file = os.path.splitext(output_file)[0] + f"_shop_{support_hop}_qhop_{query_hop}.json"
-        train_output_file = os.path.join(os.path.dirname(train_output_file), prefix + os.path.basename(train_output_file))
-        
-    
-    # Process training episodes
-    if train_graphs:
-        # Initialize output structure for training
-        train_output_data = {
-            "metadata": {
-                "num_episodes": len(train_graphs),
-                "samples_requested_per_episode": args.samples_per_episode,
-                "support-steps": args.support_steps,
-                "query-steps": args.query_steps,
-                "seed": args.seed,
-                "dataset_type": "train"
-            },
-            "episodes": {}
-        }
-        
-        # Process each training episode
-        total_train_samples = 0
-        print("\nProcessing training episodes...")
-        
-        for episode_id, episode_data in tqdm(train_graphs.items(), desc="Processing Training Episodes"):
+        # Split episodes into training and validation sets if requested
+        if args.create_val_from_train:
+            # Determine the number of episodes for validation (10%)
+            num_val_episodes = max(1, int(num_episodes * 0.1))
+            num_train_episodes = num_episodes - num_val_episodes
             
-            # Extract the graph for this episode
+            print(f"Creating {num_train_episodes} training episodes and {num_val_episodes} validation episodes")
             
-            # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
-            if args.process_complete_graph_only and not episode_data.get("is_complete", False):
-                print(f"Skipping episode {episode_id} as it is not a complete graph.")
-                continue
-            print(f"Processing Training Episode {episode_id}...")
-            # Extract the graph for this episode
-            if not (episode_id == '_metadata'):
+            # Randomly select episodes for validation
+            episode_ids = list(chemistry_graphs.keys())
+            random.shuffle(episode_ids)
+            val_episode_ids = set(episode_ids[:num_val_episodes])
+            train_episode_ids = set(episode_ids[num_val_episodes:])
+            
+            ordered_train_episode_ids = sorted(list(train_episode_ids))
+            ordered_val_episode_ids = sorted(list(val_episode_ids))
+            
+            # Create separate dictionaries for training and validation
+            train_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in train_episode_ids}
+            val_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in val_episode_ids}
+            
+            # Output file names
+            support_hop = args.support_steps
+            query_hop = args.query_steps
+            train_output_file = os.path.splitext(output_file)[0] + "_train_" + f"shop_{support_hop}_qhop_{query_hop}.json"
+            # Validation output file
+            val_output_file = os.path.splitext(output_file)[0] + "_val_" + f"shop_{support_hop}_qhop_{query_hop}.json"
+            
+            # Change prefix based on support and query steps.
+            prefix = "compositional_" if args.support_steps <= args.query_steps else "decompositional_"
+            
+            # Add seed to the filename
+            base_train = os.path.splitext(train_output_file)[0]
+            ext_train = os.path.splitext(train_output_file)[1]
+            if args.held_out_color_exp:
+                train_output_file = f"{base_train}_single_held_out_color_{args.num_held_out_edges}_edges_exp_seed_{seed}{ext_train}"
+            else:
+                train_output_file = f"{base_train}_seed_{seed}{ext_train}"
+            
+            
+            base_val = os.path.splitext(val_output_file)[0]
+            ext_val = os.path.splitext(val_output_file)[1]
+            if args.held_out_color_exp:
+                val_output_file = f"{base_val}_single_held_out_color_{args.num_held_out_edges}_edges_exp_seed_{seed}{ext_val}"
+            else:
+                val_output_file = f"{base_val}_seed_{seed}{ext_val}"
+            
+            
+            train_output_file, val_output_file = [os.path.join(os.path.dirname(f), prefix + os.path.basename(f)) for f in [train_output_file, val_output_file]]
+            
+            print(f"Creating separate training ({num_train_episodes} episodes) and validation ({num_val_episodes} episodes) sets")
+            print(f"Training data will be saved to: {train_output_file}")
+            print(f"Validation data will be saved to: {output_file}")
+        else:
+            # Use all episodes for training
+            train_graphs = chemistry_graphs
+            val_graphs = {}
+            train_output_file = output_file
+            
+            # Change prefix and add hop information for single dataset case as well
+            support_hop = args.support_steps
+            query_hop = args.query_steps
+            prefix = "compositional_" if args.support_steps <= args.query_steps else "decompositional_"
+            train_output_file = os.path.splitext(output_file)[0] + f"_shop_{support_hop}_qhop_{query_hop}.json"
+            train_output_file = os.path.join(os.path.dirname(train_output_file), prefix + os.path.basename(train_output_file))
+            
+        
+        # Process training episodes
+        if train_graphs:
+            # Initialize output structure for training
+            train_output_data = {
+                "metadata": {
+                    "num_episodes": len(train_graphs),
+                    "samples_requested_per_episode": args.samples_per_episode,
+                    "support-steps": args.support_steps,
+                    "query-steps": args.query_steps,
+                    "seed": seed,
+                    "dataset_type": "train"
+                },
+                "episodes": {}
+            }
+            
+            # Process each training episode
+            total_train_samples = 0
+            print("\nProcessing training episodes...")
+            
+            for episode_id, episode_data in tqdm(train_graphs.items(), desc="Processing Training Episodes"):
+                
+                # Extract the graph for this episode
+                
+                # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
+                if args.process_complete_graph_only and not episode_data.get("is_complete", False):
+                    print(f"Skipping episode {episode_id} as it is not a complete graph.")
+                    continue
+                print(f"Processing Training Episode {episode_id}...")
+                # Extract the graph for this episode
+                if not (episode_id == '_metadata'):
+                    graph = episode_data["graph"]
+                
+                # Estimate maximum unique samples for this episode
+                max_unique_support = calculate_max_unique_samples(graph, args.support_steps)
+                
+                # Estimate maximum unique samples for this episode
+                max_unique_query = calculate_max_unique_samples(graph, args.query_steps)
+                
+                if args.samples_per_episode > max_unique_support:
+                    print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique support samples (~{max_unique_support}) for episode {episode_id}.")
+                
+                if args.samples_per_episode > max_unique_query:
+                    print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
+                
+                if args.held_out_color_exp:
+                    support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=seed)
+                else:
+                    support_and_query_samples = generate_support_and_query_examples(
+                        graph, 
+                        args.samples_per_episode,
+                        args.support_steps,
+                        args.query_steps,
+                    )
+                
+                # Store the episode samples
+                train_output_data["episodes"][episode_id] = {
+                    "support": support_and_query_samples["support"],
+                    "query": support_and_query_samples["query"],
+                    "support_num_generated": support_and_query_samples["support_num_generated"],
+                    "query_num_generated": support_and_query_samples["query_num_generated"],
+                    "support_samples_info": support_and_query_samples["support_samples_info"],
+                    "query_samples_info": support_and_query_samples["query_samples_info"],
+                    "is_complete": episode_data.get("is_complete", False)  # Store graph completeness status
+                }
+                
+                # Update total samples
+                support_num_generated = support_and_query_samples["support_num_generated"]
+                query_num_generated = support_and_query_samples["query_num_generated"]
+                total_train_samples += support_num_generated + query_num_generated
+                
+                # Check if the total number of samples = 24 if the graph is complete.
+                # if episode_data.get("is_complete", False):
+                #     if support_num_generated + query_num_generated != 24:
+                #         print(f"WARNING: Total samples for complete episode {episode_id} is {support_num_generated + query_num_generated}, expected 24.")
+                        
+                        
+            # Write training output to JSON file
+            # Ensure the output directory exists
+            # args.output_dir = os.getcwd() + '/' + args.output_dir if not args.output_dir == '.' else args.output_dir
+            # os.makedirs(os.path.dirname(args.output_dir), exist_ok=True)
+            train_output_file = os.path.join(args.output_dir, train_output_file)
+            with open(train_output_file, 'w') as f:
+                json.dump(train_output_data, f)
+            
+            print(f"\nGenerated a total of {total_train_samples} unique training samples across {len(train_graphs)} episodes")
+            print(f"Training output saved to {train_output_file}")
+        
+        # Process validation episodes if requested
+        if args.create_val_from_train and val_graphs:
+            # Initialize output structure for validation
+            val_output_data = {
+                "metadata": {
+                    "num_episodes": len(val_graphs),
+                    "samples_requested_per_episode": args.samples_per_episode,
+                    "support-steps": args.support_steps,
+                    "query-steps": args.query_steps,
+                    "seed": seed,
+                    "dataset_type": "val"
+                },
+                "episodes": {}
+            }
+            
+            # Process each validation episode
+            total_val_samples = 0
+            print("\nProcessing validation episodes...")
+            for episode_id, episode_data in val_graphs.items():
+                print(f"Processing Validation Episode {episode_id}...")
+                
+                # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
+                if args.process_complete_graph_only and not episode_data.get("is_complete", False):
+                    print(f"Skipping episode {episode_id} as it is not a complete graph.")
+                    continue
+                # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
+                
+                # Extract the graph for this episode
                 graph = episode_data["graph"]
+                
+                # Estimate maximum unique samples for this episode
+                max_unique_support = calculate_max_unique_samples(graph, args.support_steps)
+                print(f"  Estimated maximum unique samples for episode {episode_id}: ~{max_unique_support}")
+                
+                if args.samples_per_episode > max_unique_support:
+                    print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
+                
+                
+                if args.held_out_color_exp:
+                    support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges)
+                else:
+                    support_and_query_samples = generate_support_and_query_examples(
+                        graph, 
+                        args.samples_per_episode,
+                        args.support_steps,
+                        args.query_steps,
+                    )
+                
+                # Store the episode samples
+                val_output_data["episodes"][episode_id] = {
+                    "support": support_and_query_samples["support"],
+                    "query": support_and_query_samples["query"],
+                    "support_num_generated": support_and_query_samples["support_num_generated"],
+                    "query_num_generated": support_and_query_samples["query_num_generated"],
+                    "support_samples_info": support_and_query_samples["support_samples_info"],
+                    "query_samples_info": support_and_query_samples["query_samples_info"]
+                }
+                
+                print(f"  Generated {support_and_query_samples['support_num_generated']} support samples and {support_and_query_samples['query_num_generated']} query samples")
+                # Update total samples
+                support_num_generated = support_and_query_samples["support_num_generated"]
+                query_num_generated = support_and_query_samples["query_num_generated"]
+                total_val_samples += support_num_generated + query_num_generated
             
-            # Estimate maximum unique samples for this episode
-            max_unique_support = calculate_max_unique_samples(graph, args.support_steps)
+            # Write validation output to JSON file
+            val_output_file = os.path.join(args.output_dir, val_output_file)
+            with open(val_output_file, 'w') as f:
+                json.dump(val_output_data, f)
             
-            # Estimate maximum unique samples for this episode
-            max_unique_query = calculate_max_unique_samples(graph, args.query_steps)
-            
-            if args.samples_per_episode > max_unique_support:
-                print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique support samples (~{max_unique_support}) for episode {episode_id}.")
-            
-            if args.samples_per_episode > max_unique_query:
-                print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
-            
-            if args.held_out_color_exp:
-                support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=args.seed)
-            else:
-                support_and_query_samples = generate_support_and_query_examples(
-                    graph, 
-                    args.samples_per_episode,
-                    args.support_steps,
-                    args.query_steps,
-                )
-            
-            # Store the episode samples
-            train_output_data["episodes"][episode_id] = {
-                "support": support_and_query_samples["support"],
-                "query": support_and_query_samples["query"],
-                "support_num_generated": support_and_query_samples["support_num_generated"],
-                "query_num_generated": support_and_query_samples["query_num_generated"],
-                "support_samples_info": support_and_query_samples["support_samples_info"],
-                "query_samples_info": support_and_query_samples["query_samples_info"],
-                "is_complete": episode_data.get("is_complete", False)  # Store graph completeness status
-            }
-            
-            # Update total samples
-            support_num_generated = support_and_query_samples["support_num_generated"]
-            query_num_generated = support_and_query_samples["query_num_generated"]
-            total_train_samples += support_num_generated + query_num_generated
-            
-            # Check if the total number of samples = 24 if the graph is complete.
-            # if episode_data.get("is_complete", False):
-            #     if support_num_generated + query_num_generated != 24:
-            #         print(f"WARNING: Total samples for complete episode {episode_id} is {support_num_generated + query_num_generated}, expected 24.")
-                    
-                    
-        # Write training output to JSON file
-        # Ensure the output directory exists
-        # args.output_dir = os.getcwd() + '/' + args.output_dir if not args.output_dir == '.' else args.output_dir
-        # os.makedirs(os.path.dirname(args.output_dir), exist_ok=True)
-        train_output_file = os.path.join(args.output_dir, train_output_file)
-        with open(train_output_file, 'w') as f:
-            json.dump(train_output_data, f)
+            print(f"\nGenerated a total of {total_val_samples} unique validation samples across {len(val_graphs)} episodes")
+            print(f"Validation output saved to {val_output_file}")
         
-        print(f"\nGenerated a total of {total_train_samples} unique training samples across {len(train_graphs)} episodes")
-        print(f"Training output saved to {train_output_file}")
-    
-    # Process validation episodes if requested
-    if args.create_val_from_train and val_graphs:
-        # Initialize output structure for validation
-        val_output_data = {
-            "metadata": {
-                "num_episodes": len(val_graphs),
-                "samples_requested_per_episode": args.samples_per_episode,
-                "support-steps": args.support_steps,
-                "query-steps": args.query_steps,
-                "seed": args.seed,
-                "dataset_type": "val"
-            },
-            "episodes": {}
-        }
+        # Use the appropriate output data for printing examples
+        output_data = train_output_data if args.create_val_from_train else train_output_data
         
-        # Process each validation episode
-        total_val_samples = 0
-        print("\nProcessing validation episodes...")
-        for episode_id, episode_data in val_graphs.items():
-            print(f"Processing Validation Episode {episode_id}...")
+        # Print a few example samples
+        print("\nExample samples:")
+        example_count = 0
+        for episode_id, episode_data in output_data["episodes"].items():
+            support_samples = episode_data['support']
+            query_samples = episode_data['query']
+            if support_samples:
+                for i in range(min(2, len(support_samples))):
+                    print(f"  Episode {episode_id}, support sample {i+1}: {support_samples[i]}")
+                    example_count += 1
+                    if example_count >= 5:
+                        break
+            if query_samples:
+                for i in range(min(2, len(query_samples))):
+                    print(f"  Episode {episode_id}, query sample {i+1}: {query_samples[i]}")
+                    example_count += 1
+                    if example_count >= 5:
+                        break
             
-            # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
-            if args.process_complete_graph_only and not episode_data.get("is_complete", False):
-                print(f"Skipping episode {episode_id} as it is not a complete graph.")
-                continue
-            # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
-            
-            # Extract the graph for this episode
-            graph = episode_data["graph"]
-            
-            # Estimate maximum unique samples for this episode
-            max_unique_support = calculate_max_unique_samples(graph, args.support_steps)
-            print(f"  Estimated maximum unique samples for episode {episode_id}: ~{max_unique_support}")
-            
-            if args.samples_per_episode > max_unique_support:
-                print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
-            
-            
-            if args.held_out_color_exp:
-                support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges)
-            else:
-                support_and_query_samples = generate_support_and_query_examples(
-                    graph, 
-                    args.samples_per_episode,
-                    args.support_steps,
-                    args.query_steps,
-                )
-            
-            # Store the episode samples
-            val_output_data["episodes"][episode_id] = {
-                "support": support_and_query_samples["support"],
-                "query": support_and_query_samples["query"],
-                "support_num_generated": support_and_query_samples["support_num_generated"],
-                "query_num_generated": support_and_query_samples["query_num_generated"],
-                "support_samples_info": support_and_query_samples["support_samples_info"],
-                "query_samples_info": support_and_query_samples["query_samples_info"]
-            }
-            
-            print(f"  Generated {support_and_query_samples['support_num_generated']} support samples and {support_and_query_samples['query_num_generated']} query samples")
-            # Update total samples
-            support_num_generated = support_and_query_samples["support_num_generated"]
-            query_num_generated = support_and_query_samples["query_num_generated"]
-            total_val_samples += support_num_generated + query_num_generated
-        
-        # Write validation output to JSON file
-        val_output_file = os.path.join(args.output_dir, val_output_file)
-        with open(val_output_file, 'w') as f:
-            json.dump(val_output_data, f)
-        
-        print(f"\nGenerated a total of {total_val_samples} unique validation samples across {len(val_graphs)} episodes")
-        print(f"Validation output saved to {val_output_file}")
-    
-    # Use the appropriate output data for printing examples
-    output_data = train_output_data if args.create_val_from_train else train_output_data
-    
-    # Print a few example samples
-    print("\nExample samples:")
-    example_count = 0
-    for episode_id, episode_data in output_data["episodes"].items():
-        support_samples = episode_data['support']
-        query_samples = episode_data['query']
-        if support_samples:
-            for i in range(min(2, len(support_samples))):
-                print(f"  Episode {episode_id}, support sample {i+1}: {support_samples[i]}")
-                example_count += 1
-                if example_count >= 5:
-                    break
-        if query_samples:
-            for i in range(min(2, len(query_samples))):
-                print(f"  Episode {episode_id}, query sample {i+1}: {query_samples[i]}")
-                example_count += 1
-                if example_count >= 5:
-                    break
-        
-        # Stop after printing 5 episodes
-        if example_count >= 10:
-            break
+            # Stop after printing 5 episodes
+            if example_count >= 10:
+                break
 
 if __name__ == "__main__":
     main()
