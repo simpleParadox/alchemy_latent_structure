@@ -424,12 +424,12 @@ def main():
     parser = argparse.ArgumentParser(description="Generate samples from chemistry graph")
     # parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/deterministic_chemistries_167424_80_unique_stones_aligned_stone.json.gz",
     #                     help="Path to the chemistry graph JSON file")
-    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/enhanced_chemistries_with_transitions.pkl")
+    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/enhanced_chemistries_with_transitions.pkl") # Enhanced chemistries contain the transitions that are unique in nature (all the chemistries are being operated on the perceived chemistry).
     parser.add_argument("--output", default="chemistry_samples_167424_80_unique_stones.json",
                         help="Output JSON file path for generated samples")
-    parser.add_argument("--samples_per_episode", type=int, default=1000,
+    parser.add_argument("--samples_per_episode", type=int, default=10000,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=2,
+    parser.add_argument("--support_steps", type=int, default=4,
                         help="Minimum number of transformation steps in each sample")
     parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
@@ -439,21 +439,21 @@ def main():
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
                         help="Process the complete graphs only", default=False)
-    parser.add_argument("--output_dir", default="generated_data_enhanced",
+    parser.add_argument("--output_dir", default="generated_data_enhanced_qnodes_in_snodes",
                         help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced
     
     # Add a new argument for your experiment
     parser.add_argument("--held_out_color_exp", action="store_true",
                         help="Generate data for the held-out color pair experiment.", default=False)
     parser.add_argument("--num_held_out_edges", type=int, default=1,
-                        help="Number of edges to hold out for the held-out color pair experiment. Default is 1.")
+                        help="Number of edges to hold out for the held-out color pair experiment. Default is 1. Ignored if --held_out_color_exp is not set.")
 
     args = parser.parse_args()
     
     output_file = args.output
     
     # Set random seed for reproducibility
-    seeds = [0,1,2]
+    seeds = [0]
     for seed in seeds:
         print("Using seed:", seed)
     
@@ -559,7 +559,7 @@ def main():
                 if args.process_complete_graph_only and not episode_data.get("is_complete", False):
                     print(f"Skipping episode {episode_id} as it is not a complete graph.")
                     continue
-                print(f"Processing Training Episode {episode_id}...")
+                # print(f"Processing Training Episode {episode_id}...")
                 # Extract the graph for this episode
                 if not (episode_id == '_metadata'):
                     graph = episode_data["graph"]
@@ -570,11 +570,11 @@ def main():
                 # Estimate maximum unique samples for this episode
                 max_unique_query = calculate_max_unique_samples(graph, args.query_steps)
                 
-                if args.samples_per_episode > max_unique_support:
-                    print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique support samples (~{max_unique_support}) for episode {episode_id}.")
+                # if args.samples_per_episode > max_unique_support:
+                    # print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique support samples (~{max_unique_support}) for episode {episode_id}.")
                 
-                if args.samples_per_episode > max_unique_query:
-                    print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
+                # if args.samples_per_episode > max_unique_query:
+                    # print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
                 
                 if args.held_out_color_exp:
                     support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=seed)
