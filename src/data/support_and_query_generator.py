@@ -453,7 +453,7 @@ def main():
     output_file = args.output
     
     # Set random seed for reproducibility
-    seeds = [0]
+    seeds = [0,1,2]
     for seed in seeds:
         print("Using seed:", seed)
     
