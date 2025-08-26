@@ -363,7 +363,7 @@ def main():
             "n_embd": 256,
             "n_layer": 4,
             "n_head": 4,
-            "n_inner": 1024,
+            "n_inner": 512,
             "activation_function": "gelu_new",
             "resid_pdrop": 0.1,
             "embd_pdrop": 0.1,
@@ -435,7 +435,7 @@ def main():
     )
     
     # Create custom data collator with left padding for decoder model
-    data_collator = CustomDataCollator(tokenizer, padding_side='left')
+    data_collator = CustomDataCollator(tokenizer, padding_side='right')
     
     # Training arguments with DDP support
     training_args = TrainingArguments(

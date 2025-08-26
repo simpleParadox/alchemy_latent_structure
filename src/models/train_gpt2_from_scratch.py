@@ -32,6 +32,7 @@ from typing import Dict, List, Any, Optional
 import wandb
 from sklearn.metrics import accuracy_score, f1_score
 from tqdm import tqdm
+import torch.distributed as dist
 
 
 def set_seed(seed_value):
@@ -162,7 +163,7 @@ class AlchemyDatasetForGPT2(Dataset):
         # Tokenize with HuggingFace tokenizer
         encoding = self.tokenizer(
             input_text,
-            truncation=True,
+            truncation=False,
             padding=False,  # We'll pad in the collate function
             max_length=self.max_length,
             padding_side='left',  # Left padding for decoder models
@@ -298,22 +299,32 @@ def compute_metrics(eval_pred):
     }
 
 
+def is_main_process():
+    """Check if this is the main process in distributed training."""
+    return not dist.is_initialized() or dist.get_rank() == 0
+
+def wait_for_everyone():
+    """Wait for all processes to reach this point."""
+    if dist.is_initialized():
+        dist.barrier()
+
+
 def main():
     # Set CUDA devices to use only GPUs 0,1,2,3
     os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
     
     parser = argparse.ArgumentParser(description="Train GPT-2 from scratch on Alchemy dataset")
     parser.add_argument("--train_data_path", type=str, 
-                       default="src/data/preprocessed_separate/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl",
+                       default="src/data/preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl",
                        help="Path to training data")
     parser.add_argument("--train_vocab_path", type=str,
-                       default="src/data/preprocessed_separate/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_vocab.pkl", 
+                       default="src/data/preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_vocab.pkl", 
                        help="Path to training vocabulary")
     parser.add_argument("--val_data_path", type=str,
-                       default="src/data/preprocessed_separate/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl",
+                       default="src/data/preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl",
                        help="Path to validation data")
     parser.add_argument("--val_vocab_path", type=str,
-                       default="src/data/preprocessed_separate/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_vocab.pkl",
+                       default="src/data/preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_vocab.pkl",
                        help="Path to validation vocabulary")
     parser.add_argument("--output_dir", type=str, default="src/saved_models/gpt2_alchemy_classification",
                        help="Output directory for model and tokenizer")
@@ -321,8 +332,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=64, help="Training batch size")
     parser.add_argument("--eval_batch_size", type=int, default=2, help="Evaluation batch size")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--max_length", type=int, default=512, help="Maximum sequence length")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--max_length", type=int, default=4096, help="Maximum sequence length")
+    parser.add_argument("--seed", type=int, default=0, help="Random seed")
     parser.add_argument("--model_size", type=str, default="tiny", choices=["tiny", "small", "medium"],
                        help="Model size configuration")
     parser.add_argument("--use_wandb", action="store_true", help="Use Weights & Biases for logging")
@@ -334,26 +345,35 @@ def main():
     # Set seed
     set_seed(args.seed)
     
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    # Create output directory (only main process)
+    if is_main_process():
+        os.makedirs(args.output_dir, exist_ok=True)
     
-    # Initialize W&B if requested
-    if args.use_wandb:
+    # Wait for main process to create directory
+    wait_for_everyone()
+    
+    # Initialize W&B (only main process)
+    if args.use_wandb and is_main_process():
         wandb.init(project=args.wandb_project, config=args)
     
-    # Build and save tokenizer
+    # Build and save tokenizer (only main process)
     tokenizer_path = os.path.join(args.output_dir, "tokenizer.json")
-    if not os.path.exists(tokenizer_path):
-        print("Building tokenizer from training data...")
-        build_tokenizer_from_alchemy_data(args.train_data_path, args.train_vocab_path, tokenizer_path)
-    else:
-        print(f"Loading existing tokenizer from {tokenizer_path}")
+    if is_main_process():
+        if not os.path.exists(tokenizer_path):
+            print("Building tokenizer from training data...")
+            build_tokenizer_from_alchemy_data(args.train_data_path, args.train_vocab_path, tokenizer_path)
+        else:
+            print(f"Loading existing tokenizer from {tokenizer_path}")
     
-    # Load the tokenizer
+    # Wait for main process to finish tokenizer creation/loading
+    wait_for_everyone()
+    
+    # Load the tokenizer (all processes)
     tokenizer = GPT2TokenizerFast(tokenizer_file=tokenizer_path)
     tokenizer.pad_token = tokenizer.unk_token  # GPT-2 doesn't have a pad token by default
     
-    print(f"Tokenizer vocabulary size: {len(tokenizer)}")
+    if is_main_process():
+        print(f"Tokenizer vocabulary size: {len(tokenizer)}")
     
     # Model configuration based on size
     model_configs = {
@@ -363,7 +383,7 @@ def main():
             "n_embd": 256,
             "n_layer": 4,
             "n_head": 4,
-            "n_inner": 1024,
+            "n_inner": 512,
             "activation_function": "gelu_new",
             "resid_pdrop": 0.1,
             "embd_pdrop": 0.1,
@@ -403,25 +423,36 @@ def main():
     
     config = GPT2Config(**model_configs[args.model_size])
     
-    # Load number of classes from vocabulary
+    # Load number of classes from vocabulary (only main process for printing)
     with open(args.train_vocab_path, 'rb') as f:
         vocab_data = pickle.load(f)
     num_classes = 108 #len(vocab_data['stone_state_to_id'])
     
-    print(f"Creating GPT-2 model with {args.model_size} configuration")
-    print(f"Number of classes: {num_classes}")
+    if is_main_process():
+        print(f"Creating GPT-2 model with {args.model_size} configuration")
+        print(f"Number of classes: {num_classes}")
     
     # Create the model
     model = GPT2ForClassification(config, num_classes)
     
-    # Print parameter count
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total parameters: {total_params:,}")
-    print(f"Trainable parameters: {trainable_params:,}")
+    # Print parameter count (only main process)
+    if is_main_process():
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Total parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
     
-    # Create datasets
-    print("Loading datasets...")
+    # Create datasets (all processes, but suppress prints for non-main)
+    if is_main_process():
+        print("Loading datasets...")
+    
+    # Temporarily redirect prints for non-main processes during dataset loading
+    import sys
+    import io
+    original_stdout = sys.stdout
+    if not is_main_process():
+        sys.stdout = io.StringIO()  # Suppress prints for non-main processes
+    
     train_dataset = AlchemyDatasetForGPT2(
         args.train_data_path, 
         args.train_vocab_path, 
@@ -435,6 +466,10 @@ def main():
         tokenizer,
         args.max_length
     )
+    
+    # Restore stdout for non-main processes
+    if not is_main_process():
+        sys.stdout = original_stdout
     
     # Create custom data collator with left padding for decoder model
     data_collator = CustomDataCollator(tokenizer, padding_side='left')
@@ -456,7 +491,7 @@ def main():
         load_best_model_at_end=False,
         metric_for_best_model="eval_accuracy",
         greater_is_better=True,
-        save_total_limit=3,
+        save_total_limit=10,
         report_to="wandb" if args.use_wandb else None,
         run_name=f"gpt2-{args.model_size}-alchemy-classification",
         dataloader_num_workers=10,
@@ -480,26 +515,29 @@ def main():
     )
     
     # Train the model
-    print("Starting training...")
+    if is_main_process():
+        print("Starting training...")
     trainer.train()
     
-    # Save the final model and tokenizer
-    print("Saving final model and tokenizer...")
-    trainer.save_model()
-    tokenizer.save_pretrained(args.output_dir)
+    # Save the final model and tokenizer (only main process)
+    if is_main_process():
+        print("Saving final model and tokenizer...")
+        trainer.save_model()
+        tokenizer.save_pretrained(args.output_dir)
     
-    # Final evaluation
-    print("Running final evaluation...")
-    eval_results = trainer.evaluate()
-    print("Final evaluation results:")
-    for key, value in eval_results.items():
-        print(f"  {key}: {value:.4f}")
-    
-    # Save evaluation results
-    with open(os.path.join(args.output_dir, 'eval_results.json'), 'w') as f:
-        json.dump(eval_results, f, indent=2)
-    
-    print(f"Training completed! Model saved to {args.output_dir}")
+    # Final evaluation (only main process)
+    if is_main_process():
+        print("Running final evaluation...")
+        eval_results = trainer.evaluate()
+        print("Final evaluation results:")
+        for key, value in eval_results.items():
+            print(f"  {key}: {value:.4f}")
+        
+        # Save evaluation results
+        with open(os.path.join(args.output_dir, 'eval_results.json'), 'w') as f:
+            json.dump(eval_results, f, indent=2)
+        
+        print(f"Training completed! Model saved to {args.output_dir}")
 
 
 if __name__ == "__main__":
