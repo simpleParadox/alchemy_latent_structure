@@ -383,7 +383,7 @@ class StoneStateDecoderClassifier(nn.Module):
         # For classification, we need the representation of the last valid token
         if src_padding_mask is not None:
             if self.padding_side == "left":
-                # For left-padding, the last token (rightmost) is always the last valid token
+                # For left-padding, the last token (rightmost) is always the last token
                 # since padding is on the left side
                 last_token_output = decoder_output[:, -1, :]
             else:
