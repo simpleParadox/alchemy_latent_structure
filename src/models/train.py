@@ -55,10 +55,17 @@ def parse_args():
                         help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=256,
                         help="Batch size for training and validation.")
+
     parser.add_argument("--learning_rate", type=float, default=1e-4,
                         help="Initial learning rate for AdamW optimizer.")
     parser.add_argument("--weight_decay", type=float, default=0.01,
-                        help="Weight decay for AdamW optimizer.")
+                        help="Weight decay for the optimizer.")
+    parser.add_argument("--optimizer", type=str, 
+                        default='adamw', choices=['adam', 'adamw', 'rmsprop', 'adagrad'],
+                        help="Optimizer to use: 'adam', 'adamw', 'rmsprop', or 'adafactor'. Default is 'adamw'.")
+    # NOTE: pytorch 2.4 does not have Adafactor implemented. So not adding it here.
+
+
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility.")
     parser.add_argument("--save_dir", type=str, default="src/saved_models/",
@@ -1029,17 +1036,29 @@ def main():
     # --- Optimizer and Scheduler ---
     print(f"Base learning rate: {args.learning_rate }, Weight decay: {args.weight_decay}")
 
-    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    print("Using AdamW optimizer.")
-    
-    # Load adafactor optimizer.
-    # optimizer = optim.Adafactor(
-    #     model.parameters(),
-    #     lr=args.learning_rate,
-    #     weight_decay=args.weight_decay,
-    # )
-    # print("Using Adafactor optimizer.")
-    
+
+    if args.optimizer == "adamw":
+        optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+        print("Using AdamW optimizer.")
+    elif args.optimizer == "adam":
+        optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=0)
+        print("Using Adam optimizer with no weight decay (0) - hardcoded.")
+    elif args.optimizer == 'rmsprop':
+        optimizer = optim.RMSprop(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+        print("Using RMSprop optimizer.")
+    elif args.optimizer == 'adagrad':
+        optimizer = optim.Adagrad(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+        print("Using Adagrad optimizer.")
+    # elif args.optimizer == 'adafactor':
+    #     optimizer = optim.Adafactor(
+    #         model.parameters(),
+    #         lr=args.learning_rate,
+    #         scale_parameter=False,
+    #         relative_step=False,
+    #         weight_decay=args.weight_decay,
+    #         warmup_init=False
+    #     )
+        # print("Using Adafactor optimizer.")
     
     use_scheduler = str(args.use_scheduler) == "True" or str(args.use_scheduler) == "true"
     print("Use scheduler: ", use_scheduler)
@@ -1059,7 +1078,9 @@ def main():
             print(f"Using CosineAnnealingLR with T_max={num_training_steps}")
         elif args.scheduler_type == 'cosine_restarts':
             # For cosine annealing with restarts, T_0 is the number of epochs
-            t_0 = 10
+            t_0 = 20
+            if accelerator.is_local_main_process:
+                wandb.log({"T_0": t_0})
             print(f"Using CosineAnnealingWarmRestarts with T_0={t_0} (called per batch but will restart after every T_0 epochs)")
             scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=t_0, eta_min=1e-5)
             print(f"Using CosineAnnealingWarmRestarts with T_0={t_0}")
