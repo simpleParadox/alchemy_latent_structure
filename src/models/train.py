@@ -720,12 +720,12 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             print(f"Saved inputs to: {input_path}")
         
         # Log file paths to wandb for easy access
-        wandb.log({
-            f"predictions_file_epoch_{epoch_num+1}": pred_path,
-            f"targets_file_epoch_{epoch_num+1}": target_path,
-        })
-        if all_encoder_inputs is not None:
-            wandb.log({f"inputs_file_epoch_{epoch_num+1}": input_path})
+        # wandb.log({
+        #     f"predictions_file_epoch_{epoch_num+1}": pred_path,
+        #     f"targets_file_epoch_{epoch_num+1}": target_path,
+        # })
+        # if all_encoder_inputs is not None:
+        #     wandb.log({f"inputs_file_epoch_{epoch_num+1}": input_path})
             
     avg_epoch_loss = total_loss / len(dataloader)
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
