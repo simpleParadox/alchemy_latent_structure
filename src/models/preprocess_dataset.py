@@ -197,22 +197,22 @@ def main():
     
     parser = argparse.ArgumentParser(description="Preprocess Alchemy datasets")
     parser.add_argument("--train_json_file", type=str, required=False,
-                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_5_seed_.json",
-                        # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_3_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_5_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
-                        default="/home/rsaha/projects/dm_alchemy/src/data/generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_5_seed_.json",
-                        # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_3_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_5_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         default="classification",
                         help="Type of task")
-    parser.add_argument("--output_dir", type=str, default="src/data/preprocessed_separate_enhanced_qnodes_in_snodes",
+    parser.add_argument("--output_dir", type=str, default="src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes",
                         help="Directory to save preprocessed files")
     parser.add_argument("--filter_query_from_support", action="store_true", default=True,
                         help="Filter query examples from support sets")
-    parser.add_argument("--num_workers", type=int, default=5,
+    parser.add_argument("--num_workers", type=int, default=20,
                         help="Number of workers for multiprocessing")
     parser.add_argument("--chunk_size", type=int, default=60000,
                         help="Chunk size for processing")
@@ -233,7 +233,8 @@ def main():
     if args.output_format == 'stone_states':
         assert args.task_type in ['classification', 'seq2seq_stone_state']
     
-    for seed in [0, 1, 2]:
+    # for seed in [0, 1, 2]:
+    for seed in [0,1,2,3,4]:
         train_json_file = args.train_json_file.replace(f"seed_", f"seed_{seed}")
         val_json_file = args.val_json_file.replace(f"seed_", f"seed_{seed}")
         # Preprocess training data first (this will create the vocabulary)

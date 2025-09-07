@@ -684,6 +684,8 @@ def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_c
     )
     
     model.to(device)
+    first_param = next(model.parameters())
+    print(f"First 5 weights: {first_param.flatten()[:5]}")
     
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model '{config_name}' (Decoder-Only Classifier: src_vocab={src_vocab_size}, num_classes={num_classes}) on {device} has {total_params/1e6:.2f}M parameters.")

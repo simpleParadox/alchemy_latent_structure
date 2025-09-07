@@ -189,15 +189,14 @@ def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, seed=0) -
     remaining transitions for the held-out pair.
     """
     # Define the color pairs. This should match with the colors used in the deterministic chemistry graphs.
-    color_pairs = [('RED', 'GREEN'), ('PINK', 'CYAN'), ('ORANGE', 'YELLOw')]
+    color_pairs = [('RED', 'GREEN'), ('PINK', 'CYAN'), ('ORANGE', 'YELLOW')] # They must be exactly these pairs. Capitalization matters.
     
     # 1. Randomly select one color pair to hold out
-    random.seed(seed)
     print("Seed for held-out color pair generation:", seed)
     held_out_pair = random.choice(color_pairs)
     support_colors = [color for pair in color_pairs if pair != held_out_pair for color in pair]
     
-    print(f"Holding out color pair: {held_out_pair}")
+    # print(f"Holding out color pair: {held_out_pair}")
 
     # 2. Find all transitions for the held-out pair
     held_out_transitions = []
@@ -245,6 +244,7 @@ def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, seed=0) -
     if len(held_out_pair_keys) < num_held_out_edges:
         print(f"Warning: Only {len(held_out_pair_keys)} transitions found for the held-out pair, which is less than the requested {num_held_out_edges}.")
         num_held_out_edges = len(held_out_pair_keys)
+        assert num_held_out_edges > 0, "No transitions available to hold out."
         print(f"Adjusting num_held_out_edges to {num_held_out_edges}.")
         print("This will result in unexpected behavior if the held-out pair has fewer transitions than requested.")
     # Get num_hled_out_edges transitions for the held-out pair
@@ -439,7 +439,11 @@ def main():
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
                         help="Process the complete graphs only", default=False)
+<<<<<<< Updated upstream
     parser.add_argument("--output_dir", default="generated_data_enhanced_qnodes_in_snodes_complete_graphs_only",
+=======
+    parser.add_argument("--output_dir", default="complete_graph_generated_data_enhanced_qnodes_in_snodes",
+>>>>>>> Stashed changes
                         help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced
     
     # Add a new argument for your experiment
@@ -453,17 +457,20 @@ def main():
     output_file = args.output
     
     # Set random seed for reproducibility
-    seeds = [0,1,2]
+    
+    # Load chemistry graph with multiple episodes
+    print(f"Loading chemistry graph from {args.input}...")
+    chemistry_graphs = load_chemistry_graph(args.input)
+    num_episodes = len(chemistry_graphs)
+    print(f"Loaded data for {num_episodes} episodes")
+    
+    seeds = [0, 1, 2, 3, 4]
     for seed in seeds:
         print("Using seed:", seed)
     
         random.seed(seed)
         
-        # Load chemistry graph with multiple episodes
-        print(f"Loading chemistry graph from {args.input}...")
-        chemistry_graphs = load_chemistry_graph(args.input)
-        num_episodes = len(chemistry_graphs)
-        print(f"Loaded data for {num_episodes} episodes")
+        
 
         # Split episodes into training and validation sets if requested
         if args.create_val_from_train:
@@ -557,7 +564,7 @@ def main():
                 
                 # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
                 if args.process_complete_graph_only and not episode_data.get("is_complete", False):
-                    print(f"Skipping episode {episode_id} as it is not a complete graph.")
+                    # print(f"Skipping episode {episode_id} as it is not a complete graph.")
                     continue
                 # print(f"Processing Training Episode {episode_id}...")
                 # Extract the graph for this episode
@@ -638,11 +645,11 @@ def main():
             total_val_samples = 0
             print("\nProcessing validation episodes...")
             for episode_id, episode_data in val_graphs.items():
-                print(f"Processing Validation Episode {episode_id}...")
+                # print(f"Processing Validation Episode {episode_id}...")
                 
                 # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
                 if args.process_complete_graph_only and not episode_data.get("is_complete", False):
-                    print(f"Skipping episode {episode_id} as it is not a complete graph.")
+                    # print(f"Skipping episode {episode_id} as it is not a complete graph.")
                     continue
                 # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
                 
@@ -651,14 +658,14 @@ def main():
                 
                 # Estimate maximum unique samples for this episode
                 max_unique_support = calculate_max_unique_samples(graph, args.support_steps)
-                print(f"  Estimated maximum unique samples for episode {episode_id}: ~{max_unique_support}")
+                # print(f"  Estimated maximum unique samples for episode {episode_id}: ~{max_unique_support}")
                 
-                if args.samples_per_episode > max_unique_support:
-                    print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
+                # if args.samples_per_episode > max_unique_support:
+                    # print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
                 
                 
                 if args.held_out_color_exp:
-                    support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges)
+                    support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=seed)
                 else:
                     support_and_query_samples = generate_support_and_query_examples(
                         graph, 
@@ -677,7 +684,7 @@ def main():
                     "query_samples_info": support_and_query_samples["query_samples_info"]
                 }
                 
-                print(f"  Generated {support_and_query_samples['support_num_generated']} support samples and {support_and_query_samples['query_num_generated']} query samples")
+                # print(f"  Generated {support_and_query_samples['support_num_generated']} support samples and {support_and_query_samples['query_num_generated']} query samples")
                 # Update total samples
                 support_num_generated = support_and_query_samples["support_num_generated"]
                 query_num_generated = support_and_query_samples["query_num_generated"]
