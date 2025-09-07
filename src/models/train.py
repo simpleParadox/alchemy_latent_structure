@@ -130,6 +130,13 @@ def parse_args():
     
     parser.add_argument("--fp16", type=str, default="False", choices=["True", "False"])
 
+    # Add resume arguments
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None,
+                        help="Path to checkpoint file to resume training from.")
+    parser.add_argument("--resume_wandb_run_id", type=str, default=None,
+                        help="wandb run ID to resume. If provided, will continue the same wandb run.")
+    parser.add_argument("--allow_data_path_mismatch", type=str, default="False", choices=["True", "False"],
+                        help="Allow resuming even if data paths don't match checkpoint.")
     
     return parser.parse_args()
 
@@ -711,7 +718,10 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
         np.savez_compressed(target_path, targets=targets_array)
     
         if all_encoder_inputs is not None:
-            inputs_array = np.array(all_encoder_inputs, dtype=object)
+            # if accelerator.is_local_main_process:
+            #     print("Shape of inputs array:", len(all_encoder_inputs), all_encoder_inputs[0].shape if len(all_encoder_inputs) > 0 else "N/A")
+                # import pdb; pdb.set_trace()
+            inputs_array = np.array(all_encoder_inputs)
             np.savez_compressed(input_path, inputs=inputs_array)
         
         print(f"Saved predictions to: {pred_path}")
@@ -735,10 +745,107 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     else: # classification or classification_multi_label
         return avg_epoch_loss, avg_epoch_accuracy
 
+def load_checkpoint(checkpoint_path, model, optimizer, scheduler, accelerator):
+    """Load checkpoint and return starting epoch and best validation loss."""
+    print(f"Loading checkpoint from: {checkpoint_path}")
+    
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    
+    # Load model state
+    unwrapped_model = accelerator.unwrap_model(model)
+    unwrapped_model.load_state_dict(checkpoint['model_state_dict'])
+    
+    # Load optimizer state
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    # Load scheduler state if available
+    if scheduler is not None and 'scheduler_state_dict' in checkpoint:
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        print("Loaded scheduler state from checkpoint")
+    
+    start_epoch = checkpoint['epoch'] + 1
+    best_val_loss = checkpoint.get('best_val_loss', checkpoint.get('loss', float('inf')))
+    
+    print(f"Resumed from epoch {checkpoint['epoch']}, starting epoch {start_epoch}")
+    print(f"Previous best validation loss: {best_val_loss}")
+    
+    return start_epoch, best_val_loss, checkpoint.get('args', None)
+
+def validate_resume_compatibility(checkpoint_args, current_args, allow_mismatch=False):
+    """Validate that resumed training is compatible with current arguments."""
+    if not checkpoint_args:
+        print("No checkpoint args found, skipping validation")
+        return
+    
+    # Critical parameters that must match
+    critical_params = ['task_type', 'model_size', 'model_architecture']
+    # Data parameters that should ideally match
+    data_params = ['train_data_path', 'val_data_path', 'data_split_seed']
+    
+    errors = []
+    warnings = []
+    
+    # Check critical parameters
+    for param in critical_params:
+        if hasattr(checkpoint_args, param) and hasattr(current_args, param):
+            checkpoint_val = getattr(checkpoint_args, param)
+            current_val = getattr(current_args, param)
+            if checkpoint_val != current_val:
+                errors.append(f"{param}: checkpoint={checkpoint_val}, current={current_val}")
+    
+    # Check data parameters
+    for param in data_params:
+        if hasattr(checkpoint_args, param) and hasattr(current_args, param):
+            checkpoint_val = getattr(checkpoint_args, param)
+            current_val = getattr(current_args, param)
+            if checkpoint_val != current_val:
+                warnings.append(f"{param}: checkpoint={checkpoint_val}, current={current_val}")
+    
+    if errors:
+        raise ValueError(f"Critical parameter mismatch - cannot resume: {errors}")
+    
+    if warnings:
+        print(f"WARNING: Parameter differences detected: {warnings}")
+        if not allow_mismatch:
+            print("Use --allow_data_path_mismatch to override this warning and continue")
+            raise ValueError("Data path mismatch detected. Use --allow_data_path_mismatch to continue anyway.")
+        else:
+            print("Continuing with different data paths as requested")
+
 def main():
     args = parse_args()
-   
+    
+    # ADD THIS SECTION - Handle resume logic early
+    start_epoch = 0
+    best_val_loss = float('inf')
+    resume_checkpoint_path = None
+    checkpoint_args = None
+    
+    if args.resume_from_checkpoint and args.resume_from_checkpoint != '':
+        resume_checkpoint_path = args.resume_from_checkpoint
+        if not os.path.exists(resume_checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint not found: {resume_checkpoint_path}")
         
+        # Load checkpoint to get original args for validation
+        print(f"Loading checkpoint for resume: {resume_checkpoint_path}")
+        checkpoint = torch.load(resume_checkpoint_path, map_location='cpu')
+        checkpoint_args = checkpoint.get('args', None)
+        
+        # Validate compatibility
+        validate_resume_compatibility(
+            checkpoint_args, 
+            args, 
+            allow_mismatch=args.allow_data_path_mismatch
+        )
+        
+        print(f"Resuming training from epoch {checkpoint['epoch'] + 1}")
+        if checkpoint_args:
+            print(f"Original train data: {getattr(checkpoint_args, 'train_data_path', 'N/A')}")
+            print(f"Current train data: {args.train_data_path}")
+
+    args.allow_data_path_mismatch = str(args.allow_data_path_mismatch) == 'True'  or str(args.allow_data_path_mismatch) == 'true'
+
+    
     args.is_held_out_color_exp = str(args.is_held_out_color_exp) == 'True' or str(args.is_held_out_color_exp) == 'true'  # Convert to boolean 
     if args.is_held_out_color_exp:  
         print("Running held-out color experiment.")
@@ -812,15 +919,25 @@ def main():
 
     # Initialize wandb only on main process
     if accelerator.is_local_main_process:
+        # REPLACE YOUR EXISTING wandb.init() with this:
+        wandb_kwargs = {
+            "project": args.wandb_project,
+            "entity": args.wandb_entity,
+            "config": vars(args),
+            "mode": args.wandb_mode
+        }
         
-
-        wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            name=args.wandb_run_name if args.wandb_run_name else f"{args.task_type}_{args.model_size}_{time.strftime('%Y%m%d-%H%M%S')}",
-            config=vars(args),
-            mode=args.wandb_mode
-        )
+        if args.resume_wandb_run_id:
+            # Resume specific wandb run
+            wandb_kwargs["id"] = args.resume_wandb_run_id
+            wandb_kwargs["resume"] = "must"
+            wandb_kwargs["name"] = None  # Don't override name when resuming
+            print(f"Resuming wandb run: {args.resume_wandb_run_id}")
+        else:
+            # New wandb run
+            wandb_kwargs["name"] = args.wandb_run_name if args.wandb_run_name else f"{args.task_type}_{args.model_size}_{time.strftime('%Y%m%d-%H%M%S')}"
+        
+        wandb.init(**wandb_kwargs)
 
     print(f"Using device: {accelerator.device}")
     print(f"Selected task type: {args.task_type}")
@@ -1095,6 +1212,13 @@ def main():
         model, optimizer, train_dataloader, scheduler
     )
     
+    # ADD THIS SECTION - Load checkpoint after preparation if resuming
+    if resume_checkpoint_path:
+        start_epoch, best_val_loss, _ = load_checkpoint(
+            resume_checkpoint_path, model, optimizer, scheduler, accelerator
+        )
+    # END OF ADDED SECTION
+    
     # Note: val_dataloader is NOT prepared with accelerator for single GPU validation
 
     if accelerator.is_local_main_process:
@@ -1147,6 +1271,8 @@ def main():
             print(f"Held-out color number extracted: {held_out_edge_number}")
         args.save_dir = os.path.join(args.save_dir, f"held_out_color_exp")
         args.save_dir = os.path.join(args.save_dir, f"held_out_edges_{held_out_edge_number}")
+        if 'complete_graph' in args.train_data_path:
+            args.save_dir = os.path.join(args.save_dir, f"complete_graph")
         
     hierarchical_save_dir = os.path.join(
         args.save_dir,
@@ -1169,7 +1295,7 @@ def main():
 
     best_val_loss = float('inf')
 
-    for epoch in tqdm(range(args.epochs), disable=not accelerator.is_local_main_process):
+    for epoch in tqdm(range(start_epoch, args.epochs), disable=not accelerator.is_local_main_process):
         if accelerator.is_local_main_process:
             print(f"--- Epoch {epoch+1}/{args.epochs} ---")
         with accelerator.autocast():
@@ -1203,7 +1329,8 @@ def main():
                     'epoch': epoch,
                     'model_state_dict': unwrapped_model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': val_loss,
+                    'best_val_loss': best_val_loss,  
+                    'loss': val_loss,  # or train_loss
                     'args': args,
                     'src_vocab_word2idx': full_dataset.word2idx,
                     'src_vocab_idx2word': full_dataset.idx2word
@@ -1218,6 +1345,10 @@ def main():
                     checkpoint['feature_to_idx_map_input'] = full_dataset.feature_to_idx_map_input
                     checkpoint['feature_to_idx_map_output'] = full_dataset.feature_to_idx_map_output
                     checkpoint['num_output_features'] = full_dataset.num_output_features
+                
+                # ADD this section after creating the checkpoint dict:
+                if scheduler is not None:
+                    checkpoint['scheduler_state_dict'] = scheduler.state_dict()
                     
                 if args.save_checkpoints:
                     torch.save(checkpoint, model_save_path)

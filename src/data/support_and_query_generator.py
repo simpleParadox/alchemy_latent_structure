@@ -439,7 +439,7 @@ def main():
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
                         help="Process the complete graphs only", default=False)
-    parser.add_argument("--output_dir", default="generated_data_enhanced_qnodes_in_snodes",
+    parser.add_argument("--output_dir", default="generated_data_enhanced_qnodes_in_snodes_complete_graphs_only",
                         help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced
     
     # Add a new argument for your experiment
