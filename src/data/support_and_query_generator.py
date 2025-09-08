@@ -429,7 +429,7 @@ def main():
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=10000,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=4,
+    parser.add_argument("--support_steps", type=int, default=1,
                         help="Minimum number of transformation steps in each sample")
     parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
@@ -439,8 +439,8 @@ def main():
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
                         help="Process the complete graphs only", default=False)
-    parser.add_argument("--output_dir", default="generated_data_enhanced_qnodes_in_snodes_complete_graphs_only",
-                        help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced
+    parser.add_argument("--output_dir", default="held_out_exps_generated_data_enhanced",
+                        help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced, generated_data_enhanced_qnodes_in_snodes_complete_graphs_only
     
     # Add a new argument for your experiment
     parser.add_argument("--held_out_color_exp", action="store_true",
