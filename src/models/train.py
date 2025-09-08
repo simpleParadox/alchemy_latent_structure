@@ -117,6 +117,9 @@ def parse_args():
                         help="Whether the dataset is a held-out color experiment. Default is True.")
     parser.add_argument("--prediction_type", type=str, default="default", choices=["default", "feature", "autoregressive"],
                         help="Type of prediction: 'default' for standard full stone state classification, 'feature' for feature-wise classification, 'autoregressive' for autoregressive generation.")
+
+    parser.add_argument('--padding_side', type=str, default='right', choices=['left', 'right'],
+                        help="Padding side for sequences: 'left' or 'right'. Default is 'right' for both encoder and decoder.")
     
     
     parser.add_argument("--override_num_classes", type=int, default=108,
@@ -351,7 +354,6 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
         elif args.task_type == "classification":
             target_class_ids = batch["target_class_id"]
                
-            # For decoder-only model, the padding side is left. But for encoder-only model, it is right.
             # This is a design decision and is generally how it is done in the literature.
             src_padding_mask = (encoder_input_ids == pad_token_id) 
             
@@ -581,6 +583,8 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 if all_accs is not None: all_accs.append(acc)
                 
             elif args.task_type == "classification":
+                # if accelerator.is_local_main_process:
+                #     import pdb; pdb.set_trace()
                 target_class_ids = batch["target_class_id"]
                 src_padding_mask = (encoder_input_ids == pad_token_id)
                 output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
@@ -720,8 +724,8 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
         if all_encoder_inputs is not None:
             # if accelerator.is_local_main_process:
             #     print("Shape of inputs array:", len(all_encoder_inputs), all_encoder_inputs[0].shape if len(all_encoder_inputs) > 0 else "N/A")
-                # import pdb; pdb.set_trace()
-            inputs_array = np.array(all_encoder_inputs)
+            #     import pdb; pdb.set_trace()
+            inputs_array = np.array(all_encoder_inputs, dtype=object)
             np.savez_compressed(input_path, inputs=inputs_array)
         
         print(f"Saved predictions to: {pred_path}")
@@ -1063,7 +1067,7 @@ def main():
     custom_collate_train = partial(collate_fn, pad_token_id=pad_token_id, eos_token_id = eos_token_id, 
                                    task_type=args.task_type, model_architecture=args.model_architecture, 
                                    sos_token_id=sos_token_id, prediction_type=args.prediction_type,
-                                   max_seq_len=args.max_seq_len, truncate=args.use_truncation)
+                                   max_seq_len=args.max_seq_len, truncate=args.use_truncation, padding_side=args.padding_side)
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -1106,7 +1110,8 @@ def main():
                 num_classes=num_classes,
                 device=accelerator.device,
                 max_len=args.max_seq_len,
-                prediction_type=args.prediction_type
+                prediction_type=args.prediction_type,
+                padding_side=args.padding_side
             )
         else:  # encoder architecture
             model = create_classifier_model(
@@ -1130,7 +1135,8 @@ def main():
                 num_classes=num_output_features, # Output layer size is num_output_features
                 device=accelerator.device,
                 max_len=args.max_seq_len,
-                prediction_type=args.prediction_type
+                prediction_type=args.prediction_type,
+                padding_side=args.padding_side
             )
         else:  # encoder architecture
             model = create_classifier_model( # Using the same StoneStateClassifier model
@@ -1141,7 +1147,7 @@ def main():
                 max_len=args.max_seq_len,
                 io_sep_token_id=full_dataset.io_sep_token_id if hasattr(full_dataset, 'io_sep_token_id') else None,
                 item_sep_token_id=full_dataset.item_sep_token_id if hasattr(full_dataset, 'item_sep_token_id') else None,
-                pooling_strategy=args.pooling_strategy
+                pooling_strategy=args.pooling_strategy, 
             )
         criterion = nn.CrossEntropyLoss(reduction=args.multi_label_reduction) # Use BCEWithLogitsLoss for multi-label
     else:

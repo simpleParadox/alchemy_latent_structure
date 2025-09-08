@@ -5,18 +5,31 @@ import math
 class PositionalEncoding(nn.Module):
     """Injects positional information into the input embeddings."""
     """Reference: https://pytorch-tutorials-preview.netlify.app/beginner/transformer_tutorial.html#define-the-model"""
-    def __init__(self, d_model, dropout=0.1, max_len=5000):
-        super(PositionalEncoding, self).__init__()
+    # def __init__(self, d_model, dropout=0.1, max_len=5000):
+    #     super(PositionalEncoding, self).__init__()
+    #     self.dropout = nn.Dropout(p=dropout)
+
+    #     pe = torch.zeros(max_len, d_model)
+    #     position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+    #     div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+    #     pe[:, 0::2] = torch.sin(position * div_term) # Apply sine to even indices. The ::2 means every second element starting from index 0 which are the even indices.
+    #     pe[:, 1::2] = torch.cos(position * div_term) # Apply cosine to odd indices
+    #     pe = pe.unsqueeze(0).transpose(0, 1) # Shape: (max_len, 1, d_model) # This is similar to the implementation in the PyTorch documentation.
+    #     # https://pytorch-tutorials-preview.netlify.app/beginner/transformer_tutorial.html#define-the-model
+    #     # self.register_parameter('pe', nn.Parameter(pe, requires_grad=False)) # Register as a non-trainable parameter
+    #     self.register_buffer('pe', pe) # Register as a buffer, not a parameter.
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+        super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term) # Apply sine to even indices. The ::2 means every second element starting from index 0 which are the even indices.
-        pe[:, 1::2] = torch.cos(position * div_term) # Apply cosine to odd indices
-        pe = pe.unsqueeze(0).transpose(0, 1) # Shape: (max_len, 1, d_model) # This is similar to the implementation in the PyTorch documentation.
-        # https://pytorch-tutorials-preview.netlify.app/beginner/transformer_tutorial.html#define-the-model
-        self.register_parameter('pe', nn.Parameter(pe, requires_grad=False)) # Register as a non-trainable parameter
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
 
     def forward(self, x):
         """
@@ -245,6 +258,8 @@ class StoneStateClassifier(nn.Module):
 
         # Pass through Transformer encoder
         # src_key_padding_mask needs to be (batch_size, src_seq_len) where True means pad
+        print(f"src_padding_mask: {src_padding_mask}")
+        import pdb; pdb.set_trace()
         transformer_output = self.transformer_encoder(src_emb, src_key_padding_mask=src_padding_mask)
         # transformer_output: (batch_size, src_seq_len, emb_size)
         
@@ -255,6 +270,7 @@ class StoneStateClassifier(nn.Module):
             pooled_output = self._global_pooling(transformer_output, src_padding_mask)
             
         elif self.pooling_strategy == 'query_only':
+            # NOTE: Never used.
             # First find the last non-padding token in each sequence. This will give us the sequence length.
             if src_padding_mask is not None:
                 # If right padding, the last token is a pad token, so we need to find the index of the last valid token.
@@ -324,7 +340,7 @@ class StoneStateDecoderClassifier(nn.Module):
         self.emb_size = emb_size
         self.architecture = "decoder"  # Add architecture attribute
         self.prediction_type = prediction_type  # 'autoregressive' or 'feature'.
-        self.padding_side = padding_side  # 'left' or 'right' - decoder models typically use left padding
+        self.padding_side = padding_side  # 'left' or 'right' - decoder models typically use left padding but could be right padded if predicting one token.
         self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_len)
 
@@ -383,6 +399,7 @@ class StoneStateDecoderClassifier(nn.Module):
         # For classification, we need the representation of the last valid token
         if src_padding_mask is not None:
             if self.padding_side == "left":
+                print("Warning: Using left padding with a decoder model. Ensure this is intended.")
                 # For left-padding, the last token (rightmost) is always the last token
                 # since padding is on the left side
                 last_token_output = decoder_output[:, -1, :]
