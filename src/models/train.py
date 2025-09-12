@@ -1277,8 +1277,10 @@ def main():
             print(f"Held-out color number extracted: {held_out_edge_number}")
         args.save_dir = os.path.join(args.save_dir, f"held_out_color_exp")
         args.save_dir = os.path.join(args.save_dir, f"held_out_edges_{held_out_edge_number}")
-        if 'complete_graph' in args.train_data_path:
+        if ('complete_graph' in args.train_data_path) or ('complete_graph' in args.preprocessed_dir):
             args.save_dir = os.path.join(args.save_dir, f"complete_graph")
+        else:
+            args.save_dir = os.path.join(args.save_dir, f"all_graphs")
         
     hierarchical_save_dir = os.path.join(
         args.save_dir,

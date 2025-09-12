@@ -258,8 +258,7 @@ class StoneStateClassifier(nn.Module):
 
         # Pass through Transformer encoder
         # src_key_padding_mask needs to be (batch_size, src_seq_len) where True means pad
-        print(f"src_padding_mask: {src_padding_mask}")
-        import pdb; pdb.set_trace()
+        # print(f"src_padding_mask: {src_padding_mask}")
         transformer_output = self.transformer_encoder(src_emb, src_key_padding_mask=src_padding_mask)
         # transformer_output: (batch_size, src_seq_len, emb_size)
         
@@ -335,7 +334,7 @@ class StoneStateDecoderClassifier(nn.Module):
     def __init__(self, num_decoder_layers: int, emb_size: int, nhead: int,
                  src_vocab_size: int, num_classes: int,
                  dim_feedforward: int = 512, dropout: float = 0.1,
-                max_len: int = 5000, prediction_type=None, padding_side: str = "left"):
+                max_len: int = 5000, prediction_type=None, padding_side: str = "right"):
         super(StoneStateDecoderClassifier, self).__init__()
         self.emb_size = emb_size
         self.architecture = "decoder"  # Add architecture attribute
