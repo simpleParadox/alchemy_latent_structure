@@ -249,15 +249,15 @@ class StoneStateClassifier(nn.Module):
         """
         # Embed source tokens
         # src: (batch_size, src_seq_len)
-        src_emb = self.src_tok_emb(src) * math.sqrt(self.emb_size) # (batch_size, src_seq_len, emb_size)
-        
         # Apply positional encoding - PositionalEncoding class expects (seq_len, batch_size, emb_size)
+        src_emb = self.src_tok_emb(src) * math.sqrt(self.emb_size) # (batch_size, src_seq_len, emb_size)
         src_emb_permuted = src_emb.permute(1, 0, 2)  # (src_seq_len, batch_size, emb_size)
         src_emb_pe = self.positional_encoding(src_emb_permuted) # (src_seq_len, batch_size, emb_size)
         src_emb = src_emb_pe.permute(1, 0, 2)  # (batch_size, src_seq_len, emb_size)
 
         # Pass through Transformer encoder
         # src_key_padding_mask needs to be (batch_size, src_seq_len) where True means pad
+        # print(f"src_padding_mask: {src_padding_mask}")
         # print(f"src_padding_mask: {src_padding_mask}")
         transformer_output = self.transformer_encoder(src_emb, src_key_padding_mask=src_padding_mask)
         # transformer_output: (batch_size, src_seq_len, emb_size)
