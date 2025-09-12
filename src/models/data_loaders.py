@@ -18,7 +18,7 @@ def process_episode_worker(args):
     """Worker function for processing a single episode. Must be at module level for multiprocessing."""
     (episode_id, episode_content, task_type, input_word2idx, output_word2idx, stone_state_to_id, 
      special_token_ids, filter_query_from_support, 
-     all_output_features_list, feature_to_idx_map, input_format, output_format, model_architecture) = args
+     all_output_features_list, feature_to_idx_map, input_format, output_format, model_architecture, num_query_samples) = args
     
     if not episode_content:
         return []
@@ -30,6 +30,10 @@ def process_episode_worker(args):
     query_examples_str = episode_content.get("query", [])
     processed_data = []
     
+    # If num_query_samples is specified, select the first num_query_samples queries
+    if num_query_samples is not None:
+        query_examples_str = query_examples_str[:num_query_samples]
+        print(f"Episode {episode_id}: Limiting to first {num_query_samples} query samples.")
     for query_ex_str in query_examples_str:
         # Filter support examples. Essentially, we want to remove the query example from the support set if filter_query_from_support is True.
         filtered_support_examples_str = filter_support_examples_helper(
@@ -383,7 +387,8 @@ class AlchemyDataset(Dataset):
                  use_preprocessed: bool = True,
                  input_format: Optional[str] = None,
                  output_format: Optional[str] = None,
-                 model_architecture: str = "encoder"):
+                 model_architecture: str = "encoder", 
+                 num_query_samples: int = None):
         
         self.task_type = task_type
         self.filter_query_from_support = filter_query_from_support
@@ -450,7 +455,8 @@ class AlchemyDataset(Dataset):
             else:
                 print("Using original preprocessing (preprocessed data disabled)...")
             
-            self._initialize_from_scratch(json_file_path, vocab_word2idx, vocab_idx2word, stone_state_to_id)
+            self._initialize_from_scratch(json_file_path, vocab_word2idx, vocab_idx2word, stone_state_to_id,
+                                          num_query_samples=num_query_samples)
 
         # Create train/val splits if requested
         self.train_set = None
@@ -572,7 +578,8 @@ class AlchemyDataset(Dataset):
             return False
 
     def _initialize_from_scratch(self, json_file_path: str, vocab_word2idx: Dict[str, int] = None, 
-                                vocab_idx2word: Dict[int, str] = None, stone_state_to_id: Dict[str, int] = None):
+                                vocab_idx2word: Dict[int, str] = None, stone_state_to_id: Dict[str, int] = None,
+                                num_query_samples: int = None):
         """Initialize dataset from scratch with separate input/output vocabularies."""
         
         if vocab_word2idx and vocab_idx2word:
@@ -644,7 +651,7 @@ class AlchemyDataset(Dataset):
             self.num_output_features = len(self.feature_to_idx_map_output)
             print(f"Built output feature mapping for multi-label classification: {self.num_output_features} unique features.")
 
-        self.data = self._load_and_preprocess_data(json_file_path, self.num_workers, self.chunk_size)
+        self.data = self._load_and_preprocess_data(json_file_path, self.num_workers, self.chunk_size, num_query_samples=num_query_samples)
 
     def _parse_stone_string_to_tokens(self, stone_str: str) -> List[int]:
         features = re.findall(r':\s*([\w-]+)', stone_str) 
@@ -962,7 +969,8 @@ class AlchemyDataset(Dataset):
         
         return filtered_support
 
-    def _load_and_preprocess_data(self, json_file_path: str, num_workers: int, chunk_size: int) -> List[Dict[str, Any]]:
+    def _load_and_preprocess_data(self, json_file_path: str, num_workers: int, chunk_size: int,
+                                  num_query_samples: int = None) -> List[Dict[str, Any]]:
         with open(json_file_path, 'r') as f:
             raw_data = json.load(f)
         
@@ -982,7 +990,8 @@ class AlchemyDataset(Dataset):
                     self.input_word2idx, self.output_word2idx,  # Pass separate vocabularies
                     self.stone_state_to_id, special_token_ids, self.filter_query_from_support,
                     all_output_features_list_arg, feature_to_idx_map_arg,
-                    self.input_format, self.output_format, self.architecture
+                    self.input_format, self.output_format, self.architecture,
+                    num_query_samples
                 ))
         
         # Use multiprocessing to process episodes in parallel

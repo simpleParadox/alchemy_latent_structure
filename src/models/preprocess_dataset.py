@@ -29,7 +29,8 @@ def preprocess_and_save_dataset(
     num_workers: int = 4,
     chunk_size: int = 10000,
     input_format: str = None,
-    output_format: str = None
+    output_format: str = None,
+    num_query_samples: int = None
 ):
     """
     Preprocess a dataset and save it to disk.
@@ -80,6 +81,7 @@ def preprocess_and_save_dataset(
         use_preprocessed=False, # Initialize from scratch.
         input_format=input_format,
         output_format=output_format,
+        num_query_samples=num_query_samples,
     )
     
     # Generate output filenames based on input file and parameters
@@ -197,18 +199,18 @@ def main():
     
     parser = argparse.ArgumentParser(description="Preprocess Alchemy datasets")
     parser.add_argument("--train_json_file", type=str, required=False,
-                        # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_5_seed_.json",
-                        default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_5_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
-                        # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_5_seed_.json",
-                        default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_5_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
                         default="classification",
                         help="Type of task")
-    parser.add_argument("--output_dir", type=str, default="src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes",
+    parser.add_argument("--output_dir", type=str, default="src/data/subsampled_complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes",
                         help="Directory to save preprocessed files")
     parser.add_argument("--filter_query_from_support", action="store_true", default=True,
                         help="Filter query examples from support sets")
@@ -220,6 +222,8 @@ def main():
                         help="Input format: 'stone_states' for complete states as tokens, 'features' for individual features as tokens. Default inferred from task_type.")
     parser.add_argument("--output_format", type=str, default='stone_states', choices=["stone_states", "features"],
                         help="Output format: 'stone_states' for classification targets, 'features' for multi-hot vectors. Default inferred from task_type.")
+    parser.add_argument("--num_query_samples", type=int, default=None,
+                        help="Number of query samples to use (for debugging). Default is None (use all).")
     
     args = parser.parse_args()
     
@@ -249,7 +253,8 @@ def main():
             num_workers=args.num_workers,
             chunk_size=args.chunk_size,
             input_format=args.input_format,
-            output_format=args.output_format
+            output_format=args.output_format,
+            num_query_samples=args.num_query_samples
         )
         
         print("\n" + "="*60)
@@ -276,7 +281,8 @@ def main():
             num_workers=args.num_workers,
             chunk_size=args.chunk_size,
             input_format=args.input_format,
-            output_format=args.output_format
+            output_format=args.output_format,
+            num_query_samples=args.num_query_samples
         )
         
         print("\n" + "="*60)
