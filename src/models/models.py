@@ -264,7 +264,6 @@ class StoneStateClassifier(nn.Module):
         
         
         if self.pooling_strategy == 'global':
-            
             # Apply global mean pooling
             pooled_output = self._global_pooling(transformer_output, src_padding_mask)
             
@@ -277,7 +276,7 @@ class StoneStateClassifier(nn.Module):
                 # Now for each sequence in the batch, we find the index of the last 'item_separator' token.
                 assert self.item_sep_token is not None, "item_sep_token must be provided for 'query_only' strategy."
                 
-                # Find the positions of item_sep_token_id (marks start of query)
+                # Find the positions of item_sep_token_id (marks end of query input)
                 # Find query tokens using for loop (easier to understand)
                 pooled_outputs = []
                 for i in range(src.size(0)):  # For each sequence in the batch
@@ -287,6 +286,8 @@ class StoneStateClassifier(nn.Module):
                     item_sep_positions = (seq == self.item_sep_token).nonzero(as_tuple=True)[0]
                     if len(item_sep_positions) == 0:
                         # Fallback to last token if no item separator found
+                        print("Warning: No item separator found in sequence. Using last token for pooling. \n" \
+                        "This may indicate an issue with the input formatting.")
                         pooled_outputs.append(transformer_output[i, -1, :])
                         continue
                     
@@ -313,13 +314,20 @@ class StoneStateClassifier(nn.Module):
                         query_embeddings = transformer_output[i, query_start:query_end, :]
                         pooled_outputs.append(query_embeddings.mean(dim=0))
                 
-                pooled_output = torch.stack(pooled_outputs)  # (batch_size, emb_size)
             else:
                 print("Warning: src_padding_mask is None. Using mean pooling over the entire sequence.")
                 pooled_output = self._global_pooling(transformer_output, src_padding_mask=src_padding_mask)
-            
+        elif self.pooling_strategy == 'last_token':
+            # Use the representation of the last non-padding token in each sequence.
+            if src_padding_mask is not None:
+                # If right padding, the last token is a pad token, so we need to find the index of the last valid token.
+                sequence_lengths = (~src_padding_mask).sum(dim=1) - 1 # Get the last valid token index. It's actually the length - 1.
+                # Clamp to ensure we don't go below 0 for edge cases
+                sequence_lengths = torch.clamp(sequence_lengths, min=0)
+                # Extract the last valid token's representation for each sequence   
+                pooled_output = transformer_output[torch.arange(transformer_output.size(0)), sequence_lengths, :]
         else:
-            raise ValueError(f"Unknown pooling strategy: {self.pooling_strategy}. Use 'global' or 'query_only'.")
+            raise ValueError(f"Unknown pooling strategy: {self.pooling_strategy}. Use 'global' or 'query_only', or 'last_token.")
         
 
         # Pass pooled output through classification head

@@ -125,7 +125,7 @@ def parse_args():
     parser.add_argument("--override_num_classes", type=int, default=108,
                         help="Override the number of classes for classification tasks. If None, will use dataset's class count.")
     
-    parser.add_argument("--pooling_strategy", type=str, default="global", choices=["global", "query_only"],
+    parser.add_argument("--pooling_strategy", type=str, default="global", choices=["global", "query_only", "last_token"],
                         help="Pooling strategy for encoder-only models: 'global' for global average pooling, 'query_only' for pooling only over query tokens. Default is 'global'.")
 
     parser.add_argument("--use_truncation", type=str, default="False", choices=["True", "False"],
@@ -1277,8 +1277,10 @@ def main():
             print(f"Held-out color number extracted: {held_out_edge_number}")
         args.save_dir = os.path.join(args.save_dir, f"held_out_color_exp")
         args.save_dir = os.path.join(args.save_dir, f"held_out_edges_{held_out_edge_number}")
-
-    if ('complete_graph' in args.train_data_path) or ('complete_graph' in args.preprocessed_dir):
+    
+    if ('subsampled_complete_graph' in args.train_data_path) or ('subsampled_complete_graph' in args.preprocessed_dir):
+        args.save_dir = os.path.join(args.save_dir, f"subsampled_complete_graph")
+    elif ('complete_graph' in args.train_data_path) or ('complete_graph' in args.preprocessed_dir):
         args.save_dir = os.path.join(args.save_dir, f"complete_graph")
     else:
         args.save_dir = os.path.join(args.save_dir, f"all_graphs")
