@@ -34,6 +34,8 @@ def process_episode_worker(args):
     if num_query_samples is not None:
         query_examples_str = query_examples_str[:num_query_samples]
         print(f"Episode {episode_id}: Limiting to first {num_query_samples} query samples out of {len(episode_content.get('query', []))}")
+    else:
+        print(f"Episode {episode_id}: Using all {len(query_examples_str)} query samples")
     for query_ex_str in query_examples_str:
         # Filter support examples. Essentially, we want to remove the query example from the support set if filter_query_from_support is True.
         filtered_support_examples_str = filter_support_examples_helper(
