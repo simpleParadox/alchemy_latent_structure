@@ -54,3 +54,15 @@ src/analyze_empty_episodes.py
 src/subsample_queries.py
 src/validate_subsampling.py
 src/validate_subsampling_multi.py
+vllm_env/
+src/data/subsampled_balanced_complete_graph_generated_data_enhanced_qnodes_in_snodes/
+build/
+src/data/analyze_ambiguity_stats.py
+src/data/diagnose_distribution.py
+src/data/find_ambiguous_samples.py
+src/data/show_ambiguous_samples.py
+src/data/visualize_ambiguity.py
+src/prompting_experiments/langchain_prompt_model.py
+src/prompting_experiments/langchain_vllm_client.py
+src/prompting_experiments/test_langchain_setup.py
+ambiguity_analysis/

@@ -45,7 +45,7 @@ class ChemistryPromptEvaluator:
     
     def __init__(self, 
                  vllm_url: str = "http://localhost:8000/v1/completions",
-                 model_name: str = "meta-llama/Llama-2-7b-chat-hf",
+                 model_name: str = "meta-llama/Llama-3.2-1B",
                  temperature: float = 0.0,
                  max_tokens: int = 200):
         """Initialize the evaluator."""

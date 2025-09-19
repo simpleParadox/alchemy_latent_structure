@@ -282,18 +282,19 @@ def create_graph_from_constraint(
   def add_edge(potion: stones_and_potions.Potion):
     """Adds an edge defined by a potion."""
 
-    dimension = potion.dimension
-    direction = potion.direction
-    startnodes = node_list.filter_nodes(dimension, -direction)
+    dimension = potion.dimension # 0, 1, or 2
+    direction = potion.direction # -1 or 1
+    startnodes = node_list.filter_nodes(dimension, -direction) # Get the nodes where the coords in that dimension are -1 or 1.
     dimension_constraints = [(i, x)
                              for i, x in enumerate(constraint[dimension])
-                             if x == '1' or x == '-1']
+                             if x == '1' or x == '-1'] # NOTE: If 'x' == '*', then this means that the stone can be in any position in that dimension.
+    
     for dimension_constraint in dimension_constraints:
       startnodes = startnodes.filter_nodes(
           dimension_constraint[0], int(dimension_constraint[1]))
     for node in startnodes.nodes:
       endnode_coord = copy.copy(node.coords)  # type: MutableSequence[int]
-      endnode_coord[dimension] = direction
+      endnode_coord[dimension] = direction # NOTE: This is where the next coordinate is assigned because the next node is in the 'dimension' in the specific 'direction'.
       endnode = node_list.get_node_by_coords(endnode_coord)
       edge_list.add_edge(node, endnode, potion)
 
@@ -302,7 +303,9 @@ def create_graph_from_constraint(
       add_edge(potion)
   else:
     count = 0
+    # NOTE: latent dimensions are the ones where, when the potion is applied, the stone moves on the corresponding axis. Whether the stone moves back and forth, is decided by the 'latent_dir' of the potion.
     for latent_potion in stones_and_potions.possible_latent_potions():
+      # Then using the possible potions and directions (which is basically 6) - note that stones_and_potions.possible_latent_potions() always returns the same iterable list.
       add_edge(stones_and_potions.Potion(
           count, latent_potion.latent_dim, latent_potion.latent_dir))
       count += 1

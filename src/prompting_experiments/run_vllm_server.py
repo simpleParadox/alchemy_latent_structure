@@ -11,7 +11,7 @@ import signal
 import time
 
 def launch_vllm_server(
-    model_name: str = "meta-llama/Llama-2-7b-chat-hf",
+    model_name: str = "meta-llama/Llama-3.2-1B",
     port: int = 8000,
     tensor_parallel_size: int = 1,
     gpu_memory_utilization: float = 0.9,
@@ -51,11 +51,11 @@ def launch_vllm_server(
 
 def main():
     parser = argparse.ArgumentParser(description="Launch vLLM server for chemistry experiments")
-    parser.add_argument("--model", default="meta-llama/Llama-2-7b-chat-hf",
+    parser.add_argument("--model", default="meta-llama/Llama-3.2-1B",
                         help="Model name to serve")
     parser.add_argument("--port", type=int, default=8000,
                         help="Port to serve on")
-    parser.add_argument("--tensor-parallel-size", type=int, default=1,
+    parser.add_argument("--tensor-parallel-size", type=int, default=4,
                         help="Number of GPUs for tensor parallelism")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9,
                         help="GPU memory utilization fraction")

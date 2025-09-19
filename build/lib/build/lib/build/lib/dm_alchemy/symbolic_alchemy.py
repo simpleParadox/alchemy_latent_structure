@@ -321,10 +321,13 @@ class SymbolicAlchemy(dm_env.Environment, abc.ABC):
     self.episode_start(self._chemistry)
     self._new_trial()
 
-  def reset(self) -> dm_env.TimeStep:
+  def reset(self, return_chemistry=False) -> dm_env.TimeStep:
     self.reset_no_observation()
-    return dm_env.TimeStep(
-        dm_env.StepType.FIRST, None, None, self.observation())
+    
+    if return_chemistry:
+      return dm_env.TimeStep(dm_env.StepType.FIRST, None, None, self.observation()), self._chemistry
+    
+    return dm_env.TimeStep(dm_env.StepType.FIRST, None, None, self.observation())
 
   def step_no_observation(
       self, action: type_utils.SlotBasedAction,
@@ -934,10 +937,10 @@ def get_symbolic_alchemy_level(
 def get_symbolic_alchemy_fixed(
     episode_items, chemistry, observe_used=True, reward_weights=None,
     end_trial_action=False, max_steps_per_trial=DEFAULT_MAX_STEPS_PER_TRIAL,
-    see_chemistries=None, generate_events=False):
+    see_chemistries=None, generate_events=True, return_chemistry=False):
   """Symbolic alchemy which generates same chemistry and items every episode."""
 
-  return SymbolicAlchemy(
+  symbolic_alchemy = SymbolicAlchemy(
       observe_used=observe_used,
       chemistry_gen=lambda: chemistry,
       reward_weights=reward_weights,
@@ -947,3 +950,8 @@ def get_symbolic_alchemy_fixed(
       max_steps_per_trial=max_steps_per_trial,
       see_chemistries=see_chemistries,
       generate_events=generate_events)
+  
+  if return_chemistry:
+    return symbolic_alchemy.reset(return_chemistry=True)
+  
+  return symbolic_alchemy.reset() 

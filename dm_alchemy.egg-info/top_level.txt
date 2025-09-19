@@ -1,5 +1,12 @@
-alchemy-prompt-template
 alchemy_env
+ambiguity_analysis
 build
 dm_alchemy
 docs
+explicit_implicit_icl
+predictions
+simple_decoder_results
+simple_decoder_results_multi_gpu
+src
+vllm_env
+wandb

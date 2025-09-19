@@ -4,14 +4,14 @@ dm-env
 dm-env-rpc>=1.0.4
 dm-tree
 docker
+frozendict
 grpcio
 numpy
-scipy>=1.4.0
 portpicker
-frozendict
+scipy>=1.4.0
 
 [examples]
-pygame
 ipykernel
 matplotlib
+pygame
 seaborn
