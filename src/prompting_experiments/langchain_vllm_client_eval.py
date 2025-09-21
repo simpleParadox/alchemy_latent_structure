@@ -165,7 +165,7 @@ class ChemistryPromptEvaluator:
                 "model_response": result.get("model_response"),
                 "predicted_output": result.get("predicted_output"),
                 "correct": result.get("correct"),
-                "prompt": result.get("prompt", "")[:1000],  # Truncate for storage
+                "prompt": result.get("prompt", ""),  # Truncate for storage
             }
             
             self.langsmith_client.create_example(
@@ -220,7 +220,7 @@ class ChemistryPromptEvaluator:
             sample_results = []
             error_results = []
             
-            for i, result in episode_results:
+            for i, result in enumerate(episode_results):
                 sample_results.append({
                     "query": result.get("query", ""),
                     "expected": result.get("expected_output", ""),
@@ -502,6 +502,12 @@ def main():
     
     if args.enable_langsmith:
         print(f"📊 View results in LangSmith: https://smith.langchain.com/projects/{evaluator.experiment_name}")
+        
+    # Change args.output according the to the experiment name
+    # Create a new directory for the prompting results if it doesn't exist
+    if not os.path.exists('prompting_results'):
+        os.makedirs('prompting_results')
+    args.output = f'prompting_results/{evaluator.experiment_name}_results.json'
     
     evaluator.save_results(results, args.output)
 
