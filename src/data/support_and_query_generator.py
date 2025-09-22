@@ -359,6 +359,7 @@ def generate_support_and_query_examples(
                 graph, start_node_id, generate_all_edges=True
             )
         else:
+            # Compositional case where the query hop length is greater than 1.
             potential_query_trajectories = generate_multi_step_sample(
                 graph, start_node_id, query_hop_length
             )
@@ -378,7 +379,7 @@ def generate_support_and_query_examples(
             if is_duplicate:
                 continue
 
-            # Strict validity: both endpoints must be support start nodes for decompositional 1-hop
+            # Strict validity: both endpoints must be support start nodes for decompositional 1-hop. Otherwise, this will lead to invalid query examples. But actually this is irrelevant if using complete graphs.
             if is_decompositional_1hop:
                 q_start = q_info["start_node"]
                 q_end = q_info["end_node"]

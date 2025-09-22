@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LangChain + vLLM evaluation script using a separate, persistent vLLM server.
-This script acts as a client to a running vLLM OpenAI-compatible server.
+This script acts as a client to a running vLLM OpenAI-compatible server with wandb logging.
 """
 
 import json
@@ -14,25 +14,43 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from tqdm import tqdm
 from datetime import datetime
+import json
 
 # Check for required packages
 try:
     from langchain_community.llms import VLLMOpenAI
-    from langchain_core.prompts import PromptTemplate, FewShotPromptTemplate
+    from langchain_openai import ChatOpenAI
+    from langchain_core.prompts import PromptTemplate, FewShotPromptTemplate, ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
     from langchain_core.example_selectors import LengthBasedExampleSelector
     from langchain_core.output_parsers import BaseOutputParser
-    from langchain_core.tracers import LangChainTracer
-    from langsmith import Client
-    from langsmith.evaluation import evaluate, LangChainStringEvaluator
+    from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
     LANGCHAIN_AVAILABLE = True
-    LANGSMITH_AVAILABLE = True
 except ImportError as e:
-    print("❌ Missing required packages!")
+    print("❌ Missing required LangChain packages!")
     print("Please install with:")
-    print("  pip install langchain langchain-community langchain-core openai langsmith")
+    print("  pip install langchain langchain-community langchain-core openai")
     print(f"\nError details: {e}")
     LANGCHAIN_AVAILABLE = False
-    LANGSMITH_AVAILABLE = False
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError as e:
+    print("❌ Missing wandb package!")
+    print("Please install with:")
+    print("  pip install wandb")
+    print(f"\nError details: {e}")
+    WANDB_AVAILABLE = False
+
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError as e:
+    print("❌ Missing pandas package!")
+    print("Please install with:")
+    print("  pip install pandas")
+    print(f"\nError details: {e}")
+    PANDAS_AVAILABLE = False
 
 
 @dataclass
@@ -57,17 +75,22 @@ class EvaluationResults:
 class ChemistryOutputParser(BaseOutputParser):
     """Parser for chemistry transformation outputs."""
     def parse(self, text: str) -> str:
-        # First try to find text enclosed in square brackets
-        bracket_pattern = r'\[([^\]]+)\]'
-        bracket_matches = re.findall(bracket_pattern, text)
-        if bracket_matches:
-            return bracket_matches[0].strip()
-        
-        # Fallback to original pattern if no brackets found
-        pattern = r'\{[^}]+\}'
-        matches = re.findall(pattern, text)
+        # Pattern 1: Look for "Therefore, the output stone state is: {...}"
+        # This is the preferred pattern for the new chat prompt.
+        specific_pattern = r"Therefore, the output stone state is:\s*(\{.*?\})"
+        match = re.search(specific_pattern, text, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+
+        # Fallback Pattern 2: Find any stone state in curly braces.
+        # This is for the legacy completion prompt or if the model doesn't follow instructions.
+        fallback_pattern = r'\{[^}]+\}'
+        matches = re.findall(fallback_pattern, text)
         if matches:
-            return matches[0]
+            # Return the last match, as it's most likely the final answer
+            return matches[-1].strip()
+        
+        # If no patterns match, return the stripped raw text as a last resort.
         return text.strip()
 
     @property
@@ -83,176 +106,121 @@ class ChemistryPromptEvaluator:
                  model_name: str = "meta-llama/Llama-3.2-1B",
                  temperature: float = 0.0,
                  max_tokens: int = 200,
-                 enable_langsmith: bool = False,
+                 enable_wandb: bool = False,
                  experiment_name: str = None,
-                 data_file_name: str = None):
-        """Initialize the evaluator."""
+                 data_file_name: str = None,
+                 api_key: str = "EMPTY",
+                 use_chat_api: bool = True,
+                 provider: str = "vllm"):
+        """Initialize the evaluator.
+        
+        Args:
+            use_chat_api: If True, use ChatOpenAI with /v1/chat/completions endpoint.
+                         If False, use VLLMOpenAI with /v1/completions endpoint.
+            provider: "vllm" for local vLLM server, "fireworks" for FireworksAI API.
+        """
         if not LANGCHAIN_AVAILABLE:
             raise ImportError("LangChain packages not available. Please install requirements.")
 
-        # LangSmith setup
-        self.enable_langsmith = enable_langsmith and LANGSMITH_AVAILABLE
-        self.langsmith_client = None
+        # W&B setup
+        self.enable_wandb = enable_wandb and WANDB_AVAILABLE
         self.experiment_name = experiment_name or f"alchemy_eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.data_file_name = data_file_name or "chemistry_eval_results.json"
         
-        if self.enable_langsmith:
+        # Store all results for W&B table
+        self.wandb_table_data = []
+        
+        if self.enable_wandb:
             try:
-                # Initialize LangSmith client
-                self.langsmith_client = Client()
-                print(f"🔗 LangSmith enabled. Experiment: {self.experiment_name}")
-                
-                # Set environment variables for tracing
-                os.environ["LANGCHAIN_TRACING_V2"] = "true"
-                os.environ["LANGCHAIN_PROJECT"] = self.experiment_name
-                
-                # Create dataset in LangSmith if it doesn't exist
-                self._setup_langsmith_dataset()
+                # Initialize wandb
+                wandb.init(
+                    project="alchemy_llm_evaluation",
+                    name=self.experiment_name,
+                    config={
+                        "model_name": model_name,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "vllm_url": vllm_url,
+                        "data_file": self.data_file_name
+                    }
+                )
+                print(f"🔗 W&B enabled. Experiment: {self.experiment_name}")
                 
             except Exception as e:
-                print(f"⚠️ Warning: Could not initialize LangSmith: {e}")
-                self.enable_langsmith = False
+                print(f"⚠️ Warning: Could not initialize W&B: {e}")
+                self.enable_wandb = False
 
-        # Create vLLM client using official LangChain integration for OpenAI-compatible servers
+        # Store configuration
+        self.use_chat_api = use_chat_api
+        self.provider = provider
+        
+        # Create LLM client based on configuration
         served_model_name = model_name.split("/")[-1]
-        self.llm = VLLMOpenAI(
-            openai_api_base=vllm_url,
-            model_name=served_model_name,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            openai_api_key="EMPTY",
-        )
+        
+        if provider == "fireworks":
+            # Use FireworksAI API
+            if use_chat_api:
+                try:
+                    from langchain_fireworks import ChatFireworks
+                    self.llm = ChatFireworks(
+                        model=model_name,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        timeout=None,
+                        api_key=api_key,
+                    )
+                    print(f"🔥 Using FireworksAI ChatFireworks interface for {model_name}")
+                except ImportError:
+                    print("❌ langchain_fireworks not available. Install with: pip install langchain-fireworks")
+                    # Fallback to OpenAI-compatible interface
+                    self.llm = ChatOpenAI(
+                        base_url="https://api.fireworks.ai/inference/v1",
+                        model=model_name,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        api_key=api_key,
+                    )
+                    print(f"🔥 Using FireworksAI via ChatOpenAI interface for {model_name}")
+            else:
+                # Completions interface for Fireworks (less common)
+                self.llm = VLLMOpenAI(
+                    openai_api_base="https://api.fireworks.ai/inference/v1",
+                    model_name=model_name,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    openai_api_key=api_key,
+                )
+                print(f"🔥 Using FireworksAI completions interface for {model_name}")
+            
+        else:  # vllm provider
+            if use_chat_api:
+                # Use ChatOpenAI for chat interface (/v1/chat/completions)
+                self.llm = ChatOpenAI(
+                    base_url=vllm_url,
+                    model=served_model_name,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    api_key=api_key,
+                )
+                print(f"💬 Using vLLM ChatOpenAI interface (/v1/chat/completions) for {model_name}")
+            else:
+                # Use VLLMOpenAI for completions interface (/v1/completions) - legacy mode
+                self.llm = VLLMOpenAI(
+                    openai_api_base=vllm_url,
+                    model_name=served_model_name,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    openai_api_key=api_key,
+                )
+                print(f"📝 Using vLLM completions interface (/v1/completions) for {model_name}")
+                
         self.model_name = served_model_name 
+        self.full_model_name = model_name
         self.output_parser = ChemistryOutputParser()
         self.example_template = PromptTemplate(
             input_variables=["input_stone", "potions", "output_stone"],
             template="{input_stone} {potions} -> {output_stone}"
         )
-
-    def _setup_langsmith_dataset(self):
-        """Setup LangSmith dataset for evaluation tracking."""
-        try:
-            dataset_name = f"dataset_{self.experiment_name}"
-            # Check if dataset exists, create if not
-            try:
-                dataset = self.langsmith_client.read_dataset(dataset_name=dataset_name)
-                print(f"📊 Using existing LangSmith dataset: {dataset_name}")
-            except:
-                dataset = self.langsmith_client.create_dataset(
-                    dataset_name=dataset_name,
-                    description=self.data_file_name
-                )
-                print(f"📊 Created new LangSmith dataset: {dataset_name}")
-            
-            self.dataset_name = dataset_name
-        except Exception as e:
-            print(f"⚠️ Warning: Could not setup LangSmith dataset: {e}")
-
-    def _log_example_to_langsmith(self, 
-                                  query_example: str, 
-                                  support_examples: List[str], 
-                                  result: Dict[str, Any]):
-        """Log individual evaluation example to LangSmith."""
-        if not self.enable_langsmith or not self.langsmith_client:
-            return
-            
-        try:
-            # Create example in dataset
-            example_data = {
-                "query": query_example,
-                "support_count": len(support_examples),
-                "expected_output": result.get("expected_output"),
-                "model_response": result.get("model_response"),
-                "predicted_output": result.get("predicted_output"),
-                "correct": result.get("correct"),
-                "prompt": result.get("prompt", ""),  # Truncate for storage
-            }
-            
-            self.langsmith_client.create_example(
-                inputs={"query": query_example, "support_examples": support_examples},  # Limit support examples
-                outputs={"expected": result.get("expected_output")},
-                dataset_name=self.dataset_name,
-                metadata=example_data
-            )
-        except Exception as e:
-            print(f"⚠️ Warning: Could not log to LangSmith: {e}")
-
-    def _log_episode_to_langsmith(self, 
-                                  episode_id: str, 
-                                  support_examples: List[str], 
-                                  episode_results: List[Dict[str, Any]]):
-        """Log entire episode results to LangSmith in batch."""
-        if not self.enable_langsmith or not self.langsmith_client:
-            return
-            
-        try:
-            # Calculate episode-level metrics
-            total_queries = len(episode_results)
-            correct_queries = sum(1 for r in episode_results if r.get("correct", False))
-            failed_queries = sum(1 for r in episode_results if "error" in r and r["error"])
-            episode_accuracy = correct_queries / total_queries if total_queries > 0 else 0.0
-            
-            # Prepare episode summary
-            episode_summary = {
-                "episode_id": episode_id,
-                "total_queries": total_queries,
-                "correct_queries": correct_queries,
-                "failed_queries": failed_queries,
-                "accuracy": episode_accuracy,
-                "support_count": len(support_examples),
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            # Create a single dataset example for the entire episode
-            episode_inputs = {
-                "episode_id": episode_id,
-                "support_examples": support_examples[:10],  # Limit to first 10 for storage
-                "query_count": total_queries
-            }
-            
-            episode_outputs = {
-                "accuracy": episode_accuracy,
-                "correct_count": correct_queries,
-                "total_count": total_queries
-            }
-            
-            # Include sample results for debugging (limit to first 5 and any errors)
-            sample_results = []
-            error_results = []
-            
-            for i, result in enumerate(episode_results):
-                sample_results.append({
-                    "query": result.get("query", ""),
-                    "expected": result.get("expected_output", ""),
-                    "predicted": result.get("predicted_output", ""),
-                    "correct": result.get("correct", False)
-                })
-                
-                if "error" in result and result["error"]:  # All error cases
-                    error_results.append({
-                        "query": result.get("query", ""),
-                        "error": result.get("error", "")
-                    })
-            
-            episode_metadata = {
-                **episode_summary,
-                "sample_results": sample_results,
-                "error_results": error_results,
-                "model": self.model_name
-            }
-            
-            # Create single example in LangSmith dataset for this episode
-            self.langsmith_client.create_example(
-                inputs=episode_inputs,
-                outputs=episode_outputs,
-                dataset_name=self.dataset_name,
-                metadata=episode_metadata
-            )
-            
-            print(f"📊 Logged episode {episode_id} to LangSmith: {correct_queries}/{total_queries} correct ({episode_accuracy:.3f})")
-            
-        except Exception as e:
-            print(f"⚠️ Warning: Could not log episode to LangSmith: {e}")
 
     def parse_chemistry_example(self, example_text: str) -> ChemistryExample:
         """Parse a chemistry example from text format."""
@@ -292,61 +260,184 @@ class ChemistryPromptEvaluator:
         return FewShotPromptTemplate(
             example_selector=example_selector,
             example_prompt=escaped_example_template,
-            prefix="You are an expert in magical chemistry. Given stone states and potions, predict the resulting stone state after applying the potions.\n\nHere are some examples of transformations:",
+            prefix="Your task is to understand the latent structure from a set of support examples and predict the output of a new query example by leveraing the latent structure. \nYou will be given many examples where there will be input stone states containing four features, and single or multiple potions of different colors will be applied to the input stone state. Applying the potion(s) on the input stone states will change its feature(s) to give the output stone state.\nHere are the support examples that show the input / output mappings:",
             suffix="Now, predict the output stone state for the following example when a potion is applied to an input stone state. Just print the output stone state. \n{input_stone} {potions} -> ",
             input_variables=["input_stone", "potions"],
         )
 
-    def evaluate_single_example(self, support_examples: List[str], query_example: str) -> Dict[str, Any]:
+    def create_chat_prompt_template(self, support_examples: List[str]) -> ChatPromptTemplate:
+        """
+        Create a chat-based prompt template that safely selects few-shot examples
+        to fit within the context window.
+        """
+        
+        # System message with high-level task description
+        system_message = """You are an expert in understanding latent structures in chemistry transformations. Your task is to analyze support examples showing how potions transform input stone states to output stone states, then predict the output for new examples."""
+        
+
+        # 1. Create a template for a single example line to measure length.
+        #    Note: The variables don't matter here, it's just for the selector.
+        example_prompt = PromptTemplate(
+            input_variables=["input_stone", "potions", "output_stone"],
+            template="{input_stone} {potions} -> {output_stone}"
+        )
+
+        # 2. Manually parse and prepare all available examples for the selector.
+        all_parsed_examples = []
+        for example_text in support_examples:
+            try:
+                parsed = self.parse_chemistry_example(example_text)
+                all_parsed_examples.append({
+                    "input_stone": parsed.input_stone,
+                    "potions": " ".join(parsed.potions),
+                    "output_stone": parsed.output_stone,
+                    "raw_text": parsed.raw_text
+                })
+            except ValueError:
+                print(f"Warning: Skipping malformed support example: {example_text}")
+                continue # Skip malformed examples
+
+        # 3. Use LengthBasedExampleSelector to pick a safe number of examples.
+        #    This replicates the logic from the old few-shot template.
+        example_selector = LengthBasedExampleSelector(
+            examples=[ex for ex in all_parsed_examples],
+            example_prompt=example_prompt,
+            max_length=5000  # Use a safe length limit
+        )
+        
+        # The selector needs an empty input dict to select based on length
+        selected_examples = example_selector.select_examples({})
+        
+        # 4. Build the final examples string from the *selected* examples' raw text.
+        examples_string = "\n".join([ex['raw_text'] for ex in selected_examples])
+
+        # 5. Construct the final prompt template with the safely selected examples.
+        human_message_prompt = HumanMessagePromptTemplate.from_template(
+            "Each stone state has four features: color, size, roundness, and reward value. Potions are represented by color names (e.g., RED, BLUE, GREEN, YELLOW, ORANGE, PINK) and can be applied individually or in combination. The application of the potion(s) modifies the features of the input stone to produce the output stone. \n \n Analyze the patterns in the support examples to understand the transformation rules, then apply this knowledge to the output of a new query example where potion(s) are applied to an input stone state. Print the output stone state for the query example by saying: 'Therefore, the output stone state is:'"
+            "Here are some examples of transformations:\n"
+            "---START EXAMPLES---\n"
+            "{examples}\n"
+            "---END EXAMPLES---\n\n"
+            "Now, predict the output for the following example:\n"
+            "{input_stone} {potions} ->"
+        )
+
+        chat_prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(content=system_message),
+            human_message_prompt
+        ])
+
+        # Pre-fill the {examples} placeholder with our dynamically selected examples
+        return chat_prompt.partial(examples=examples_string)
+
+    def evaluate_single_example(self, support_examples: List[str], query_example: str, episode_id: str) -> Dict[str, Any]:
         """Evaluate a single query example."""
         try:
             query_parsed = self.parse_chemistry_example(query_example)
-            few_shot_prompt = self.create_few_shot_prompt(support_examples)
             
-            prompt = few_shot_prompt.format(input_stone=query_parsed.input_stone, potions=" ".join(query_parsed.potions))
-            
-            # Add LangSmith tracing context
-            model_response = self.llm.invoke(prompt)
+            if self.use_chat_api:
+                # Use chat-based prompting
+                chat_prompt = self.create_chat_prompt_template(support_examples)
+                # For chat API, no need to escape braces
+                formatted_prompt = chat_prompt.format_messages(
+                    input_stone=query_parsed.input_stone, 
+                    potions=" ".join(query_parsed.potions)
+                )
+                # Get model response
+                messages = [
+                    ('system', formatted_prompt[0].content),
+                    ('human', formatted_prompt[1].content)
+                ]
                 
-            predicted_output = self.output_parser.parse(model_response)
+                
+                model_response = self.llm.invoke(messages)
+                # Extract content from AIMessage
+                if hasattr(model_response, 'content'):
+                    model_response_text = model_response.content
+                    print(f"Model response (raw): {model_response_text}")
+                else:
+                    model_response_text = str(model_response)
+                prompt_text = f"Chat messages: {[msg.content for msg in formatted_prompt]}"
+            else:
+                # Use traditional few-shot prompting (legacy mode)
+                few_shot_prompt = self.create_few_shot_prompt(support_examples)
+                # Escape braces in query input for prompt formatting
+                escaped_query_input = query_parsed.input_stone.replace("{", "{{").replace("}", "}}")
+                prompt_text = few_shot_prompt.format(input_stone=escaped_query_input, potions=" ".join(query_parsed.potions))
+                # Get model response
+                model_response = self.llm.invoke(prompt_text)
+                model_response_text = str(model_response)
+            
+            predicted_output = self.output_parser.parse(model_response_text)
             
             correct = predicted_output == query_parsed.output_stone
             result = {
+                "episode_id": episode_id,
                 "query": query_example, 
                 "expected_output": query_parsed.output_stone, 
-                "model_response": model_response, 
+                "model_response": model_response_text, 
                 "predicted_output": predicted_output, 
                 "correct": correct, 
-                "prompt": prompt
+                "prompt": prompt_text
             }
             
-            # Remove individual logging - we'll batch this at episode level
-            # if self.enable_langsmith:
-            #     self._log_example_to_langsmith(query_example, support_examples, result)
+            # Store data for W&B table
+            if self.enable_wandb:
+                self.wandb_table_data.append({
+                    "episode_id": episode_id,
+                    "input_prompt": prompt_text,
+                    "full_model_output": model_response_text,
+                    "extracted_output": predicted_output,
+                    "expected_output": query_parsed.output_stone,
+                    "correct": correct,
+                    "model_name": self.full_model_name,
+                    "api_type": "chat" if self.use_chat_api else "completions"
+                })
             
             return result
             
         except Exception as e:
-            return {"query": query_example, "expected_output": None, "model_response": None, "predicted_output": None, "correct": False, "error": str(e)}
+            error_result = {
+                "episode_id": episode_id,
+                "query": query_example, 
+                "expected_output": None, 
+                "model_response": None, 
+                "predicted_output": None, 
+                "correct": False, 
+                "error": str(e)
+            }
+            
+            # Store error data for W&B table
+            if self.enable_wandb:
+                self.wandb_table_data.append({
+                    "episode_id": episode_id,
+                    "input_prompt": f"Error during prompt creation for query: {query_example}",
+                    "full_model_output": str(e),
+                    "extracted_output": "ERROR",
+                    "expected_output": "N/A",
+                    "correct": False,
+                    "model_name": self.full_model_name,
+                    "api_type": "chat" if self.use_chat_api else "completions"
+                })
+            
+            return error_result
 
     def evaluate_dataset(self, dataset: Dict[str, List[str]]) -> EvaluationResults:
         """Evaluate the entire dataset."""
         detailed_results, correct_count, failed_count = [], 0, 0
         episodes = dataset.get("episodes", [])
         
-        # Log experiment start to LangSmith
-        if self.enable_langsmith:
-            self._log_experiment_start(dataset)
+        print(f"🧪 Starting evaluation of {len(episodes)} episodes")
         
         for episode_id, episode in tqdm(episodes.items(), desc="Evaluating episodes"):
-            
             support_examples, query_examples = episode["support"], episode["query"]
             episode_results, episode_correct_count, episode_failed_count = [], 0, 0
             
             for i, query in enumerate(query_examples):
-                print(f"⚗️  Processing query {i+1}/{len(query_examples)}")
-                result = self.evaluate_single_example(support_examples, query)
+                print(f"⚗️  Processing query {i+1}/{len(query_examples)} in episode {episode_id}")
+                result = self.evaluate_single_example(support_examples, query, episode_id)
                 episode_results.append(result)
+                
                 if "error" in result and result["error"]:
                     episode_failed_count += 1
                     print(f"  ❌ Error: {result['error']}")
@@ -355,65 +446,113 @@ class ChemistryPromptEvaluator:
                     print(f"  ✅ Correct, Predicted: {result['predicted_output']}")
                 else:
                     print(f"  ❌ Incorrect - Expected: {result['expected_output']}, Got: {result['predicted_output']}")
-            
-            # Log entire episode to LangSmith after processing all queries
-            if self.enable_langsmith:
-                self._log_episode_to_langsmith(episode_id, support_examples, episode_results)
                 
-            total_queries = len(query_examples)
             detailed_results.extend(episode_results)
             correct_count += episode_correct_count
             failed_count += episode_failed_count
+            
+            # Log episode-level metrics to W&B
+            # if self.enable_wandb:
+            #     episode_accuracy = episode_correct_count / len(query_examples) if query_examples else 0.0
+            #     wandb.log({
+            #         f"episode_{episode_id}_accuracy": episode_accuracy,
+            #         f"episode_{episode_id}_correct": episode_correct_count,
+            #         f"episode_{episode_id}_total": len(query_examples),
+            #         "step": int(episode_id) if episode_id.isdigit() else len(detailed_results)
+            #     })
         
         accuracy = correct_count / len(detailed_results) if detailed_results else 0.0
         results = EvaluationResults(len(detailed_results), correct_count, accuracy, failed_count, detailed_results)
         
-        # Log experiment completion to LangSmith
-        if self.enable_langsmith:
-            self._log_experiment_completion(results)
+        # Log final results and create W&B table
+        if self.enable_wandb:
+            self._log_to_wandb(results)
         
         return results
 
-    def _log_experiment_start(self, dataset: Dict[str, Any]):
-        """Log experiment start to LangSmith."""
-        if not self.enable_langsmith:
-            return
-            
+    def _log_to_wandb(self, results: EvaluationResults):
+        """Log final results and create W&B table."""
         try:
-            metadata = {
-                "model": self.model_name,
-                "num_episodes": len(dataset.get("episodes", {})),
-                "start_time": datetime.now().isoformat(),
-                "experiment_type": "chemistry_transformation_prediction"
-            }
-            print(f"📝 Logged experiment start to LangSmith: {self.experiment_name}")
-        except Exception as e:
-            print(f"⚠️ Warning: Could not log experiment start: {e}")
-
-    def _log_experiment_completion(self, results: EvaluationResults):
-        """Log experiment completion to LangSmith.""" 
-        if not self.enable_langsmith:
-            return
-            
-        try:
-            metadata = {
-                "accuracy": results.accuracy,
+            # Log summary metrics
+            wandb.log({
+                "final_accuracy": results.accuracy,
                 "total_queries": results.total_queries,
                 "correct_predictions": results.correct_predictions,
                 "failed_predictions": results.failed_predictions,
-                "completion_time": datetime.now().isoformat()
-            }
-            print(f"📊 Logged experiment completion to LangSmith with accuracy: {results.accuracy:.3f}")
+            })
+            
+            # Create and log the main results table
+            table = wandb.Table(
+                columns=[
+                    "episode_id", 
+                    "input_prompt", 
+                    "full_model_output", 
+                    "extracted_output",
+                    "expected_output",
+                    "correct", 
+                    "model_name"
+                ],
+                data=[[
+                    row["episode_id"],
+                    row["input_prompt"], 
+                    row["full_model_output"],
+                    row["extracted_output"],
+                    row["expected_output"],
+                    row["correct"],
+                    row["model_name"]
+                ] for row in self.wandb_table_data]
+            )
+            
+            wandb.log({"evaluation_results": table})
+            
+            # Create accuracy distribution by episode
+            episode_accuracies = {}
+            for row in self.wandb_table_data:
+                episode_id = row["episode_id"]
+                if episode_id not in episode_accuracies:
+                    episode_accuracies[episode_id] = {"correct": 0, "total": 0}
+                episode_accuracies[episode_id]["total"] += 1
+                if row["correct"]:
+                    episode_accuracies[episode_id]["correct"] += 1
+            
+            # Log episode accuracy distribution
+            episode_acc_data = []
+            for episode_id, stats in episode_accuracies.items():
+                acc = stats["correct"] / stats["total"] if stats["total"] > 0 else 0.0
+                episode_acc_data.append([episode_id, acc, stats["correct"], stats["total"]])
+            
+            episode_table = wandb.Table(
+                columns=["episode_id", "accuracy", "correct", "total"],
+                data=episode_acc_data
+            )
+            
+            wandb.log({"episode_accuracies": episode_table})
+            
+            print(f"📊 Logged {len(self.wandb_table_data)} examples to W&B")
+            print(f"🔗 View results at: {wandb.run.url}")
+            
         except Exception as e:
-            print(f"⚠️ Warning: Could not log experiment completion: {e}")
+            print(f"⚠️ Warning: Could not log to W&B: {e}")
 
     def save_results(self, results: EvaluationResults, output_file: str):
         """Save evaluation results to a file."""
-        output_data = {"summary": results.__dict__, "detailed_results": results.detailed_results, "metadata": {"llm_type": "langchain_vllm_client", "model_name": self.model_name}}
+        output_data = {
+            "summary": results.__dict__, 
+            "detailed_results": results.detailed_results, 
+            "metadata": {
+                "llm_type": "langchain_vllm_client", 
+                "model_name": self.full_model_name,
+                "experiment_name": self.experiment_name
+            }
+        }
         with open(output_file, 'w') as f:
             json.dump(output_data, f, indent=2)
         print(f"💾 Results saved to {output_file}")
 
+    def finish_wandb(self):
+        """Properly finish W&B run."""
+        if self.enable_wandb:
+            wandb.finish()
 
 
 def load_data_from_file(file_path: str, use_all_episodes: bool = False) -> Dict[str, List[str]]:
@@ -440,17 +579,19 @@ def load_data_from_file(file_path: str, use_all_episodes: bool = False) -> Dict[
 def create_sample_data() -> Dict[str, List[str]]:
     """Create sample data for testing."""
     return {
-        "support": [
-            "{color: purple, size: small, roundness: pointy, reward: 1} YELLOW PINK -> {color: blue, size: large, roundness: medium_round, reward: 1}",
-            "{color: purple, size: small, roundness: pointy, reward: 1} GREEN YELLOW -> {color: red, size: large, roundness: medium_round, reward: 1}",
-            "{color: blue, size: small, roundness: medium_round, reward: -1} GREEN CYAN -> {color: red, size: small, roundness: medium_round, reward: -1}",
-            "{color: blue, size: small, roundness: medium_round, reward: -1} YELLOW CYAN -> {color: purple, size: large, roundness: pointy, reward: 3}",
-            "{color: purple, size: large, roundness: pointy, reward: 3} GREEN PINK -> {color: purple, size: large, roundness: round, reward: -1}",
-        ],
-        "query": [
-            "{color: purple, size: small, roundness: pointy, reward: 1} PINK -> {color: blue, size: small, roundness: medium_round, reward: -1}",
-            "{color: blue, size: small, roundness: medium_round, reward: -1} YELLOW -> {color: blue, size: large, roundness: medium_round, reward: 1}",
-        ]
+        "episodes": {
+            "0": {
+                "support": [
+                    "{color: purple, size: small, roundness: pointy, reward: 1} YELLOW PINK -> {color: blue, size: large, roundness: medium_round, reward: 1}",
+                    "{color: purple, size: small, roundness: pointy, reward: 1} GREEN YELLOW -> {color: red, size: large, roundness: medium_round, reward: 1}",
+                    "{color: blue, size: small, roundness: medium_round, reward: -1} GREEN CYAN -> {color: red, size: small, roundness: medium_round, reward: -1}",
+                ],
+                "query": [
+                    "{color: purple, size: small, roundness: pointy, reward: 1} PINK -> {color: blue, size: small, roundness: medium_round, reward: -1}",
+                    "{color: blue, size: small, roundness: medium_round, reward: -1} YELLOW -> {color: blue, size: large, roundness: medium_round, reward: 1}",
+                ]
+            }
+        }
     }
 
 
@@ -462,54 +603,79 @@ def main():
     parser.add_argument("--data", type=str, help="Path to JSON file with support/query data", 
                         default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_0.json')
     parser.add_argument("--output", type=str, default="langchain_vllm_client_results.json", help="Output file for results")
-    parser.add_argument("--vllm-url", type=str, default="http://localhost:8000/v1", help="vLLM server OpenAI-compatible API URL")
-    parser.add_argument("--model-name", type=str, default="meta-llama/Llama-3.2-1B", help="Model name being served")
-    parser.add_argument("--use-sample-data", action="store_true", help="Use built-in sample data for testing", default=False)
-    parser.add_argument("--max_new_tokens", type=int, default=512, help="Max new tokens to generate")
+    parser.add_argument("--vllm_url", type=str, default="http://localhost:8000/v1", help="vLLM server OpenAI-compatible API URL")
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B-Instruct", help="Model name being served")
+    # parser.add_argument("--model_name", type=str, default="accounts/fireworks/models/kimi-k2-instruct", help="Model name being served")
+    parser.add_argument("--use_sample_data", action="store_true", help="Use built-in sample data for testing", default=False)
+    parser.add_argument("--max_new_tokens", type=int, default=2000, help="Max new tokens to generate")
     
-    # LangSmith arguments
-    parser.add_argument("--enable-langsmith", action="store_true", help="Enable LangSmith monitoring", default=True)
+    # Chat API arguments
+    parser.add_argument("--use_chat_api", action="store_true", help="Use ChatOpenAI (/v1/chat/completions) instead of VLLMOpenAI (/v1/completions)", default=True)
+    parser.add_argument("--provider", type=str, default="vllm", choices=["vllm", "fireworks"], help="API provider: vllm or fireworks")
+    # W&B arguments
+    parser.add_argument("--enable_wandb", action="store_true", help="Enable W&B monitoring", default=False)
     
     args = parser.parse_args()
-
-    # Set up LangSmith API key if provided
-    keys = json.load(open('keys.json'))
-    os.environ["LANGSMITH_API_KEY"] = keys['langsmith']
         
-    # Create experiment_name.
-    if args.enable_langsmith:
+    # Create experiment_name
+    if args.enable_wandb:
         file_path = ''.join(args.data.split('/')[-2:]).replace('.json', '') if args.data else "sample_data"
         experiment_name = f"{args.model_name.replace('/', '_')}_{file_path}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    else:
+        experiment_name = f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    # Handle API configuration
+    api_key = "EMPTY"
+    if args.provider == "fireworks":
+        args.vllm_url = 'https://api.fireworks.ai/inference/v1'
+        try:
+            with open('src/prompting_experiments/keys.json', 'r') as f:
+                keys = json.load(f)
+                api_key = keys.get('fireworks_ai',"EMPTY")
+                assert api_key != "EMPTY", "FireworksAI API key not found in keys.json"
+                os.environ['FIREWORKS_API_KEY'] = api_key
+        except FileNotFoundError:
+            assert False, "keys.json file not found. Please create keys.json with your API keys."
+        args.provider = "fireworks"
+    
+    # Print configuration info
+    api_type = "chat" if args.use_chat_api else "completions"
+    print(f"🔧 Configuration: {args.provider} provider, {api_type} API, model: {args.model_name}")
     
     evaluator = ChemistryPromptEvaluator(
         vllm_url=args.vllm_url,
         model_name=args.model_name,
         max_tokens=args.max_new_tokens,
-        enable_langsmith=args.enable_langsmith,
-        experiment_name=experiment_name
+        enable_wandb=args.enable_wandb,
+        experiment_name=experiment_name,
+        data_file_name=args.data,
+        api_key=api_key,
+        use_chat_api=args.use_chat_api,
+        provider=args.provider
     )
 
-    if args.use_sample_data:
-        data = create_sample_data()
-    elif args.data:
-        data = load_data_from_file(args.data, use_all_episodes=True)
-    else:
-        print("❌ Error: Must provide --data or --use-sample-data")
-        sys.exit(1)
+    try:
+        if args.use_sample_data:
+            data = create_sample_data()
+        elif args.data:
+            data = load_data_from_file(args.data, use_all_episodes=True)
+        else:
+            print("❌ Error: Must provide --data or --use-sample-data")
+            sys.exit(1)
 
-    results = evaluator.evaluate_dataset(data)
-    print(f"\n🏆 EVALUATION COMPLETE: Accuracy: {results.accuracy:.3f}")
-    
-    if args.enable_langsmith:
-        print(f"📊 View results in LangSmith: https://smith.langchain.com/projects/{evaluator.experiment_name}")
+        results = evaluator.evaluate_dataset(data)
+        print(f"\n🏆 EVALUATION COMPLETE: Accuracy: {results.accuracy:.3f}")
         
-    # Change args.output according the to the experiment name
-    # Create a new directory for the prompting results if it doesn't exist
-    if not os.path.exists('prompting_results'):
-        os.makedirs('prompting_results')
-    args.output = f'prompting_results/{evaluator.experiment_name}_results.json'
-    
-    evaluator.save_results(results, args.output)
+        # Create output directory and save results
+        if not os.path.exists('prompting_results'):
+            os.makedirs('prompting_results')
+        args.output = f'prompting_results/{evaluator.experiment_name}_results.json'
+        
+        evaluator.save_results(results, args.output)
+        
+    finally:
+        # Always properly finish W&B run
+        evaluator.finish_wandb()
 
 
 if __name__ == "__main__":

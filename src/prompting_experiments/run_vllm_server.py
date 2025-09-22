@@ -55,11 +55,11 @@ def main():
                         help="Model name to serve")
     parser.add_argument("--port", type=int, default=8000,
                         help="Port to serve on")
-    parser.add_argument("--tensor-parallel-size", type=int, default=4,
+    parser.add_argument("--tensor_parallel_size", type=int, default=4,
                         help="Number of GPUs for tensor parallelism")
-    parser.add_argument("--gpu-memory-utilization", type=float, default=0.9,
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.9,
                         help="GPU memory utilization fraction")
-    parser.add_argument("--max-model-len", type=int, default=8192,
+    parser.add_argument("--max_model_len", type=int, default=8192,
                         help="Maximum model context length")
     parser.add_argument("--host", default="0.0.0.0",
                         help="Host to bind to")
