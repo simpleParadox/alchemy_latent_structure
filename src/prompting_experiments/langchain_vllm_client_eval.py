@@ -42,15 +42,6 @@ except ImportError as e:
     print(f"\nError details: {e}")
     WANDB_AVAILABLE = False
 
-try:
-    import pandas as pd
-    PANDAS_AVAILABLE = True
-except ImportError as e:
-    print("❌ Missing pandas package!")
-    print("Please install with:")
-    print("  pip install pandas")
-    print(f"\nError details: {e}")
-    PANDAS_AVAILABLE = False
 
 
 @dataclass
@@ -343,14 +334,14 @@ class ChemistryPromptEvaluator:
                     input_stone=query_parsed.input_stone, 
                     potions=" ".join(query_parsed.potions)
                 )
-                # Get model response
-                messages = [
-                    ('system', formatted_prompt[0].content),
-                    ('human', formatted_prompt[1].content)
-                ]
+                # # Get model response
+                # messages = [
+                #     ('system', formatted_prompt[0].content),
+                #     ('human', formatted_prompt[1].content)
+                # ]
                 
                 
-                model_response = self.llm.invoke(messages)
+                model_response = self.llm.invoke(formatted_prompt)
                 # Extract content from AIMessage
                 if hasattr(model_response, 'content'):
                     model_response_text = model_response.content
@@ -604,10 +595,10 @@ def main():
                         default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_0.json')
     parser.add_argument("--output", type=str, default="langchain_vllm_client_results.json", help="Output file for results")
     parser.add_argument("--vllm_url", type=str, default="http://localhost:8000/v1", help="vLLM server OpenAI-compatible API URL")
-    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B-Instruct", help="Model name being served")
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-8B-Instruct", help="Model name being served")
     # parser.add_argument("--model_name", type=str, default="accounts/fireworks/models/kimi-k2-instruct", help="Model name being served")
     parser.add_argument("--use_sample_data", action="store_true", help="Use built-in sample data for testing", default=False)
-    parser.add_argument("--max_new_tokens", type=int, default=2000, help="Max new tokens to generate")
+    parser.add_argument("--max_new_tokens", type=int, default=1000, help="Max new tokens to generate")
     
     # Chat API arguments
     parser.add_argument("--use_chat_api", action="store_true", help="Use ChatOpenAI (/v1/chat/completions) instead of VLLMOpenAI (/v1/completions)", default=True)

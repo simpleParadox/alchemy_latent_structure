@@ -59,7 +59,7 @@ def main():
                         help="Number of GPUs for tensor parallelism")
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9,
                         help="GPU memory utilization fraction")
-    parser.add_argument("--max_model_len", type=int, default=8192,
+    parser.add_argument("--max_model_len", type=int, default=16384,
                         help="Maximum model context length")
     parser.add_argument("--host", default="0.0.0.0",
                         help="Host to bind to")
