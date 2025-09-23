@@ -105,7 +105,9 @@ class ChemistryPromptEvaluator:
                  provider: str = "vllm",
                  shop_length: int = 2,
                  qhop_length: int = 1,
-                 data_split_seed=0):
+                 data_split_seed=0,
+                 batch_size: int = 1,  # NEW: Batch size for inference
+                 enable_batch_inference: bool = False):  # NEW: Enable/disable batching
         """Initialize the evaluator.
         
         Args:
@@ -220,6 +222,8 @@ class ChemistryPromptEvaluator:
             input_variables=["input_stone", "potions", "output_stone"],
             template="{input_stone} {potions} -> {output_stone}"
         )
+        self.batch_size = batch_size
+        self.enable_batch_inference = enable_batch_inference
 
     def parse_chemistry_example(self, example_text: str) -> ChemistryExample:
         """Parse a chemistry example from text format."""
@@ -421,31 +425,178 @@ class ChemistryPromptEvaluator:
             
             return error_result
 
+    def evaluate_batch_examples(self, support_examples: List[str], query_examples: List[str], episode_id: str) -> List[Dict[str, Any]]:
+        """Evaluate multiple query examples in batch."""
+        try:
+            # Parse all queries first
+            parsed_queries = []
+            for query_example in query_examples:
+                try:
+                    parsed_queries.append(self.parse_chemistry_example(query_example))
+                except ValueError as e:
+                    print(f"Warning: Skipping malformed query: {e}")
+                    continue
+            
+            if not parsed_queries:
+                return []
+            
+            if self.use_chat_api:
+                # Create chat prompt template once
+                chat_prompt = self.create_chat_prompt_template(support_examples)
+                
+                # Prepare all prompts for batch processing
+                formatted_prompts = []
+                for parsed_query in parsed_queries:
+                    prompt_messages = chat_prompt.format_messages(
+                        input_stone=parsed_query.input_stone,
+                        potions=" ".join(parsed_query.potions)
+                    )
+                    formatted_prompts.append(prompt_messages)
+                
+                # Batch inference using LangChain's batch method
+                batch_responses = self.llm.batch(formatted_prompts)
+                
+                # Process batch results
+                results = []
+                for i, (parsed_query, response, original_query) in enumerate(zip(parsed_queries, batch_responses, query_examples)):
+                    if hasattr(response, 'content'):
+                        model_response_text = response.content
+                        print(f"Model response (raw): {model_response_text}")
+                    else:
+                        model_response_text = str(response)
+                    
+                    predicted_output = self.output_parser.parse(model_response_text)
+                    correct = predicted_output == parsed_query.output_stone
+                    
+                    result = {
+                        "episode_id": episode_id,
+                        "query": original_query,
+                        "expected_output": parsed_query.output_stone,
+                        "model_response": model_response_text,
+                        "predicted_output": predicted_output,
+                        "correct": correct,
+                        "prompt": f"Chat batch prompt {i}"
+                    }
+                    results.append(result)
+                    
+                    # Store data for W&B table
+                    if self.enable_wandb:
+                        self.wandb_table_data.append({
+                            "episode_id": episode_id,
+                            "input_prompt": f"Batch chat prompt {i}",
+                            "full_model_output": model_response_text,
+                            "extracted_output": predicted_output,
+                            "expected_output": parsed_query.output_stone,
+                            "correct": correct,
+                            "model_name": self.full_model_name,
+                            "api_type": "chat_batch"
+                        })
+            
+            else:
+                # Few-shot prompting batch mode
+                few_shot_prompt = self.create_few_shot_prompt(support_examples)
+                
+                # Prepare all prompts
+                prompt_texts = []
+                for parsed_query in parsed_queries:
+                    escaped_query_input = parsed_query.input_stone.replace("{", "{{").replace("}", "}}")
+                    prompt_text = few_shot_prompt.format(
+                        input_stone=escaped_query_input,
+                        potions=" ".join(parsed_query.potions)
+                    )
+                    prompt_texts.append(prompt_text)
+                
+                # Batch inference
+                batch_responses = self.llm.batch(prompt_texts)
+                
+                # Process results
+                results = []
+                for i, (parsed_query, response, original_query) in enumerate(zip(parsed_queries, batch_responses, query_examples)):
+                    model_response_text = str(response)
+                    predicted_output = self.output_parser.parse(model_response_text)
+                    correct = predicted_output == parsed_query.output_stone
+                    
+                    result = {
+                        "episode_id": episode_id,
+                        "query": original_query,
+                        "expected_output": parsed_query.output_stone,
+                        "model_response": model_response_text,
+                        "predicted_output": predicted_output,
+                        "correct": correct,
+                        "prompt": prompt_texts[i]
+                    }
+                    results.append(result)
+                    
+                    # Store data for W&B table
+                    if self.enable_wandb:
+                        self.wandb_table_data.append({
+                            "episode_id": episode_id,
+                            "input_prompt": prompt_texts[i],
+                            "full_model_output": model_response_text,
+                            "extracted_output": predicted_output,
+                            "expected_output": parsed_query.output_stone,
+                            "correct": correct,
+                            "model_name": self.full_model_name,
+                            "api_type": "completions_batch"
+                        })
+            
+            return results
+            
+        except Exception as e:
+            print(f"❌ Batch processing failed: {e}")
+            # Fall back to individual processing
+            results = []
+            for query in query_examples:
+                result = self.evaluate_single_example(support_examples, query, episode_id)
+                results.append(result)
+            return results
+
     def evaluate_dataset(self, dataset: Dict[str, List[str]]) -> EvaluationResults:
-        """Evaluate the entire dataset."""
+        """Evaluate the entire dataset with optional batch processing."""
         detailed_results, correct_count, failed_count = [], 0, 0
         episodes = dataset.get("episodes", [])
         
         print(f"🧪 Starting evaluation of {len(episodes)} episodes")
+        if hasattr(self, 'enable_batch_inference') and self.enable_batch_inference:
+            print(f"🚀 Batch inference enabled with batch size: {self.batch_size}")
         
         for episode_id, episode in tqdm(episodes.items(), desc="Evaluating episodes"):
             support_examples, query_examples = episode["support"], episode["query"]
-            episode_results, episode_correct_count, episode_failed_count = [], 0, 0
             
-            for i, query in enumerate(query_examples):
-                print(f"⚗️  Processing query {i+1}/{len(query_examples)} in episode {episode_id}")
-                result = self.evaluate_single_example(support_examples, query, episode_id)
-                episode_results.append(result)
+            if hasattr(self, 'enable_batch_inference') and self.enable_batch_inference and len(query_examples) > 1:
+                # Use batch processing for multiple queries
+                print(f"⚗️  Processing {len(query_examples)} queries in batches for episode {episode_id}")
                 
+                # Split queries into batches
+                batches = [query_examples[i:i + self.batch_size] 
+                          for i in range(0, len(query_examples), self.batch_size)]
+                
+                episode_results = []
+                for batch_idx, batch_queries in enumerate(batches):
+                    print(f"   📦 Processing batch {batch_idx + 1}/{len(batches)} ({len(batch_queries)} queries)")
+                    batch_results = self.evaluate_batch_examples(support_examples, batch_queries, episode_id)
+                    episode_results.extend(batch_results)
+            else:
+                # Use individual processing (original method)
+                episode_results = []
+                for i, query in enumerate(query_examples):
+                    print(f"⚗️  Processing query {i+1}/{len(query_examples)} in episode {episode_id}")
+                    result = self.evaluate_single_example(support_examples, query, episode_id)
+                    episode_results.append(result)
+            
+            # Count results
+            episode_correct_count = sum(1 for r in episode_results if r.get("correct", False))
+            episode_failed_count = sum(1 for r in episode_results if "error" in r and r["error"])
+            
+            # Print episode summary
+            for result in episode_results:
                 if "error" in result and result["error"]:
-                    episode_failed_count += 1
                     print(f"  ❌ Error: {result['error']}")
                 elif result["correct"]:
-                    episode_correct_count += 1
                     print(f"  ✅ Correct, Predicted: {result['predicted_output']}")
                 else:
                     print(f"  ❌ Incorrect - Expected: {result['expected_output']}, Got: {result['predicted_output']}")
-                
+            
             detailed_results.extend(episode_results)
             correct_count += episode_correct_count
             failed_count += episode_failed_count
@@ -605,18 +756,21 @@ def main():
     parser.add_argument("--output", type=str, default="langchain_vllm_client_results.json", help="Output file for results")
     parser.add_argument("--vllm_url", type=str, default="http://localhost:8000/v1", help="vLLM server OpenAI-compatible API URL")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-8B-Instruct", help="Model name being served")
-    # parser.add_argument("--model_name", type=str, default="accounts/fireworks/models/kimi-k2-instruct", help="Model name being served")
     parser.add_argument("--use_sample_data", action="store_true", help="Use built-in sample data for testing", default=False)
     parser.add_argument("--max_new_tokens", type=int, default=1000, help="Max new tokens to generate")
     
     # Chat API arguments
     parser.add_argument("--use_chat_api", action="store_true", help="Use ChatOpenAI (/v1/chat/completions) instead of VLLMOpenAI (/v1/completions)", default=True)
     parser.add_argument("--provider", type=str, default="vllm", choices=["vllm", "fireworks"], help="API provider: vllm or fireworks")
+    
+    # Batch inference arguments
+    parser.add_argument("--enable_batch_inference", action="store_true", help="Enable batch inference for faster processing", default=False)
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for batch inference")
+    
     # W&B arguments
     parser.add_argument("--enable_wandb", action="store_true", help="Enable W&B monitoring", default=False)
     
     args = parser.parse_args()
-
 
     # Add the 'data_split_seed' to the data filename (as _seed_X) before the .json extension
     if args.data and args.data.endswith('.json'):
@@ -670,7 +824,9 @@ def main():
         data_file_name=args.data,
         api_key=api_key,
         use_chat_api=args.use_chat_api,
-        provider=args.provider
+        provider=args.provider,
+        batch_size=args.batch_size,  # NEW
+        enable_batch_inference=args.enable_batch_inference  # NEW
     )
 
     try:
