@@ -621,7 +621,7 @@ def main():
     # Add the 'data_split_seed' to the data filename (as _seed_X) before the .json extension
     if args.data and args.data.endswith('.json'):
         args.data = args.data.replace('.json', f'_seed_{args.data_split_seed}.json')
-        
+        print("Using data file:", args.data)
     # Create experiment_name
     if args.enable_wandb:
         file_path = ''.join(args.data.split('/')[-2:]).replace('.json', '') if args.data else "sample_data"
