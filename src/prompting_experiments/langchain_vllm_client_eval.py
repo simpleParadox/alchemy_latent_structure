@@ -102,7 +102,10 @@ class ChemistryPromptEvaluator:
                  data_file_name: str = None,
                  api_key: str = "EMPTY",
                  use_chat_api: bool = True,
-                 provider: str = "vllm"):
+                 provider: str = "vllm",
+                 shop_length: int = 2,
+                 qhop_length: int = 1,
+                 data_split_seed=0):
         """Initialize the evaluator.
         
         Args:
@@ -132,7 +135,12 @@ class ChemistryPromptEvaluator:
                         "temperature": temperature,
                         "max_tokens": max_tokens,
                         "vllm_url": vllm_url,
-                        "data_file": self.data_file_name
+                        "data_file": self.data_file_name,
+                        "use_chat_api": use_chat_api,
+                        "provider": provider,
+                        "shop_length": shop_length,
+                        "qhop_length": qhop_length,
+                        "data_split_seed": data_split_seed
                     }
                 )
                 print(f"🔗 W&B enabled. Experiment: {self.experiment_name}")
@@ -592,7 +600,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Chemistry evaluation client for a remote vLLM server.")
     parser.add_argument("--data", type=str, help="Path to JSON file with support/query data", 
-                        default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_0.json')
+                        default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_1.json')
     parser.add_argument("--output", type=str, default="langchain_vllm_client_results.json", help="Output file for results")
     parser.add_argument("--vllm_url", type=str, default="http://localhost:8000/v1", help="vLLM server OpenAI-compatible API URL")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-8B-Instruct", help="Model name being served")
@@ -632,6 +640,20 @@ def main():
     # Print configuration info
     api_type = "chat" if args.use_chat_api else "completions"
     print(f"🔧 Configuration: {args.provider} provider, {api_type} API, model: {args.model_name}")
+
+    # Get the shop, qhop, and seed from the filename if possible
+    shop_length, qhop_length, data_split_seed = None, None, None
+    if args.data:
+        shop_match = re.search(r'shop_(\d+)', args.data)
+        qhop_match = re.search(r'qhop_(\d+)', args.data)
+        seed_match = re.search(r'seed_(\d+)', args.data)
+        if shop_match:
+            shop_length = int(shop_match.group(1))
+        if qhop_match:
+            qhop_length = int(qhop_match.group(1))
+        if seed_match:
+            data_split_seed = int(seed_match.group(1))
+        print(f"Detected shop_length: {shop_length}, qhop_length: {qhop_length}, data_split_seed: {data_split_seed}")
     
     evaluator = ChemistryPromptEvaluator(
         vllm_url=args.vllm_url,
