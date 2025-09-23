@@ -69,3 +69,4 @@ src/prompting_experiments/test_langchain_setup.py
 ambiguity_analysis/
 src/prompting_experiments/keys.json
 src/prompting_experiments/test.py
+*.log
