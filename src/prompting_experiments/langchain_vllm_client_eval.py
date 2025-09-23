@@ -600,7 +600,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="Chemistry evaluation client for a remote vLLM server.")
     parser.add_argument("--data", type=str, help="Path to JSON file with support/query data", 
-                        default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_1.json')
+                        default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1.json')
+    parser.add_argument("--data_split_seed", type=int, default=0, help="Data split seed")
     parser.add_argument("--output", type=str, default="langchain_vllm_client_results.json", help="Output file for results")
     parser.add_argument("--vllm_url", type=str, default="http://localhost:8000/v1", help="vLLM server OpenAI-compatible API URL")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-8B-Instruct", help="Model name being served")
@@ -615,6 +616,11 @@ def main():
     parser.add_argument("--enable_wandb", action="store_true", help="Enable W&B monitoring", default=False)
     
     args = parser.parse_args()
+
+
+    # Add the 'data_split_seed' to the data filename (as _seed_X) before the .json extension
+    if args.data and args.data.endswith('.json'):
+        args.data = args.data.replace('.json', f'_seed_{args.data_split_seed}.json')
         
     # Create experiment_name
     if args.enable_wandb:
