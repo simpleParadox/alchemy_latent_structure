@@ -255,7 +255,9 @@ def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, seed=0) -
         support_example_transitions.extend(held_out_stone_pairs[support_example_key])
     
     support_transitions.extend(support_example_transitions)
-    
+
+    # Randomize the order of support transitions
+    random.shuffle(support_transitions)
 
     # 4. The remaining held-out transitions form the query set
     held_out_pair_keys = held_out_pair_keys[:num_held_out_edges] # Limit to the number of edges to hold out
