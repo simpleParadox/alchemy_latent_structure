@@ -18,7 +18,6 @@ def launch_vllm_server(
     max_model_len: int = 4096,
     host: str = "0.0.0.0"
 ):
-    """Launch vLLM server with specified configuration."""
     
     cmd = [
         "python", "-m", "vllm.entrypoints.openai.api_server",

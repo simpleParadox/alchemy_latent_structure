@@ -277,6 +277,7 @@ def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, seed=0) -
     if overlap or len(overlap) > 0:
         print(f"Warning: Found {len(overlap)} overlapping samples between support and query sets. This should not happen in a well-formed graph.")
         print(f"Overlapping samples: {overlap}")
+        assert False, "Overlap detected between support and query sets."
     # To maintain consistency with the other function's return type
     return {
         "support": support_samples,
@@ -441,14 +442,14 @@ def main():
     parser.add_argument("--create_val_from_train", action="store_true",
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
-                        help="Process the complete graphs only", default=False)
-    parser.add_argument("--output_dir", default="held_out_exps_generated_data_enhanced",
+                        help="Process the complete graphs only", default=True)
+    parser.add_argument("--output_dir", default="shuffled_held_out_exps_generated_data_enhanced",
                         help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced, generated_data_enhanced_qnodes_in_snodes_complete_graphs_only
     
     # Add a new argument for your experiment
     parser.add_argument("--held_out_color_exp", action="store_true",
-                        help="Generate data for the held-out color pair experiment.", default=False)
-    parser.add_argument("--num_held_out_edges", type=int, default=1,
+                        help="Generate data for the held-out color pair experiment.", default=True)
+    parser.add_argument("--num_held_out_edges", type=int, default=4,
                         help="Number of edges to hold out for the held-out color pair experiment. Default is 1. Ignored if --held_out_color_exp is not set.")
 
     args = parser.parse_args()
