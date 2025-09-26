@@ -345,112 +345,112 @@ class ChemistryPromptEvaluator:
             suffix="Now, predict the output stone state for the following example when a potion is applied to an input stone state. Just print the output stone state. \n{input_stone} {potions} -> ",
             input_variables=["input_stone", "potions"],
         )
-        def create_chat_prompt_template(self, support_examples: List[str], query_examples: List[str] = None) -> ChatPromptTemplate:
-            """
-            Create a chat-based prompt template with optional stone ID mapping and reasoning control.
-            """
-            
-            # System message
-            if self.use_stone_ids:
-                system_message = """You are an expert in understanding latent structures in chemistry transformations. Your task is to analyze support examples showing how potions transform input stone states to output stone states, then predict the output stone ID for new examples."""
-            else:
-                system_message = """You are an expert in understanding latent structures in chemistry transformations. Your task is to analyze support examples showing how potions transform input stone states to output stone states, then predict the output for new examples."""
+    def create_chat_prompt_template(self, support_examples: List[str], query_examples: List[str] = None) -> ChatPromptTemplate:
+        """
+        Create a chat-based prompt template with optional stone ID mapping and reasoning control.
+        """
+        
+        # System message
+        if self.use_stone_ids:
+            system_message = """You are an expert in understanding latent structures in chemistry transformations. Your task is to analyze support examples showing how potions transform input stone states to output stone states, then predict the output stone ID for new examples."""
+        else:
+            system_message = """You are an expert in understanding latent structures in chemistry transformations. Your task is to analyze support examples showing how potions transform input stone states to output stone states, then predict the output for new examples."""
 
-            # Create example template and parse examples
-            example_prompt = PromptTemplate(
-                input_variables=["input_stone", "potions", "output_stone"],
-                template="{input_stone} {potions} -> {output_stone}"
+        # Create example template and parse examples
+        example_prompt = PromptTemplate(
+            input_variables=["input_stone", "potions", "output_stone"],
+            template="{input_stone} {potions} -> {output_stone}"
+        )
+
+        all_parsed_examples = []
+        for example_text in support_examples:
+            try:
+                parsed = self.parse_chemistry_example(example_text)
+                all_parsed_examples.append({
+                    "input_stone": parsed.input_stone,
+                    "potions": " ".join(parsed.potions),
+                    "output_stone": parsed.output_stone,
+                    "raw_text": parsed.raw_text
+                })
+            except ValueError:
+                print(f"Warning: Skipping malformed support example: {example_text}")
+                continue
+
+        # Create stone ID mapping if enabled
+        if self.use_stone_ids:
+            self.stone_to_id_mapping, self.id_to_stone_mapping = self.create_stone_id_mapping(
+                support_examples, query_examples
             )
+            
+            # Create mapping display
+            mapping_display = "Stone ID Mapping:\n"
+            for stone_state, stone_id in sorted(self.stone_to_id_mapping.items(), key=lambda x: x[1]):
+                mapping_display += f"{stone_id}: {stone_state}\n"
+            mapping_display += "\n"
+        else:
+            mapping_display = ""
 
-            all_parsed_examples = []
-            for example_text in support_examples:
-                try:
-                    parsed = self.parse_chemistry_example(example_text)
-                    all_parsed_examples.append({
-                        "input_stone": parsed.input_stone,
-                        "potions": " ".join(parsed.potions),
-                        "output_stone": parsed.output_stone,
-                        "raw_text": parsed.raw_text
-                    })
-                except ValueError:
-                    print(f"Warning: Skipping malformed support example: {example_text}")
-                    continue
+        # Use LengthBasedExampleSelector
+        example_selector = LengthBasedExampleSelector(
+            examples=all_parsed_examples,
+            example_prompt=example_prompt,
+            max_length=10000
+        )
+        
+        selected_examples = example_selector.select_examples({})
+        
+        # Build examples string with or without IDs
+        if self.use_stone_ids:
+            examples_lines = []
+            for ex in selected_examples:
+                input_id = self.stone_to_id_mapping.get(ex['input_stone'], ex['input_stone'])
+                output_id = self.stone_to_id_mapping.get(ex['output_stone'], ex['output_stone'])
+                examples_lines.append(f"{input_id} {ex['potions']} -> {output_id}")
+            examples_string = "\n".join(examples_lines)
+        else:
+            examples_string = "\n".join([ex['raw_text'] for ex in selected_examples])
 
-            # Create stone ID mapping if enabled
-            if self.use_stone_ids:
-                self.stone_to_id_mapping, self.id_to_stone_mapping = self.create_stone_id_mapping(
-                    support_examples, query_examples
-                )
+        # Create human message with reasoning control
+        if self.use_stone_ids:
+            if self.enable_reasoning:
+                instruction = """Analyze the patterns in the support examples to understand the transformation rules, then apply this knowledge to predict the output stone ID for the query example.
+
+You may show your reasoning, but must end your response with: 'Therefore, the output stone ID is: [SX]' where X is the stone number."""
+            else:
+                instruction = """Analyze the patterns in the support examples to understand the transformation rules, then predict the output stone ID for the query example.
+
+Do not show reasoning steps. Respond only with: 'Therefore, the output stone ID is: [SX]' where X is the stone number."""
                 
-                # Create mapping display
-                mapping_display = "Stone ID Mapping:\n"
-                for stone_state, stone_id in sorted(self.stone_to_id_mapping.items(), key=lambda x: x[1]):
-                    mapping_display += f"{stone_id}: {stone_state}\n"
-                mapping_display += "\n"
+            query_format = "Now, predict the output stone ID for the following example:\n{input_stone} {potions} ->"
+        else:
+            if self.enable_reasoning:
+                instruction = """Analyze the patterns in the support examples to understand the transformation rules, then apply this knowledge to predict the output stone state for the query example.
+
+You may show your reasoning, but must end your response with: 'Therefore, the output stone state is: {stone_state}'"""
             else:
-                mapping_display = ""
+                instruction = """Analyze the patterns in the support examples to understand the transformation rules, then predict the output stone state for the query example.
 
-            # Use LengthBasedExampleSelector
-            example_selector = LengthBasedExampleSelector(
-                examples=all_parsed_examples,
-                example_prompt=example_prompt,
-                max_length=10000
-            )
-            
-            selected_examples = example_selector.select_examples({})
-            
-            # Build examples string with or without IDs
-            if self.use_stone_ids:
-                examples_lines = []
-                for ex in selected_examples:
-                    input_id = self.stone_to_id_mapping.get(ex['input_stone'], ex['input_stone'])
-                    output_id = self.stone_to_id_mapping.get(ex['output_stone'], ex['output_stone'])
-                    examples_lines.append(f"{input_id} {ex['potions']} -> {output_id}")
-                examples_string = "\n".join(examples_lines)
-            else:
-                examples_string = "\n".join([ex['raw_text'] for ex in selected_examples])
+Do not show reasoning steps. Respond only with: 'Therefore, the output stone state is: {stone_state}'"""
+                
+            query_format = "Now, predict the output for the following example:\n{input_stone} {potions} ->"
 
-            # Create human message with reasoning control
-            if self.use_stone_ids:
-                if self.enable_reasoning:
-                    instruction = """Analyze the patterns in the support examples to understand the transformation rules, then apply this knowledge to predict the output stone ID for the query example.
+        human_message_prompt = HumanMessagePromptTemplate.from_template(
+            f"Each stone state has four features: color, size, roundness, and reward value. Potions are represented by color names (e.g., RED, BLUE, GREEN, YELLOW, ORANGE, PINK) and can be applied individually or in combination. The application of the potion(s) modifies the features of the input stone to produce the output stone.\n\n"
+            f"{mapping_display}"
+            f"{instruction}\n\n"
+            f"Here are some examples of transformations:\n"
+            f"---START EXAMPLES---\n"
+            f"{{examples}}\n"
+            f"---END EXAMPLES---\n\n"
+            f"{query_format}"
+        )
 
-    You may show your reasoning, but must end your response with: 'Therefore, the output stone ID is: [SX]' where X is the stone number."""
-                else:
-                    instruction = """Analyze the patterns in the support examples to understand the transformation rules, then predict the output stone ID for the query example.
+        chat_prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(content=system_message),
+            human_message_prompt
+        ])
 
-    Do not show reasoning steps. Respond only with: 'Therefore, the output stone ID is: [SX]' where X is the stone number."""
-                    
-                query_format = "Now, predict the output stone ID for the following example:\n{input_stone} {potions} ->"
-            else:
-                if self.enable_reasoning:
-                    instruction = """Analyze the patterns in the support examples to understand the transformation rules, then apply this knowledge to predict the output stone state for the query example.
-
-    You may show your reasoning, but must end your response with: 'Therefore, the output stone state is: {stone_state}'"""
-                else:
-                    instruction = """Analyze the patterns in the support examples to understand the transformation rules, then predict the output stone state for the query example.
-
-    Do not show reasoning steps. Respond only with: 'Therefore, the output stone state is: {stone_state}'"""
-                    
-                query_format = "Now, predict the output for the following example:\n{input_stone} {potions} ->"
-
-            human_message_prompt = HumanMessagePromptTemplate.from_template(
-                f"Each stone state has four features: color, size, roundness, and reward value. Potions are represented by color names (e.g., RED, BLUE, GREEN, YELLOW, ORANGE, PINK) and can be applied individually or in combination. The application of the potion(s) modifies the features of the input stone to produce the output stone.\n\n"
-                f"{mapping_display}"
-                f"{instruction}\n\n"
-                f"Here are some examples of transformations:\n"
-                f"---START EXAMPLES---\n"
-                f"{{examples}}\n"
-                f"---END EXAMPLES---\n\n"
-                f"{query_format}"
-            )
-
-            chat_prompt = ChatPromptTemplate.from_messages([
-                SystemMessage(content=system_message),
-                human_message_prompt
-            ])
-
-            return chat_prompt.partial(examples=examples_string)
+        return chat_prompt.partial(examples=examples_string)
 
     def create_stone_id_mapping(self, support_examples: List[str], query_examples: List[str] = None) -> tuple:
         """Create mapping from stone states to IDs using S1, S2, ... format."""
