@@ -160,10 +160,10 @@ class ChemistryPromptEvaluator:
                  shop_length: int = 2,
                  qhop_length: int = 1,
                  data_split_seed=0,
-                 batch_size: int = 1,  # NEW: Batch size for inference
-                 enable_batch_inference: bool = False,  # NEW: Enable/disable batching
-                 enable_reasoning: bool = True,  # NEW: Enable/disable reasoning
-                 use_stone_ids: bool = False):  # NEW: Use stone IDs
+                 batch_size: int = 1,
+                 enable_batch_inference: bool = False,
+                 enable_reasoning: bool = True,  # NEW: Control reasoning generation
+                 use_stone_ids: bool = False):   # NEW: Use stone IDs instead of full features
         """Initialize the evaluator.
         
         Args:
@@ -283,6 +283,26 @@ class ChemistryPromptEvaluator:
         self.enable_reasoning = enable_reasoning  # NEW
         self.use_stone_ids = use_stone_ids  # NEW
 
+        # NEW: Stone ID configuration
+        self.enable_reasoning = enable_reasoning
+        self.use_stone_ids = use_stone_ids
+        
+        # Will be populated when processing examples
+        self.stone_to_id_mapping = {}
+        self.id_to_stone_mapping = {}
+        
+        # Update output parser with new configuration
+        self.output_parser = ChemistryOutputParser(use_stone_ids=use_stone_ids)
+        
+        # NEW: Add reasoning control to vLLM if possible
+        if not enable_reasoning and provider == "vllm":
+            try:
+                # Try to set up reasoning suppression via API parameters
+                # This might require additional configuration depending on vLLM version
+                pass
+            except:
+                print("⚠️ Could not configure reasoning suppression via API, using prompt-based approach")
+
     def parse_chemistry_example(self, example_text: str) -> ChemistryExample:
         """Parse a chemistry example from text format."""
         pattern = r'(\{[^}]+\})\s+([A-Z\s]+?)\s+->\s+(\{[^}]+\})'
@@ -325,153 +345,265 @@ class ChemistryPromptEvaluator:
             suffix="Now, predict the output stone state for the following example when a potion is applied to an input stone state. Just print the output stone state. \n{input_stone} {potions} -> ",
             input_variables=["input_stone", "potions"],
         )
+        def create_chat_prompt_template(self, support_examples: List[str], query_examples: List[str] = None) -> ChatPromptTemplate:
+            """
+            Create a chat-based prompt template with optional stone ID mapping and reasoning control.
+            """
+            
+            # System message
+            if self.use_stone_ids:
+                system_message = """You are an expert in understanding latent structures in chemistry transformations. Your task is to analyze support examples showing how potions transform input stone states to output stone states, then predict the output stone ID for new examples."""
+            else:
+                system_message = """You are an expert in understanding latent structures in chemistry transformations. Your task is to analyze support examples showing how potions transform input stone states to output stone states, then predict the output for new examples."""
 
-    def create_chat_prompt_template(self, support_examples: List[str]) -> ChatPromptTemplate:
-        """
-        Create a chat-based prompt template that safely selects few-shot examples
-        to fit within the context window.
-        """
+            # Create example template and parse examples
+            example_prompt = PromptTemplate(
+                input_variables=["input_stone", "potions", "output_stone"],
+                template="{input_stone} {potions} -> {output_stone}"
+            )
+
+            all_parsed_examples = []
+            for example_text in support_examples:
+                try:
+                    parsed = self.parse_chemistry_example(example_text)
+                    all_parsed_examples.append({
+                        "input_stone": parsed.input_stone,
+                        "potions": " ".join(parsed.potions),
+                        "output_stone": parsed.output_stone,
+                        "raw_text": parsed.raw_text
+                    })
+                except ValueError:
+                    print(f"Warning: Skipping malformed support example: {example_text}")
+                    continue
+
+            # Create stone ID mapping if enabled
+            if self.use_stone_ids:
+                self.stone_to_id_mapping, self.id_to_stone_mapping = self.create_stone_id_mapping(
+                    support_examples, query_examples
+                )
+                
+                # Create mapping display
+                mapping_display = "Stone ID Mapping:\n"
+                for stone_state, stone_id in sorted(self.stone_to_id_mapping.items(), key=lambda x: x[1]):
+                    mapping_display += f"{stone_id}: {stone_state}\n"
+                mapping_display += "\n"
+            else:
+                mapping_display = ""
+
+            # Use LengthBasedExampleSelector
+            example_selector = LengthBasedExampleSelector(
+                examples=all_parsed_examples,
+                example_prompt=example_prompt,
+                max_length=10000
+            )
+            
+            selected_examples = example_selector.select_examples({})
+            
+            # Build examples string with or without IDs
+            if self.use_stone_ids:
+                examples_lines = []
+                for ex in selected_examples:
+                    input_id = self.stone_to_id_mapping.get(ex['input_stone'], ex['input_stone'])
+                    output_id = self.stone_to_id_mapping.get(ex['output_stone'], ex['output_stone'])
+                    examples_lines.append(f"{input_id} {ex['potions']} -> {output_id}")
+                examples_string = "\n".join(examples_lines)
+            else:
+                examples_string = "\n".join([ex['raw_text'] for ex in selected_examples])
+
+            # Create human message with reasoning control
+            if self.use_stone_ids:
+                if self.enable_reasoning:
+                    instruction = """Analyze the patterns in the support examples to understand the transformation rules, then apply this knowledge to predict the output stone ID for the query example.
+
+    You may show your reasoning, but must end your response with: 'Therefore, the output stone ID is: [SX]' where X is the stone number."""
+                else:
+                    instruction = """Analyze the patterns in the support examples to understand the transformation rules, then predict the output stone ID for the query example.
+
+    Do not show reasoning steps. Respond only with: 'Therefore, the output stone ID is: [SX]' where X is the stone number."""
+                    
+                query_format = "Now, predict the output stone ID for the following example:\n{input_stone} {potions} ->"
+            else:
+                if self.enable_reasoning:
+                    instruction = """Analyze the patterns in the support examples to understand the transformation rules, then apply this knowledge to predict the output stone state for the query example.
+
+    You may show your reasoning, but must end your response with: 'Therefore, the output stone state is: {stone_state}'"""
+                else:
+                    instruction = """Analyze the patterns in the support examples to understand the transformation rules, then predict the output stone state for the query example.
+
+    Do not show reasoning steps. Respond only with: 'Therefore, the output stone state is: {stone_state}'"""
+                    
+                query_format = "Now, predict the output for the following example:\n{input_stone} {potions} ->"
+
+            human_message_prompt = HumanMessagePromptTemplate.from_template(
+                f"Each stone state has four features: color, size, roundness, and reward value. Potions are represented by color names (e.g., RED, BLUE, GREEN, YELLOW, ORANGE, PINK) and can be applied individually or in combination. The application of the potion(s) modifies the features of the input stone to produce the output stone.\n\n"
+                f"{mapping_display}"
+                f"{instruction}\n\n"
+                f"Here are some examples of transformations:\n"
+                f"---START EXAMPLES---\n"
+                f"{{examples}}\n"
+                f"---END EXAMPLES---\n\n"
+                f"{query_format}"
+            )
+
+            chat_prompt = ChatPromptTemplate.from_messages([
+                SystemMessage(content=system_message),
+                human_message_prompt
+            ])
+
+            return chat_prompt.partial(examples=examples_string)
+
+    def create_stone_id_mapping(self, support_examples: List[str], query_examples: List[str] = None) -> tuple:
+        """Create mapping from stone states to IDs using S1, S2, ... format."""
+        unique_stones = set()
         
-        # System message with high-level task description
-        system_message = """You are an expert in understanding latent structures in chemistry transformations. Your task is to analyze support examples showing how potions transform input stone states to output stone states, then predict the output for new examples."""
-        
-
-        # 1. Create a template for a single example line to measure length.
-        #    Note: The variables don't matter here, it's just for the selector.
-        example_prompt = PromptTemplate(
-            input_variables=["input_stone", "potions", "output_stone"],
-            template="{input_stone} {potions} -> {output_stone}"
-        )
-
-        # 2. Manually parse and prepare all available examples for the selector.
-        all_parsed_examples = []
+        # Extract all unique stone states from support examples
         for example_text in support_examples:
             try:
                 parsed = self.parse_chemistry_example(example_text)
-                all_parsed_examples.append({
-                    "input_stone": parsed.input_stone,
-                    "potions": " ".join(parsed.potions),
-                    "output_stone": parsed.output_stone,
-                    "raw_text": parsed.raw_text
-                })
+                unique_stones.add(parsed.input_stone)
+                unique_stones.add(parsed.output_stone)
             except ValueError:
-                print(f"Warning: Skipping malformed support example: {example_text}")
-                continue # Skip malformed examples
-
-        # 3. Use LengthBasedExampleSelector to pick a safe number of examples.
-        #    This replicates the logic from the old few-shot template.
-        example_selector = LengthBasedExampleSelector(
-            examples=[ex for ex in all_parsed_examples],
-            example_prompt=example_prompt,
-            max_length=10000  # Use a safe length limit
-        )
+                continue
         
-        # The selector needs an empty input dict to select based on length
-        selected_examples = example_selector.select_examples({})
+        # Also include query examples if provided
+        if query_examples:
+            for query_text in query_examples:
+                try:
+                    parsed = self.parse_chemistry_example(query_text)
+                    unique_stones.add(parsed.input_stone)
+                    unique_stones.add(parsed.output_stone)
+                except ValueError:
+                    continue
         
-        # 4. Build the final examples string from the *selected* examples' raw text.
-        examples_string = "\n".join([ex['raw_text'] for ex in selected_examples])
-
-        # 5. Construct the final prompt template with the safely selected examples.
-        human_message_prompt = HumanMessagePromptTemplate.from_template(
-            "Each stone state has four features: color, size, roundness, and reward value. Potions are represented by color names (e.g., RED, BLUE, GREEN, YELLOW, ORANGE, PINK) and can be applied individually or in combination. The application of the potion(s) modifies the features of the input stone to produce the output stone. \n \n Analyze the patterns in the support examples to understand the transformation rules, then apply this knowledge to the output of a new query example where potion(s) are applied to an input stone state.
-            
-             Do not print reasoning steps, only predict 
-             Print the output stone state for the query example by saying: 'Therefore, the output stone state is:'"
-            "Here are some examples of transformations:\n"
-            "---START EXAMPLES---\n"
-            "{examples}\n"
-            "---END EXAMPLES---\n\n"
-            "Now, predict the output for the following example:\n"
-            "{input_stone} {potions} ->"
-        )
-
-        chat_prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content=system_message),
-            human_message_prompt
-        ])
-
-        # Pre-fill the {examples} placeholder with our dynamically selected examples
-        return chat_prompt.partial(examples=examples_string)
+        # Create bidirectional mapping with S1, S2, ... format
+        stone_to_id = {}
+        id_to_stone = {}
+        
+        for i, stone_state in enumerate(sorted(unique_stones)):
+            stone_id = f"S{i+1}"
+            stone_to_id[stone_state] = stone_id
+            id_to_stone[stone_id] = stone_state
+        
+        print(f"📋 Created stone ID mapping with {len(unique_stones)} unique stones")
+        return stone_to_id, id_to_stone
 
     def evaluate_single_example(self, support_examples: List[str], query_example: str, episode_id: str) -> Dict[str, Any]:
-        """Evaluate a single query example."""
+        """Evaluate a single query example with dual evaluation for stone IDs."""
         try:
             query_parsed = self.parse_chemistry_example(query_example)
             
             if self.use_chat_api:
-                # Use chat-based prompting
-                chat_prompt = self.create_chat_prompt_template(support_examples)
-                # For chat API, no need to escape braces
+                # Use chat-based prompting - pass query examples for complete mapping
+                query_examples_for_mapping = [query_example]
+                chat_prompt = self.create_chat_prompt_template(support_examples, query_examples_for_mapping)
+                
+                # Format the query input based on stone ID mode
+                if self.use_stone_ids:
+                    # Convert input stone to ID for prompt
+                    input_stone_display = self.stone_to_id_mapping.get(query_parsed.input_stone, query_parsed.input_stone)
+                else:
+                    input_stone_display = query_parsed.input_stone
+                    
                 formatted_prompt = chat_prompt.format_messages(
-                    input_stone=query_parsed.input_stone, 
+                    input_stone=input_stone_display, 
                     potions=" ".join(query_parsed.potions)
                 )
-                # # Get model response
-                # messages = [
-                #     ('system', formatted_prompt[0].content),
-                #     ('human', formatted_prompt[1].content)
-                # ]
-                
                 
                 model_response = self.llm.invoke(formatted_prompt)
-                # Extract content from AIMessage
                 if hasattr(model_response, 'content'):
                     model_response_text = model_response.content
-                    # print(f"Model response (raw): {model_response_text}")
                 else:
                     model_response_text = str(model_response)
                 prompt_text = f"Chat messages: {[msg.content for msg in formatted_prompt]}"
             else:
-                # Use traditional few-shot prompting (legacy mode)
+                # Few-shot prompting (legacy mode) - would need similar updates
                 few_shot_prompt = self.create_few_shot_prompt(support_examples)
-                # Escape braces in query input for prompt formatting
                 escaped_query_input = query_parsed.input_stone.replace("{", "{{").replace("}", "}}")
                 prompt_text = few_shot_prompt.format(input_stone=escaped_query_input, potions=" ".join(query_parsed.potions))
-                # Get model response
                 model_response = self.llm.invoke(prompt_text)
                 model_response_text = str(model_response)
             
             predicted_output = self.output_parser.parse(model_response_text)
             
-            correct = predicted_output == query_parsed.output_stone
-            result = {
-                "episode_id": episode_id,
-                "query": query_example, 
-                "expected_output": query_parsed.output_stone, 
-                "model_response": model_response_text, 
-                "predicted_output": predicted_output, 
-                "correct": correct, 
-                "prompt": prompt_text
-            }
+            # Dual evaluation logic
+            if self.use_stone_ids:
+                # Primary evaluation: Stone ID matching
+                expected_stone_id = self.stone_to_id_mapping.get(query_parsed.output_stone, None)
+                stone_id_correct = predicted_output == expected_stone_id
+                
+                # Secondary evaluation: Feature-level analysis
+                predicted_stone_state = self.id_to_stone_mapping.get(predicted_output, None)
+                feature_level_evaluation = None
+                
+                if predicted_stone_state:
+                    feature_level_evaluation = self.evaluate_feature_level(
+                        query_parsed.output_stone, predicted_stone_state
+                    )
+                
+                result = {
+                    "episode_id": episode_id,
+                    "query": query_example,
+                    "expected_output": query_parsed.output_stone,
+                    "expected_stone_id": expected_stone_id,
+                    "model_response": model_response_text,
+                    "predicted_output": predicted_output,
+                    "predicted_stone_state": predicted_stone_state,
+                    "correct": stone_id_correct,
+                    "stone_id_correct": stone_id_correct,
+                    "feature_level_evaluation": feature_level_evaluation,
+                    "prompt": prompt_text
+                }
+            else:
+                # Standard evaluation: Full stone state matching
+                correct = predicted_output == query_parsed.output_stone
+                result = {
+                    "episode_id": episode_id,
+                    "query": query_example,
+                    "expected_output": query_parsed.output_stone,
+                    "model_response": model_response_text,
+                    "predicted_output": predicted_output,
+                    "correct": correct,
+                    "prompt": prompt_text
+                }
             
             # Store data for W&B table
             if self.enable_wandb:
-                self.wandb_table_data.append({
+                wandb_data = {
                     "episode_id": episode_id,
                     "input_prompt": prompt_text,
                     "full_model_output": model_response_text,
                     "extracted_output": predicted_output,
                     "expected_output": query_parsed.output_stone,
-                    "correct": correct,
+                    "correct": result["correct"],
                     "model_name": self.full_model_name,
-                    "api_type": "chat" if self.use_chat_api else "completions"
-                })
+                    "api_type": "chat" if self.use_chat_api else "completions",
+                    "use_stone_ids": self.use_stone_ids
+                }
+                
+                if self.use_stone_ids:
+                    wandb_data.update({
+                        "expected_stone_id": result.get("expected_stone_id"),
+                        "predicted_stone_state": result.get("predicted_stone_state"),
+                        "stone_id_correct": result.get("stone_id_correct"),
+                        "feature_evaluation": result.get("feature_level_evaluation")
+                    })
+                    
+                self.wandb_table_data.append(wandb_data)
             
             return result
             
         except Exception as e:
+            # Error handling remains the same
             error_result = {
                 "episode_id": episode_id,
-                "query": query_example, 
-                "expected_output": None, 
-                "model_response": None, 
-                "predicted_output": None, 
-                "correct": False, 
+                "query": query_example,
+                "expected_output": None,
+                "model_response": None,
+                "predicted_output": None,
+                "correct": False,
                 "error": str(e)
             }
             
-            # Store error data for W&B table
             if self.enable_wandb:
                 self.wandb_table_data.append({
                     "episode_id": episode_id,
