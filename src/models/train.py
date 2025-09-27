@@ -1363,7 +1363,9 @@ def main():
                     checkpoint['scheduler_state_dict'] = scheduler.state_dict()
                     
                 if args.save_checkpoints:
-                    torch.save(checkpoint, model_save_path)
+                    # Save if epoch % 10 == 0:
+                    if (epoch + 1) % 10 == 0:
+                        torch.save(checkpoint, model_save_path)
                 print(f"New best validation loss: {best_val_loss:.4f}. Model saved to {model_save_path}")
         else: 
             if accelerator.is_local_main_process:
@@ -1389,7 +1391,8 @@ def main():
                     checkpoint['idx_to_feature_map'] = {v: k for k, v in full_dataset.feature_to_idx_map.items()}
                     checkpoint['num_output_features'] = full_dataset.num_output_features
                 if args.save_checkpoints:
-                    torch.save(checkpoint, model_save_path)
+                    if (epoch + 1) % 10 == 0:
+                        torch.save(checkpoint, model_save_path)
                 print(f"Model saved to {model_save_path} (no validation)")
         
         if accelerator.is_local_main_process:
