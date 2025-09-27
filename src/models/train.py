@@ -27,6 +27,19 @@ def set_seed(seed_value):
     torch.manual_seed(seed_value)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed_value)
+        
+    # Add these for full determinism
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    os.environ['PYTHONHASHSEED'] = str(seed_value)
+        
+
+def worker_init_fn(worker_id):
+    """Initialize each DataLoader worker with a different but deterministic seed"""
+    worker_seed = 42 + worker_id
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
@@ -1078,7 +1091,9 @@ def main():
         batch_size=args.batch_size,
         shuffle=True,
         collate_fn=custom_collate_train,
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        worker_init_fn=worker_init_fn, 
+        generator=torch.Generator().manual_seed(args.seed)  # Deteminism.
     )
 
     val_dataloader = None
@@ -1092,7 +1107,8 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             collate_fn=custom_collate_val,
-            num_workers=args.num_workers
+            num_workers=args.num_workers,
+            worker_init_fn=worker_init_fn
         )
 
     # --- Model ---
