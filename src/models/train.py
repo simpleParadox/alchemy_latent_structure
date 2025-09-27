@@ -91,7 +91,7 @@ def parse_args():
                         help="Use learning rate scheduler. Default is True.")
 
     parser.add_argument("--scheduler_type", type=str, default="cosine", 
-                        choices=["cosine", "exponential", "cosine_restarts", "none", 'reduce_on_plateau'],
+                        choices=["cosine", "exponential", "cosine_restarts", "none", 'reduce_on_plateau', 'sequential_lr'],
                         help="Type of learning rate scheduler: 'cosine', 'exponential', or 'none'.")
     parser.add_argument("--reduce_factor", type=float, default=0.1,
                         help="Factor by which to reduce learning rate for ReduceLROnPlateau scheduler.")
@@ -1235,6 +1235,12 @@ def main():
             # Reduce on plateau scheduler
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=args.reduce_factor, patience=args.reduce_patience, verbose=True)
             print(f"Using ReduceLROnPlateau with factor={args.reduce_factor}, patience={args.reduce_patience}")
+        elif args.scheduler_type == 'sequential_lr':
+            # First cosine scheduler till 200 (out of 5000) epochs and then constant.
+            cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200, eta_min=1e-5)
+            constant_scheduler = optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=args.epochs - 200)
+            scheduler = optim.lr_scheduler.SequentialLR(optimizer, schedulers=[cosine_scheduler, constant_scheduler], milestones=[200])
+            print(f"Using SequentialLR with CosineAnnealingLR for 200 epochs followed by ConstantLR")
     else:
         print("No scheduler will be used")
 

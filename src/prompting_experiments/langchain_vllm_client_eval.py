@@ -16,6 +16,7 @@ from tqdm import tqdm
 from datetime import datetime
 import json
 import random
+import numpy as np
 # Check for required packages
 try:
     from langchain_community.llms import VLLMOpenAI
@@ -99,48 +100,8 @@ class ChemistryOutputParser(BaseOutputParser):
     def _type(self) -> str:
         return "chemistry_output_parser"
 
-    def evaluate_feature_level(self, expected_stone_state: str, predicted_stone_state: str) -> Dict[str, Any]:
-        """Evaluate individual features between expected and predicted stone states."""
-        try:
-            # Parse both stone states to extract features
-            expected_features = self.parse_stone_features(expected_stone_state)
-            predicted_features = self.parse_stone_features(predicted_stone_state)
-            
-            feature_evaluation = {
-                "color_correct": expected_features.get("color") == predicted_features.get("color"),
-                "size_correct": expected_features.get("size") == predicted_features.get("size"),
-                "roundness_correct": expected_features.get("roundness") == predicted_features.get("roundness"),
-                "reward_correct": expected_features.get("reward") == predicted_features.get("reward"),
-            }
-            
-            feature_evaluation["features_correct_count"] = sum(feature_evaluation.values())
-            feature_evaluation["features_accuracy"] = feature_evaluation["features_correct_count"] / 4.0
-            
-            return feature_evaluation
-            
-        except Exception as e:
-            return {"error": str(e), "features_correct_count": 0, "features_accuracy": 0.0}
-
-    def parse_stone_features(self, stone_state: str) -> Dict[str, str]:
-        """Parse individual features from a stone state string."""
-        features = {}
-        
-        # Extract features using regex
-        color_match = re.search(r'color:\s*([^,}]+)', stone_state)
-        size_match = re.search(r'size:\s*([^,}]+)', stone_state)
-        roundness_match = re.search(r'roundness:\s*([^,}]+)', stone_state)
-        reward_match = re.search(r'reward:\s*([^,}]+)', stone_state)
-        
-        if color_match:
-            features["color"] = color_match.group(1).strip()
-        if size_match:
-            features["size"] = size_match.group(1).strip()
-        if roundness_match:
-            features["roundness"] = roundness_match.group(1).strip()
-        if reward_match:
-            features["reward"] = reward_match.group(1).strip()
-        
-        return features
+    
+    
 
 class ChemistryPromptEvaluator:
     """Evaluator that connects to a remote vLLM server."""
@@ -162,7 +123,8 @@ class ChemistryPromptEvaluator:
                  batch_size: int = 1,
                  enable_batch_inference: bool = False,
                  enable_reasoning: bool = True,  # NEW: Control reasoning generation
-                 use_stone_ids: bool = False):   # NEW: Use stone IDs instead of full features
+                 use_stone_ids: bool = False,   # NEW: Use stone IDs instead of full features
+                 batch_mode: str = "global"):  # NEW: Add batch_mode parameter
         """Initialize the evaluator.
         
         Args:
@@ -280,6 +242,7 @@ class ChemistryPromptEvaluator:
         self.enable_batch_inference = enable_batch_inference
         self.enable_reasoning = enable_reasoning  # NEW
         self.use_stone_ids = use_stone_ids  # NEW
+        self.batch_mode = batch_mode  # NEW: Store it
 
         # NEW: Stone ID configuration
         self.enable_reasoning = enable_reasoning
@@ -300,6 +263,49 @@ class ChemistryPromptEvaluator:
                 pass
             except:
                 print("⚠️ Could not configure reasoning suppression via API, using prompt-based approach")
+    
+    def parse_stone_features(self, stone_state: str) -> Dict[str, str]:
+        """Parse individual features from a stone state string."""
+        features = {}
+        
+        # Extract features using regex
+        color_match = re.search(r'color:\s*([^,}]+)', stone_state)
+        size_match = re.search(r'size:\s*([^,}]+)', stone_state)
+        roundness_match = re.search(r'roundness:\s*([^,}]+)', stone_state)
+        reward_match = re.search(r'reward:\s*([^,}]+)', stone_state)
+        
+        if color_match:
+            features["color"] = color_match.group(1).strip()
+        if size_match:
+            features["size"] = size_match.group(1).strip()
+        if roundness_match:
+            features["roundness"] = roundness_match.group(1).strip()
+        if reward_match:
+            features["reward"] = reward_match.group(1).strip()
+        
+        return features
+    
+    def evaluate_feature_level(self, expected_stone_state: str, predicted_stone_state: str) -> Dict[str, Any]:
+        """Evaluate individual features between expected and predicted stone states."""
+        try:
+            # Parse both stone states to extract features
+            expected_features = self.parse_stone_features(expected_stone_state)
+            predicted_features = self.parse_stone_features(predicted_stone_state)
+            
+            feature_evaluation = {
+                "color_correct": expected_features.get("color") == predicted_features.get("color"),
+                "size_correct": expected_features.get("size") == predicted_features.get("size"),
+                "roundness_correct": expected_features.get("roundness") == predicted_features.get("roundness"),
+                "reward_correct": expected_features.get("reward") == predicted_features.get("reward"),
+            }
+            
+            feature_evaluation["features_correct_count"] = sum(feature_evaluation.values())
+            feature_evaluation["features_accuracy"] = feature_evaluation["features_correct_count"] / 4.0
+            
+            return feature_evaluation
+            
+        except Exception as e:
+            return {"error": str(e), "features_correct_count": 0, "features_accuracy": 0.0}
 
     def parse_chemistry_example(self, example_text: str) -> ChemistryExample:
         """Parse a chemistry example from text format."""
@@ -343,11 +349,14 @@ class ChemistryPromptEvaluator:
             suffix="Now, predict the output stone state for the following example when a potion is applied to an input stone state. Just print the output stone state. \n{input_stone} {potions} -> ",
             input_variables=["input_stone", "potions"],
         )
-    def create_chat_prompt_template(self, support_examples: List[str], query_examples: List[str] = None) -> ChatPromptTemplate:
+    def create_chat_prompt_template(self, support_examples: List[str], query_examples: List[str] = None,
+                                    episode_id=None) -> ChatPromptTemplate:
         """
         Create a chat-based prompt template with optional stone ID mapping and reasoning control.
         """
         # System message
+        if episode_id is None or episode_id not in self.stone_to_id_mapping:
+            raise ValueError(f"Mappings not found for episode {episode_id}")
         if self.use_stone_ids:
             system_message = (
                 "You are an expert in understanding latent structures in chemistry transformations. "
@@ -383,11 +392,10 @@ class ChemistryPromptEvaluator:
 
         # Stone ID mapping (optional)
         if self.use_stone_ids:
-            self.stone_to_id_mapping, self.id_to_stone_mapping = self.create_stone_id_mapping(
-                support_examples, query_examples
-            )
+            stone_to_id_mapping = self.stone_to_id_mapping[episode_id]
+            id_to_stone_mapping = self.id_to_stone_mapping[episode_id]
             mapping_display = "Stone ID Mapping:\n"
-            for stone_state, stone_id in sorted(self.stone_to_id_mapping.items(), key=lambda x: x[1]):
+            for stone_state, stone_id in sorted(stone_to_id_mapping.items(), key=lambda x: x[1]):
                 mapping_display += f"{stone_id}: {stone_state}\n"
             mapping_display += "\n"
         else:
@@ -405,8 +413,8 @@ class ChemistryPromptEvaluator:
         # if self.use_stone_ids:
         #     examples_lines = []
         #     for ex in selected_examples:
-        #         input_id = self.stone_to_id_mapping.get(ex['input_stone'], ex['input_stone'])
-        #         output_id = self.stone_to_id_mapping.get(ex['output_stone'], ex['output_stone'])
+        #         input_id = self.stone_to_id_mapping[episode_id].get(ex['input_stone'], ex['input_stone'])
+        #         output_id = self.stone_to_id_mapping[episode_id].get(ex['output_stone'], ex['output_stone'])
         #         examples_lines.append(f"{input_id} {ex['potions']} -> {output_id}")
         #     examples_string = "\n".join(examples_lines)
         # else:
@@ -436,14 +444,14 @@ class ChemistryPromptEvaluator:
                     "Analyze the patterns in the support examples to understand the transformation rules, "
                     "then apply this knowledge to predict the output stone state for the query example.\n\n"
                     "You may show your reasoning, but must end your response with: "
-                    "'Therefore, the output stone state is: {stone_state}'"
+                    "'Therefore, the output stone state is: stone_state', where stone_state is the full stone description including the curly braces."
                 )
             else:
                 instruction = (
                     "Analyze the patterns in the support examples to understand the transformation rules, "
                     "then predict the output stone state for the query example.\n\n"
                     "Do not show reasoning steps. Respond only with: "
-                    "'Therefore, the output stone state is: {stone_state}'"
+                    "'Therefore, the output stone state is: stone_state', where stone_state is the full stone description including the curly braces."
                 )
             query_format = "Now, predict the output for the following example:\n{input_stone} {potions} ->"
 
@@ -481,8 +489,11 @@ class ChemistryPromptEvaluator:
             mapping_display=mapping_display_escaped
         )
 
-    def create_stone_id_mapping(self, support_examples: List[str], query_examples: List[str] = None) -> tuple:
+    def create_stone_id_mapping(self, support_examples: List[str], query_examples: List[str] = None,
+                                episode_id=None) -> tuple:
         """Create mapping from stone states to IDs using S1, S2, ... format."""
+        if episode_id is None:
+            raise ValueError("episode_id must be provided for episode-specific mappings")
         unique_stones = set()
         
         # Extract all unique stone states from support examples
@@ -512,6 +523,8 @@ class ChemistryPromptEvaluator:
             stone_id = f"S{i+1}"
             stone_to_id[stone_state] = stone_id
             id_to_stone[stone_id] = stone_state
+        self.stone_to_id_mapping[episode_id] = stone_to_id
+        self.id_to_stone_mapping[episode_id] = id_to_stone
         
         print(f"📋 Created stone ID mapping with {len(unique_stones)} unique stones")
         return stone_to_id, id_to_stone
@@ -524,12 +537,12 @@ class ChemistryPromptEvaluator:
             if self.use_chat_api:
                 # Use chat-based prompting - pass query examples for complete mapping
                 query_examples_for_mapping = [query_example]
-                chat_prompt = self.create_chat_prompt_template(support_examples, query_examples_for_mapping)
+                chat_prompt = self.create_chat_prompt_template(support_examples, query_examples_for_mapping, episode_id)
                 
                 # Format the query input based on stone ID mode
                 if self.use_stone_ids:
                     # Convert input stone to ID for prompt
-                    input_stone_display = self.stone_to_id_mapping.get(query_parsed.input_stone, query_parsed.input_stone)
+                    input_stone_display = self.stone_to_id_mapping[episode_id].get(query_parsed.input_stone, query_parsed.input_stone)
                 else:
                     input_stone_display = query_parsed.input_stone
                     
@@ -556,12 +569,14 @@ class ChemistryPromptEvaluator:
             # Dual evaluation logic
             if self.use_stone_ids:
                 # Primary evaluation: Stone ID matching
-                expected_stone_id = self.stone_to_id_mapping.get(query_parsed.output_stone, None)
+                expected_stone_id = self.stone_to_id_mapping[episode_id].get(query_parsed.output_stone, None)
                 stone_id_correct = predicted_output == expected_stone_id
                 
                 # Secondary evaluation: Feature-level analysis
-                predicted_stone_state = self.id_to_stone_mapping.get(predicted_output, None)
+                predicted_stone_state = self.id_to_stone_mapping[episode_id].get(predicted_output, None)
                 feature_level_evaluation = None
+                if predicted_stone_state is None:
+                    print(f"⚠️ Warning: Predicted stone ID '{predicted_output}' not found in mapping")
                 
                 if predicted_stone_state:
                     feature_level_evaluation = self.evaluate_feature_level(
@@ -663,7 +678,7 @@ class ChemistryPromptEvaluator:
         if self.use_chat_api:
             # Create chat prompt template once - pass all query examples for complete stone ID mapping
             all_query_texts = [q[1] for q in parsed_queries]  # Extract raw query texts
-            chat_prompt = self.create_chat_prompt_template(support_examples, all_query_texts)
+            chat_prompt = self.create_chat_prompt_template(support_examples, all_query_texts, episode_id)
             
             # Prepare all prompts for batch processing
             formatted_prompts = []
@@ -671,7 +686,7 @@ class ChemistryPromptEvaluator:
                 # Format the query input based on stone ID mode
                 # if self.use_stone_ids:
                 #     # Convert input stone to ID for prompt
-                #     input_stone_display = self.stone_to_id_mapping.get(parsed_query.input_stone, parsed_query.input_stone)
+                #     input_stone_display = self.stone_to_id_mapping[episode_id].get(parsed_query.input_stone, parsed_query.input_stone)
                 # else:
                 input_stone_display = parsed_query.input_stone
                 
@@ -700,17 +715,28 @@ class ChemistryPromptEvaluator:
                     # Dual evaluation logic for batch processing
                     if self.use_stone_ids:
                         # Primary evaluation: Stone ID matching
-                        expected_stone_id = self.stone_to_id_mapping.get(parsed_query.output_stone, None)
+                        expected_stone_id = self.stone_to_id_mapping[episode_id].get(parsed_query.output_stone, None)
                         stone_id_correct = predicted_output == expected_stone_id
                         
                         # Secondary evaluation: Feature-level analysis
-                        predicted_stone_state = self.id_to_stone_mapping.get(predicted_output, None)
+                        predicted_stone_state = self.id_to_stone_mapping[episode_id].get(predicted_output, None)
                         feature_level_evaluation = None
+                        if predicted_stone_state is None:
+                            print(f"⚠️ Warning: Predicted stone ID '{predicted_output}' not found in mapping")
+                        
                         
                         if predicted_stone_state:
                             feature_level_evaluation = self.evaluate_feature_level(
                                 parsed_query.output_stone, predicted_stone_state
                             )
+                        print("Prompt:")
+                        print(prompt_text)
+                        print("\nModel Response:")
+                        print(model_response_text)
+                        print("\nPredicted Output:", predicted_output)
+                        print("Expected Output:", parsed_query.output_stone)
+                        print("Stone ID Correct:", stone_id_correct)
+                        print("Feature Evaluation:", feature_level_evaluation)
                         
                         result = {
                             "episode_id": episode_id,
@@ -809,71 +835,263 @@ class ChemistryPromptEvaluator:
             # return individual_results
 
     def evaluate_dataset(self, dataset: Dict[str, List[str]]) -> EvaluationResults:
-        """Evaluate the entire dataset with optional batch processing."""
+        """Evaluate the entire dataset with batch processing (global or per-episode)."""
         detailed_results, correct_count, failed_count = [], 0, 0
         episodes = dataset.get("episodes", [])
         
-        print(f"🧪 Starting evaluation of {len(episodes)} episodes")
+        print(f"🧪 Starting evaluation of {len(episodes)} episodes with batch_mode='{self.batch_mode}'")
         if hasattr(self, 'enable_batch_inference') and self.enable_batch_inference:
             print(f"🚀 Batch inference enabled with batch size: {self.batch_size}")
         
-        for episode_id, episode in tqdm(episodes.items(), desc="Evaluating episodes"):
-            support_examples, query_examples = episode["support"], episode["query"]
+        if self.batch_mode == "global":
+            # NEW: Global batching mode - collect all queries across episodes
+            all_queries = []
+            for episode_id, episode in tqdm(episodes.items(), desc="Processing episodes for global batching"):
+                support_examples = episode["support"]
+                query_examples = episode["query"]
+                # Create a mapping here for each episode separately.
+                self.create_stone_id_mapping(support_examples, query_examples, episode_id)
+                for query in query_examples:
+                    all_queries.append((episode_id, support_examples, query))
             
-            if hasattr(self, 'enable_batch_inference') and self.enable_batch_inference and len(query_examples) > 1:
-                # Use batch processing for multiple queries
-                print(f"⚗️  Processing {len(query_examples)} queries in batches for episode {episode_id}")
-                
-                # Split queries into batches
-                batches = [query_examples[i:i + self.batch_size] 
-                          for i in range(0, len(query_examples), self.batch_size)]
-                
-                episode_results = []
-                for batch_idx, batch_queries in enumerate(batches):
-                    print(f"   📦 Processing batch {batch_idx + 1}/{len(batches)} ({len(batch_queries)} queries)")
-                    batch_results = self.evaluate_batch_examples(support_examples, batch_queries, episode_id)
-                    episode_results.extend(batch_results)
-            else:
-                # Use individual processing (original method)
-                episode_results = []
-                for i, query in enumerate(query_examples):
-                    print(f"⚗️  Processing query {i+1}/{len(query_examples)} in episode {episode_id}")
+            total_queries = len(all_queries)
+            print(f"📊 Collected {total_queries} total queries across all episodes for global batching")
+            
+            if not (hasattr(self, 'enable_batch_inference') and self.enable_batch_inference) or total_queries <= 1:
+                print("⚠️ Batching disabled or not needed; processing individually")
+                for episode_id, support_examples, query in all_queries:
                     result = self.evaluate_single_example(support_examples, query, episode_id)
-                    episode_results.append(result)
-            
-            # Count results
-            episode_correct_count = sum(1 for r in episode_results if r.get("correct", False))
-            episode_failed_count = sum(1 for r in episode_results if "error" in r and r["error"])
-            
-            # Print episode summary
-            for result in episode_results:
-                if "error" in result and result["error"]:
-                    print(f"  ❌ Error: {result['error']}")
-                    assert False, f"Error in episode {episode_id}, query: {result['query']}"
-                elif result["correct"]:
-                    print(f"  ✅ Correct, Predicted: {result['predicted_output']}")
-                else:
-                    print(f"  ❌ Incorrect - Expected: {result['expected_output']}, Got: {result['predicted_output']}")
-            
-            detailed_results.extend(episode_results)
-            correct_count += episode_correct_count
-            failed_count += episode_failed_count
-            
-            # Log episode-level metrics to W&B
-            # if self.enable_wandb:
-            #     episode_accuracy = episode_correct_count / len(query_examples) if query_examples else 0.0
-            #     wandb.log({
-            #         f"episode_{episode_id}_accuracy": episode_accuracy,
-            #         f"episode_{episode_id}_correct": episode_correct_count,
-            #         f"episode_{episode_id}_total": len(query_examples),
-            #         "step": int(episode_id) if episode_id.isdigit() else len(detailed_results)
-            #     })
+                    detailed_results.append(result)
+            else:
+                # Generate prompts for all queries (each with its episode's support)
+                formatted_prompts = []
+                query_metadata = []  # Track (episode_id, support_examples, query, parsed_query)
+                for episode_id, support_examples, query in all_queries:
+                    # try:
+                    query_parsed = self.parse_chemistry_example(query)
+                    if self.use_chat_api:
+                        query_examples_for_mapping = [query]
+                        chat_prompt = self.create_chat_prompt_template(support_examples, query_examples_for_mapping, episode_id)
+                        
+                        input_stone_display = (
+                            self.stone_to_id_mapping[episode_id].get(query_parsed.input_stone, query_parsed.input_stone)
+                            if self.use_stone_ids else query_parsed.input_stone
+                        )
+                        
+                        prompt_messages = chat_prompt.format_messages(input_stone=input_stone_display, potions=" ".join(query_parsed.potions))
+                        formatted_prompts.append(prompt_messages)
+                        query_metadata.append((episode_id, support_examples, query, query_parsed))
+                    else:
+                        # For non-chat API, fall back to individual
+                        result = self.evaluate_single_example(support_examples, query, episode_id)
+                        detailed_results.append(result)
+                        continue
+                    # except Exception as e:
+                    #     print("Exception during prompt creation:", e)
+                    #     error_result = {
+                    #         "episode_id": episode_id,
+                    #         "query": query,
+                    #         "expected_output": None,
+                    #         "model_response": str(e),
+                    #         "predicted_output": None,
+                    #         "correct": False,
+                    #         "error": str(e)
+                    #     }
+                    #     detailed_results.append(error_result)
+                    #     if self.enable_wandb:
+                    #         self.wandb_table_data.append({
+                    #             "episode_id": episode_id,
+                    #             "input_prompt": f"Error during prompt creation for query: {query}",
+                    #             "full_model_output": str(e),
+                    #             "extracted_output": "ERROR",
+                    #             "expected_output": "N/A",
+                    #             "correct": False,
+                    #             "model_name": self.full_model_name,
+                    #             "api_type": "chat" if self.use_chat_api else "completions"
+                    #         })
+                    #     continue
+                
+                # Split into global batches and process
+                batches = [formatted_prompts[i:i + self.batch_size] for i in range(0, len(formatted_prompts), self.batch_size)]
+                batch_metadata = [query_metadata[i:i + self.batch_size] for i in range(0, len(query_metadata), self.batch_size)]
+                
+                for batch_idx, (batch_prompts, batch_meta) in enumerate(tqdm(zip(batches, batch_metadata), 
+                                                                              desc="Processing global batches",
+                                                                              total=len(batches),
+                                                                              unit="batch")):
+                    print(f"   📦 Processing global batch {batch_idx + 1}/{len(batches)} ({len(batch_prompts)} queries)")
+                    try:
+                        batch_responses = self.llm.batch(batch_prompts)
+                        
+                        for i, (response, (episode_id, support_examples, query, query_parsed)) in enumerate(zip(batch_responses, batch_meta)):
+                            try:
+                                if hasattr(response, 'content'):
+                                    model_response_text = response.content
+                                else:
+                                    model_response_text = str(response)
+                                
+                                predicted_output = self.output_parser.parse(model_response_text)
+                                prompt_text = f"Chat messages: {[msg.content for msg in batch_prompts[i]]}"
+                                
+                                # Dual evaluation logic (same as before)
+                                if self.use_stone_ids:
+                                    expected_stone_id = self.stone_to_id_mapping[episode_id].get(query_parsed.output_stone, None)
+                                    if expected_stone_id is None:
+                                        import pdb; pdb.set_trace()
+                                    stone_id_correct = predicted_output == expected_stone_id
+                                    # This is a way to check if the predicted ID exists in the mapping
+                                    # and see if the corresponding full feature stone state matches to the ground truth mapping.
+                                    predicted_stone_state = self.id_to_stone_mapping[episode_id].get(predicted_output, None)
+                                    feature_level_evaluation = (
+                                        self.evaluate_feature_level(query_parsed.output_stone, predicted_stone_state)
+                                        if predicted_stone_state else None
+                                    )
+                                    result = {
+                                        "episode_id": episode_id,
+                                        "query": query,
+                                        "expected_output": query_parsed.output_stone,
+                                        "expected_stone_id": expected_stone_id,
+                                        "model_response": model_response_text,
+                                        "predicted_output": predicted_output,
+                                        "predicted_stone_state": predicted_stone_state,
+                                        "correct": stone_id_correct,
+                                        "stone_id_correct": stone_id_correct,
+                                        "feature_level_evaluation": feature_level_evaluation,
+                                        "prompt": prompt_text
+                                    }
+                                    
+                                    # Print the model prompt and the model response.
+                                    print(f"Prompt:\n{prompt_text}\nModel Response:\n{model_response_text}\nPredicted Output: {predicted_output}\nExpected Output: {query_parsed.output_stone}\nStone ID Correct: {stone_id_correct}\nFeature Evaluation: {feature_level_evaluation}\n---")
+                                    
+                                    # Print results for stone ID mode
+                                    if stone_id_correct:
+                                        print(f"  ✅ Episode {episode_id}: Correct - Predicted ID: {predicted_output}, Expected ID: {expected_stone_id}")
+                                    else:
+                                        print(f"  ❌ Episode {episode_id}: Incorrect - Predicted ID: {predicted_output}, Expected ID: {expected_stone_id}")
+                                        print(f"      Expected stone: {query_parsed.output_stone}")
+                                        if predicted_stone_state:
+                                            print(f"      Predicted stone: {predicted_stone_state}")
+                                else:
+                                    correct = predicted_output == query_parsed.output_stone
+                                    result = {
+                                        "episode_id": episode_id,
+                                        "query": query,
+                                        "expected_output": query_parsed.output_stone,
+                                        "model_response": model_response_text,
+                                        "predicted_output": predicted_output,
+                                        "correct": correct,
+                                        "prompt": prompt_text
+                                    }
+                                    # Print results for full stone state mode
+                                    if correct:
+                                        print(f"  ✅ Episode {episode_id}: Correct - Predicted: {predicted_output}")
+                                    else:
+                                        print(f"  ❌ Episode {episode_id}: Incorrect - Expected: {query_parsed.output_stone}")
+                                        print(f"      Predicted: {predicted_output}")
+                                
+                                
+                                detailed_results.append(result)
+                                
+                                # W&B logging
+                                if self.enable_wandb:
+                                    wandb_data = {
+                                        "episode_id": episode_id,
+                                        "input_prompt": prompt_text,
+                                        "full_model_output": model_response_text,
+                                        "extracted_output": predicted_output,
+                                        "expected_output": query_parsed.output_stone,
+                                        "correct": result["correct"],
+                                        "model_name": self.full_model_name,
+                                        "api_type": "chat" if self.use_chat_api else "completions",
+                                        "use_stone_ids": self.use_stone_ids
+                                    }
+                                    if self.use_stone_ids:
+                                        wandb_data.update({
+                                            "expected_stone_id": result.get("expected_stone_id"),
+                                            "predicted_stone_state": result.get("predicted_stone_state"),
+                                            "stone_id_correct": result.get("stone_id_correct"),
+                                            "feature_evaluation": result.get("feature_level_evaluation")
+                                        })
+                                    self.wandb_table_data.append(wandb_data)
+                            
+                            except Exception as e:
+                                print(f"❌ Error processing query in batch: {e}")
+                                error_result = {
+                                    "episode_id": episode_id,
+                                    "query": query,
+                                    "expected_output": query_parsed.output_stone,
+                                    "model_response": str(e),
+                                    "predicted_output": None,
+                                    "correct": False,
+                                    "error": str(e)
+                                }
+                                detailed_results.append(error_result)
+                                if self.enable_wandb:
+                                    self.wandb_table_data.append({
+                                        "episode_id": episode_id,
+                                        "input_prompt": f"Error in global batch processing for query: {query}",
+                                        "full_model_output": str(e),
+                                        "extracted_output": "ERROR",
+                                        "expected_output": query_parsed.output_stone,
+                                        "correct": False,
+                                        "model_name": self.full_model_name,
+                                        "api_type": "chat" if self.use_chat_api else "completions"
+                                    })
+                    
+                    except Exception as e:
+                        print(f"❌ Global batch {batch_idx + 1} failed: {e}. Falling back to per-episode processing for this batch.")
+                        # Fallback: Process each query in the batch individually
+                        for episode_id, support_examples, query in batch_meta:
+                            result = self.evaluate_single_example(support_examples, query, episode_id)
+                            detailed_results.append(result)
+            correct_count = sum(1 for r in detailed_results if r.get("correct", False))
+            failed_count = sum(1 for r in detailed_results if "error" in r and r["error"])
         
+        else:  # batch_mode == "per_episode" (original logic)
+            # ORIGINAL: Per-episode batching
+            for episode_id, episode in tqdm(episodes.items(), desc="Evaluating episodes"):
+                support_examples, query_examples = episode["support"], episode["query"]
+                
+                if hasattr(self, 'enable_batch_inference') and self.enable_batch_inference and len(query_examples) > 1:
+                    print(f"⚗️  Processing {len(query_examples)} queries in batches for episode {episode_id}")
+                    
+                    batches = [query_examples[i:i + self.batch_size] 
+                              for i in range(0, len(query_examples), self.batch_size)]
+                    
+                    episode_results = []
+                    for batch_idx, batch_queries in enumerate(batches):
+                        print(f"   📦 Processing batch {batch_idx + 1}/{len(batches)} ({len(batch_queries)} queries)")
+                        batch_results = self.evaluate_batch_examples(support_examples, batch_queries, episode_id)
+                        episode_results.extend(batch_results)
+                else:
+                    episode_results = []
+                    for i, query in enumerate(query_examples):
+                        print(f"⚗️  Processing query {i+1}/{len(query_examples)} in episode {episode_id}")
+                        result = self.evaluate_single_example(support_examples, query, episode_id)
+                        episode_results.append(result)
+                
+                # Count and log per-episode
+                episode_correct_count = sum(1 for r in episode_results if r.get("correct", False))
+                episode_failed_count = sum(1 for r in episode_results if "error" in r and r["error"])
+                
+                for result in episode_results:
+                    if "error" in result and result["error"]:
+                        print(f"  ❌ Error: {result['error']}")
+                    elif result["correct"]:
+                        print(f"  ✅ Correct, Predicted: {result['predicted_output']}")
+                    else:
+                        print(f"  ❌ Incorrect - Expected: {result['expected_output']}, Got: {result['predicted_output']}")
+                
+                detailed_results.extend(episode_results)
+                correct_count += episode_correct_count
+                failed_count += episode_failed_count
+        
+        # Aggregate and log final results (same as before)
         accuracy = correct_count / len(detailed_results) if detailed_results else 0.0
         results = EvaluationResults(len(detailed_results), correct_count, accuracy, failed_count, detailed_results)
         
-        # Log final results and create W&B table
         if self.enable_wandb:
+            wandb.log({"batch_mode": self.batch_mode})
             self._log_to_wandb(results)
         
         return results
@@ -1013,31 +1231,58 @@ def main():
     parser.add_argument("--data_split_seed", type=int, default=0, help="Data split seed")
     parser.add_argument("--output", type=str, default="langchain_vllm_client_results.json", help="Output file for results")
     parser.add_argument("--vllm_url", type=str, default="http://localhost:8000/v1", help="vLLM server OpenAI-compatible API URL")
-    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-8B-Instruct", help="Model name being served")
-    parser.add_argument("--use_sample_data", action="store_true", help="Use built-in sample data for testing", default=False)
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="Model name being served")
+    parser.add_argument("--use_sample_data", type=str, default="false", help="Use built-in sample data for testing")
     parser.add_argument("--max_new_tokens", type=int, default=1000, help="Max new tokens to generate")
     
     # Chat API arguments
-    parser.add_argument("--use_chat_api", action="store_true", help="Use ChatOpenAI (/v1/chat/completions) instead of VLLMOpenAI (/v1/completions)", default=True)
+    parser.add_argument("--use_chat_api", type=str, default="true", help="Use ChatOpenAI (/v1/chat/completions) instead of VLLMOpenAI (/v1/completions)")
     parser.add_argument("--provider", type=str, default="vllm", choices=["vllm", "fireworks"], help="API provider: vllm or fireworks")
     
     # Batch inference arguments
-    parser.add_argument("--enable_batch_inference", action="store_true", help="Enable batch inference for faster processing", default=True)
+    parser.add_argument("--enable_batch_inference", type=str, default="true", help="Enable batch inference for faster processing")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for batch inference")
     
     # W&B arguments
-    parser.add_argument("--enable_wandb", action="store_true", help="Enable W&B monitoring", default=False)
+    parser.add_argument("--enable_wandb", type=str, default="false", help="Enable W&B monitoring")
     
     # NEW: Stone ID and reasoning arguments
-    parser.add_argument("--use_stone_ids", action="store_true", help="Use stone IDs (S1, S2, ...) instead of full stone states", default=True)
-    parser.add_argument("--enable_reasoning", action="store_true", help="Allow model to show reasoning steps", default=False)
-    parser.add_argument("--disable_reasoning", action="store_true", help="Prohibit model from showing reasoning steps", default=True)
+    parser.add_argument("--use_stone_ids", type=str, default="false", help="Use stone IDs (S1, S2, ...) instead of full stone states")
+    parser.add_argument("--enable_reasoning", type=str, default="true", help="Allow model to show reasoning steps")
+    parser.add_argument("--disable_reasoning", type=str, default="false", help="Prohibit model from showing reasoning steps")
+    parser.add_argument("--batch_mode", type=str, default="global", choices=["global", "per_episode"], 
+                        help="Batch mode: 'global' (across episodes) or 'per_episode' (within each episode)")
+    
+    
+    parser.add_argument("--temperature", type=float, default=0.0, help="Temperature for generation (not used currently)")
     
     args = parser.parse_args()
+    
+    # Convert string arguments to boolean
+    def str_to_bool(v):
+        if isinstance(v, bool):
+            return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected.')
+    
+    args.use_sample_data = str_to_bool(args.use_sample_data)
+    args.use_chat_api = str_to_bool(args.use_chat_api)
+    args.enable_batch_inference = str_to_bool(args.enable_batch_inference)
+    args.enable_wandb = str_to_bool(args.enable_wandb)
+    args.use_stone_ids = str_to_bool(args.use_stone_ids)
+    args.enable_reasoning = str_to_bool(args.enable_reasoning)
+    args.disable_reasoning = str_to_bool(args.disable_reasoning)
     
     # Handle reasoning flag logic
     if args.disable_reasoning:
         args.enable_reasoning = False
+        
+    print("Configuration:", args)
+    
 
     # Add the 'data_split_seed' to the data filename (as _seed_X) before the .json extension
     if args.data and args.data.endswith('.json'):
@@ -1098,10 +1343,12 @@ def main():
         shop_length=shop_length,
         qhop_length=qhop_length,
         data_split_seed=data_split_seed,
-        batch_size=args.batch_size,  # NEW
+        batch_size=args.batch_size,  
         enable_batch_inference=args.enable_batch_inference,  # NEW
-        enable_reasoning=args.enable_reasoning,  # NEW
-        use_stone_ids=args.use_stone_ids         # NEW
+        enable_reasoning=args.enable_reasoning,  
+        use_stone_ids=args.use_stone_ids,    
+        batch_mode=args.batch_mode,
+        
     )
 
     try:
