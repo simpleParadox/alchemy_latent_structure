@@ -78,8 +78,12 @@ def parse_args():
                         help="Use learning rate scheduler. Default is True.")
 
     parser.add_argument("--scheduler_type", type=str, default="cosine", 
-                        choices=["cosine", "exponential", "cosine_restarts", "none"],
+                        choices=["cosine", "exponential", "cosine_restarts", "none", 'reduce_on_plateau'],
                         help="Type of learning rate scheduler: 'cosine', 'exponential', or 'none'.")
+    parser.add_argument("--reduce_factor", type=float, default=0.1,
+                        help="Factor by which to reduce learning rate for ReduceLROnPlateau scheduler.")
+    parser.add_argument("--reduce_patience", type=int, default=5,
+                        help="Number of epochs with no improvement after which learning rate will be reduced for ReduceLROnPlateau scheduler.")
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Multiplicative factor for ExponentialLR scheduler.")
     parser.add_argument("--scheduler_call_location", type=str, default="after_epoch", choices=["after_epoch", "after_batch"],
@@ -480,8 +484,8 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             start_time = time.time()
         
     
-    if scheduler and args.scheduler_call_location == 'after_epoch':
-        scheduler.step()
+    # if scheduler and args.scheduler_call_location == 'after_epoch':
+    #     scheduler.step()
     # Call scheduler after each epoch for ExponentialLR
     # if scheduler and args.scheduler_type == "exponential":
     #     scheduler.step()
@@ -1210,6 +1214,11 @@ def main():
         elif args.scheduler_type == "exponential":
             scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.gamma)
             print(f"Using ExponentialLR with gamma={args.gamma}")
+        
+        elif args.scheduler_type == 'reduce_on_plateau':
+            # Reduce on plateau scheduler
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=args.reduce_factor, patience=args.reduce_patience, verbose=True)
+            print(f"Using ReduceLROnPlateau with factor={args.reduce_factor}, patience={args.reduce_patience}")
     else:
         print("No scheduler will be used")
 
@@ -1325,6 +1334,11 @@ def main():
                      print(f"Validation Acc (Seq2Seq) mean over batches: {np.mean(val_batch_accs_list):.4f}, std: {np.std(val_batch_accs_list):.4f}")
             else:
                 val_loss, val_acc = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args)
+            
+            # step if using ReduceLROnPlateau
+            if scheduler and args.scheduler_type == 'reduce_on_plateau':
+                # This should be called always after validation when using ReduceLROnPlateau.
+                scheduler.step(val_loss)
             
             if accelerator.is_local_main_process:
                 print(f"Epoch {epoch+1} Validation Summary: Avg Loss: {val_loss:.4f}, Avg Acc: {val_acc:.4f}")
