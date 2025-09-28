@@ -31,6 +31,7 @@ def set_seed(seed_value):
     # Add these for full determinism
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True)
     os.environ['PYTHONHASHSEED'] = str(seed_value)
         
 
@@ -91,10 +92,12 @@ def parse_args():
                         help="Use learning rate scheduler. Default is True.")
 
     parser.add_argument("--scheduler_type", type=str, default="cosine", 
-                        choices=["cosine", "exponential", "cosine_restarts", "none", 'reduce_on_plateau', 'sequential_lr'],
+                        choices=["cosine", "exponential", "cosine_restarts", "none", 'reduce_on_plateau', 'sequential_lr', 'step_lr'],
                         help="Type of learning rate scheduler: 'cosine', 'exponential', or 'none'.")
     parser.add_argument("--reduce_factor", type=float, default=0.1,
                         help="Factor by which to reduce learning rate for ReduceLROnPlateau scheduler.")
+    parser.add_argument("--step_size", type=int, default=240,
+                        help="Step size (in epochs) for StepLR scheduler.")
     parser.add_argument("--reduce_patience", type=int, default=5,
                         help="Number of epochs with no improvement after which learning rate will be reduced for ReduceLROnPlateau scheduler.")
     parser.add_argument("--gamma", type=float, default=0.99,
@@ -1108,7 +1111,8 @@ def main():
             shuffle=False,
             collate_fn=custom_collate_val,
             num_workers=args.num_workers,
-            worker_init_fn=worker_init_fn
+            worker_init_fn=worker_init_fn,
+            generator=torch.Generator().manual_seed(args.seed)  # Determinism.
         )
 
     # --- Model ---
@@ -1237,10 +1241,16 @@ def main():
             print(f"Using ReduceLROnPlateau with factor={args.reduce_factor}, patience={args.reduce_patience}")
         elif args.scheduler_type == 'sequential_lr':
             # First cosine scheduler till 200 (out of 5000) epochs and then constant.
-            cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200, eta_min=1e-5)
-            constant_scheduler = optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=args.epochs - 200)
+            num_training_steps = args.epochs * len(train_dataloader)
+            cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-5)
+            constant_scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.5, total_iters=30)
             scheduler = optim.lr_scheduler.SequentialLR(optimizer, schedulers=[cosine_scheduler, constant_scheduler], milestones=[200])
-            print(f"Using SequentialLR with CosineAnnealingLR for 200 epochs followed by ConstantLR")
+            print(f"Using SequentialLR with CosineAnnealingLR for 200 epochs followed by constant LR at final cosine value")
+        elif args.scheduler_type == 'step_lr':
+            # Multiple the step_dize by the number of gpus.
+            step_size = args.step_size * accelerator.num_processes
+            scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[step_size], gamma=args.reduce_factor)
+            print(f"Using StepLR with step_size={step_size}, gamma={args.reduce_factor}")
     else:
         print("No scheduler will be used")
 
@@ -1360,7 +1370,18 @@ def main():
             # step if using ReduceLROnPlateau
             if scheduler and args.scheduler_type == 'reduce_on_plateau':
                 # This should be called always after validation when using ReduceLROnPlateau.
-                scheduler.step(val_loss)
+                if accelerator.is_main_process:
+                    scheduler.step(val_loss)
+            if scheduler and args.scheduler_type == 'sequential_lr':
+                # This should be called always after validation when using SequentialLR.
+                if accelerator.is_main_process:
+                    scheduler.step()
+            if scheduler and args.scheduler_type == 'step_lr':
+                # This should be called always after validation when using StepLR.
+                print(f"Stepping StepLR scheduler.")
+                # Step only on the main process to avoid multiple steps
+                if accelerator.is_main_process:
+                    scheduler.step()
             
             if accelerator.is_local_main_process:
                 print(f"Epoch {epoch+1} Validation Summary: Avg Loss: {val_loss:.4f}, Avg Acc: {val_acc:.4f}")

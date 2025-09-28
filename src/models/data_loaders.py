@@ -1008,7 +1008,9 @@ class AlchemyDataset(Dataset):
                 
                 print(f"Processing chunk {chunk_num}/{total_chunks} ({len(chunk)} episodes) using {num_workers} workers...")
                 
-                with Pool(processes=min(num_workers, len(chunk))) as pool:
+                with Pool(processes=min(num_workers, len(chunk)), 
+                          initializer=init_worker, 
+                          initargs=(self.val_split_seed,)) as pool:
                     # Process episodes in parallel
                     results = list(tqdm(
                         pool.imap(process_episode_worker, chunk),
@@ -1257,6 +1259,10 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], pad_token_id: int, sos_toke
         }
     else:
         raise ValueError(f"Unknown task_type in collate_fn: {task_type}")
+
+def init_worker(seed):
+    random.seed(seed)
+    np.random.seed(seed)
 
 if __name__ == '__main__':
     # FILE_PATH = "/home/rsaha/projects/dm_alchemy/src/data/chemistry_samples.json" 
