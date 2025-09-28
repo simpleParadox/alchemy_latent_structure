@@ -119,7 +119,6 @@ class ChemistryPromptEvaluator:
                  provider: str = "vllm",
                  shop_length: int = 2,
                  qhop_length: int = 1,
-                 data_split_seed=0,
                  batch_size: int = 1,
                  enable_batch_inference: bool = False,
                  enable_reasoning: bool = True,  # NEW: Control reasoning generation
@@ -159,7 +158,6 @@ class ChemistryPromptEvaluator:
                         "provider": provider,
                         "shop_length": shop_length,
                         "qhop_length": qhop_length,
-                        "data_split_seed": data_split_seed
                     }
                 )
                 print(f"🔗 W&B enabled. Experiment: {self.experiment_name}")
@@ -1227,8 +1225,9 @@ def main():
 
     parser = argparse.ArgumentParser(description="Chemistry evaluation client for a remote vLLM server.")
     parser.add_argument("--data", type=str, help="Path to JSON file with support/query data", 
+                        default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json')
+    parser.add_argument("--val_data", type=str, help="Path to JSON file with support/query data", 
                         default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1.json')
-    parser.add_argument("--data_split_seed", type=int, default=0, help="Data split seed")
     parser.add_argument("--output", type=str, default="langchain_vllm_client_results.json", help="Output file for results")
     parser.add_argument("--vllm_url", type=str, default="http://localhost:8000/v1", help="vLLM server OpenAI-compatible API URL")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="Model name being served")
@@ -1283,10 +1282,12 @@ def main():
         
     print("Configuration:", args)
     
+    
+    
+    
 
-    # Add the 'data_split_seed' to the data filename (as _seed_X) before the .json extension
     if args.data and args.data.endswith('.json'):
-        args.data = args.data.replace('.json', f'_seed_{args.data_split_seed}.json')
+        args.data = args.data.replace('.json', f'_combined.json')
         print("Using data file:", args.data)
     # Create experiment_name
     if args.enable_wandb:
@@ -1323,12 +1324,10 @@ def main():
             shop_length = int(shop_match.group(1))
         if qhop_match:
             qhop_length = int(qhop_match.group(1))
-        if seed_match:
-            data_split_seed = int(seed_match.group(1))
-        print(f"Detected shop_length: {shop_length}, qhop_length: {qhop_length}, data_split_seed: {data_split_seed}")
+        print(f"Detected shop_length: {shop_length}, qhop_length: {qhop_length}")
         
-    random.seed(data_split_seed)
-    np.random.seed(data_split_seed)
+    random.seed(42)
+    np.random.seed(42)
     
     evaluator = ChemistryPromptEvaluator(
         vllm_url=args.vllm_url,
@@ -1342,7 +1341,6 @@ def main():
         provider=args.provider,
         shop_length=shop_length,
         qhop_length=qhop_length,
-        data_split_seed=data_split_seed,
         batch_size=args.batch_size,  
         enable_batch_inference=args.enable_batch_inference,  # NEW
         enable_reasoning=args.enable_reasoning,  
