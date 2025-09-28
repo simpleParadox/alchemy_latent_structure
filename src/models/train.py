@@ -96,7 +96,7 @@ def parse_args():
                         help="Type of learning rate scheduler: 'cosine', 'exponential', or 'none'.")
     parser.add_argument("--reduce_factor", type=float, default=0.1,
                         help="Factor by which to reduce learning rate for ReduceLROnPlateau scheduler.")
-    parser.add_argument("--step_size", type=int, default=240,
+    parser.add_argument("--step_size", type=str, default=240,
                         help="Step size (in epochs) for StepLR scheduler.")
     parser.add_argument("--reduce_patience", type=int, default=5,
                         help="Number of epochs with no improvement after which learning rate will be reduced for ReduceLROnPlateau scheduler.")
@@ -104,6 +104,10 @@ def parse_args():
                         help="Multiplicative factor for ExponentialLR scheduler.")
     parser.add_argument("--scheduler_call_location", type=str, default="after_epoch", choices=["after_epoch", "after_batch"],
                         help="Where to call the scheduler: 'after_epoch' for per-epoch scheduling, 'after_batch' for per-batch.")
+    parser.add_argument("--t0", type=int, default=20,
+                        help="Number of epochs for the first restart in CosineAnnealingWarmRestarts scheduler.")
+    parser.add_argument("--eta_min", type=float, default=1e-5,
+                        help="Minimum learning rate for CosineAnnealingLR scheduler.")
     
     parser.add_argument("--wandb_entity", type=str, default=None, # Replace with your W&B entity
                         help="Weights & Biases entity name.")
@@ -1221,11 +1225,11 @@ def main():
             elif args.scheduler_call_location == "after_epoch":
                 num_training_steps = args.epochs
                 print(f"Using CosineAnnealingLR with T_max={num_training_steps} (called per epoch)")
-            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-5)
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=args.eta_min)
             print(f"Using CosineAnnealingLR with T_max={num_training_steps}")
         elif args.scheduler_type == 'cosine_restarts':
             # For cosine annealing with restarts, T_0 is the number of epochs
-            t_0 = 20
+            t_0 = args.t0
             if accelerator.is_local_main_process:
                 wandb.log({"T_0": t_0})
             print(f"Using CosineAnnealingWarmRestarts with T_0={t_0} (called per batch but will restart after every T_0 epochs)")
@@ -1242,15 +1246,23 @@ def main():
         elif args.scheduler_type == 'sequential_lr':
             # First cosine scheduler till 200 (out of 5000) epochs and then constant.
             num_training_steps = args.epochs * len(train_dataloader)
-            cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=1e-5)
-            constant_scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.5, total_iters=30)
-            scheduler = optim.lr_scheduler.SequentialLR(optimizer, schedulers=[cosine_scheduler, constant_scheduler], milestones=[200])
-            print(f"Using SequentialLR with CosineAnnealingLR for 200 epochs followed by constant LR at final cosine value")
+            step_size = args.step_size * accelerator.num_processes
+            cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=args.eta_min)
+            constant_scheduler = optim.lr_scheduler.ConstantLR(optimizer, factor=args.reduce_factor, total_iters=args.epochs - step_size)
+            scheduler = optim.lr_scheduler.SequentialLR(optimizer, schedulers=[cosine_scheduler, constant_scheduler], milestones=[step_size])
+            print(f"Using SequentialLR with CosineAnnealingLR for {args.step_size} epochs followed by constant LR at factor {args.reduce_factor} of initial LR")
         elif args.scheduler_type == 'step_lr':
             # Multiple the step_dize by the number of gpus.
-            step_size = args.step_size * accelerator.num_processes
-            scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[step_size], gamma=args.reduce_factor)
-            print(f"Using StepLR with step_size={step_size}, gamma={args.reduce_factor}")
+            # Check if args.step_size is a string of multiple numbers separated by commas.
+            if ',' in args.step_size:
+                step_sizes = [int(x) for x in args.step_size.split(',')]
+                step_sizes = [x * accelerator.num_processes for x in step_sizes]
+                scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=step_sizes, gamma=args.reduce_factor)
+                print(f"Using StepLR with step_sizes={step_sizes}, gamma={args.reduce_factor}")
+            else:
+                step_size = int(args.step_size) * accelerator.num_processes
+                scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[step_size], gamma=args.reduce_factor)
+                print(f"Using StepLR with step_size={step_size}, gamma={args.reduce_factor}")
     else:
         print("No scheduler will be used")
 
