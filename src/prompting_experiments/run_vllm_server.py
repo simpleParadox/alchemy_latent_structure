@@ -56,7 +56,7 @@ def main():
                         help="Port to serve on")
     parser.add_argument("--tensor_parallel_size", type=int, default=4,
                         help="Number of GPUs for tensor parallelism")
-    parser.add_argument("--gpu_memory_utilization", type=float, default=0.9,
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.8,
                         help="GPU memory utilization fraction")
     parser.add_argument("--max_model_len", type=int, default=16384,
                         help="Maximum model context length")

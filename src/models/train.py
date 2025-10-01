@@ -1233,7 +1233,7 @@ def main():
             if accelerator.is_local_main_process:
                 wandb.log({"T_0": t_0})
             print(f"Using CosineAnnealingWarmRestarts with T_0={t_0} (called per batch but will restart after every T_0 epochs)")
-            scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=t_0, eta_min=1e-5)
+            scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=t_0, eta_min=args.eta_min)
             print(f"Using CosineAnnealingWarmRestarts with T_0={t_0}")
         elif args.scheduler_type == "exponential":
             scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.gamma)

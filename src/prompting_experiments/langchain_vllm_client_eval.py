@@ -71,29 +71,25 @@ class ChemistryOutputParser(BaseOutputParser):
     
     def parse(self, text: str) -> str:
         if self.use_stone_ids:
-            # Pattern for stone ID: "Therefore, the output stone ID is: SX"
-            id_pattern = r"Therefore, the output stone ID is:\s*(S\d+)"
+            # Accept optional brackets around the ID (e.g., [S3])
+            id_pattern = r"Therefore, the output stone ID is:\s*\[?(S\d+)\]?"
             match = re.search(id_pattern, text, re.DOTALL)
             if match:
                 return match.group(1).strip()
-            
-            # Fallback: look for any SX pattern
+            # Fallback: last S\d+ in text
             fallback_pattern = r'S\d+'
             matches = re.findall(fallback_pattern, text)
             if matches:
                 return matches[-1].strip()
         else:
-            # Original stone state parsing
             specific_pattern = r"Therefore, the output stone state is:\s*(\{.*?\})"
             match = re.search(specific_pattern, text, re.DOTALL)
             if match:
                 return match.group(1).strip()
-
             fallback_pattern = r'\{[^}]+\}'
             matches = re.findall(fallback_pattern, text)
             if matches:
                 return matches[-1].strip()
-        
         return text.strip()
 
     @property
@@ -727,14 +723,14 @@ class ChemistryPromptEvaluator:
                             feature_level_evaluation = self.evaluate_feature_level(
                                 parsed_query.output_stone, predicted_stone_state
                             )
-                        print("Prompt:")
-                        print(prompt_text)
-                        print("\nModel Response:")
-                        print(model_response_text)
-                        print("\nPredicted Output:", predicted_output)
-                        print("Expected Output:", parsed_query.output_stone)
-                        print("Stone ID Correct:", stone_id_correct)
-                        print("Feature Evaluation:", feature_level_evaluation)
+                        # print("Prompt:")
+                        # print(prompt_text)
+                        # print("\nModel Response:")
+                        # print(model_response_text)
+                        # print("\nPredicted Output:", predicted_output)
+                        # print("Expected Output:", parsed_query.output_stone)
+                        # print("Stone ID Correct:", stone_id_correct)
+                        # print("Feature Evaluation:", feature_level_evaluation)
                         
                         result = {
                             "episode_id": episode_id,
@@ -864,7 +860,7 @@ class ChemistryPromptEvaluator:
                 # Generate prompts for all queries (each with its episode's support)
                 formatted_prompts = []
                 query_metadata = []  # Track (episode_id, support_examples, query, parsed_query)
-                for episode_id, support_examples, query in all_queries:
+                for episode_id, support_examples, query in tqdm(all_queries, desc="Preparing prompts for global batching"):
                     # try:
                     query_parsed = self.parse_chemistry_example(query)
                     if self.use_chat_api:
@@ -918,6 +914,8 @@ class ChemistryPromptEvaluator:
                                                                               total=len(batches),
                                                                               unit="batch")):
                     print(f"   📦 Processing global batch {batch_idx + 1}/{len(batches)} ({len(batch_prompts)} queries)")
+                    batch_results_for_logging = []  # Track results for this batch
+                    
                     try:
                         batch_responses = self.llm.batch(batch_prompts)
                         
@@ -959,7 +957,7 @@ class ChemistryPromptEvaluator:
                                     }
                                     
                                     # Print the model prompt and the model response.
-                                    print(f"Prompt:\n{prompt_text}\nModel Response:\n{model_response_text}\nPredicted Output: {predicted_output}\nExpected Output: {query_parsed.output_stone}\nStone ID Correct: {stone_id_correct}\nFeature Evaluation: {feature_level_evaluation}\n---")
+                                    # print(f"Prompt:\n{prompt_text}\nModel Response:\n{model_response_text}\nPredicted Output: {predicted_output}\nExpected Output: {query_parsed.output_stone}\nStone ID Correct: {stone_id_correct}\nFeature Evaluation: {feature_level_evaluation}\n---")
                                     
                                     # Print results for stone ID mode
                                     if stone_id_correct:
@@ -989,6 +987,7 @@ class ChemistryPromptEvaluator:
                                 
                                 
                                 detailed_results.append(result)
+                                batch_results_for_logging.append(result)  # Track for batch-level logging
                                 
                                 # W&B logging
                                 if self.enable_wandb:
@@ -1024,6 +1023,7 @@ class ChemistryPromptEvaluator:
                                     "error": str(e)
                                 }
                                 detailed_results.append(error_result)
+                                batch_results_for_logging.append(error_result)  # Track errors too
                                 if self.enable_wandb:
                                     self.wandb_table_data.append({
                                         "episode_id": episode_id,
@@ -1035,6 +1035,18 @@ class ChemistryPromptEvaluator:
                                         "model_name": self.full_model_name,
                                         "api_type": "chat" if self.use_chat_api else "completions"
                                     })
+                        
+                        # Log batch-level metrics to W&B in real-time
+                        if batch_results_for_logging:
+                            cumulative_correct_so_far = sum(1 for r in detailed_results if r.get("correct", False))
+                            cumulative_total_so_far = len(detailed_results)
+                            self._log_batch_to_wandb(
+                                batch_idx=batch_idx,
+                                batch_results=batch_results_for_logging,
+                                total_batches=len(batches),
+                                cumulative_correct=cumulative_correct_so_far,
+                                cumulative_total=cumulative_total_so_far
+                            )
                     
                     except Exception as e:
                         print(f"❌ Global batch {batch_idx + 1} failed: {e}. Falling back to per-episode processing for this batch.")
@@ -1157,6 +1169,60 @@ class ChemistryPromptEvaluator:
             
         except Exception as e:
             print(f"⚠️ Warning: Could not log to W&B: {e}")
+
+    def _log_batch_to_wandb(self, batch_idx: int, batch_results: List[Dict[str, Any]], 
+                           total_batches: int, cumulative_correct: int, 
+                           cumulative_total: int):
+        """Log batch-level metrics to W&B in real-time.
+        
+        Args:
+            batch_idx: Current batch index (0-based)
+            batch_results: Results from the current batch
+            total_batches: Total number of batches
+            cumulative_correct: Total correct predictions so far
+            cumulative_total: Total queries processed so far
+        """
+        try:    
+            # Calculate batch-level metrics
+            batch_correct = sum(1 for r in batch_results if r.get("correct", False))
+            batch_total = len(batch_results)
+            batch_accuracy = batch_correct / batch_total if batch_total > 0 else 0.0
+            
+            # Calculate cumulative metrics
+            cumulative_accuracy = cumulative_correct / cumulative_total if cumulative_total > 0 else 0.0
+            
+            # Log batch metrics
+            wandb.log({
+                "batch/index": batch_idx + 1,
+                "batch/accuracy": batch_accuracy,
+                "batch/correct": batch_correct,
+                "batch/total": batch_total,
+                "batch/progress": (batch_idx + 1) / total_batches,
+                "cumulative/accuracy": cumulative_accuracy,
+                "cumulative/correct": cumulative_correct,
+                "cumulative/total": cumulative_total,
+            }, step=batch_idx)
+            
+            # Log feature-level metrics if using stone IDs
+            if self.use_stone_ids:
+                feature_accuracies = []
+                for r in batch_results:
+                    if "feature_level_evaluation" in r and r["feature_level_evaluation"]:
+                        feature_eval = r["feature_level_evaluation"]
+                        if "features_accuracy" in feature_eval:
+                            feature_accuracies.append(feature_eval["features_accuracy"])
+                
+                if feature_accuracies:
+                    avg_feature_accuracy = sum(feature_accuracies) / len(feature_accuracies)
+                    wandb.log({
+                        "batch/feature_accuracy": avg_feature_accuracy,
+                    }, step=batch_idx)
+            
+            print(f"  📊 Logged batch {batch_idx + 1}/{total_batches} to W&B: "
+                  f"Batch Acc={batch_accuracy:.3f}, Cumulative Acc={cumulative_accuracy:.3f}")
+                  
+        except Exception as e:
+            print(f"⚠️ Failed to log batch {batch_idx + 1} to W&B: {e}")
 
     def save_results(self, results: EvaluationResults, output_file: str):
         """Save evaluation results to a file."""
