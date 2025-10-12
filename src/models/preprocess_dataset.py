@@ -199,14 +199,16 @@ def main():
     
     parser = argparse.ArgumentParser(description="Preprocess Alchemy datasets")
     parser.add_argument("--train_json_file", type=str, required=False,
+                        default="/home/rsaha/projects/dm_alchemy/src/data/decomposition_shuffled_support_generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/subsampled_balanced_complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_5_seed_.json",
-                        default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositionalchemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
+                        default="/home/rsaha/projects/dm_alchemy/src/data/decomposition_shuffled_support_generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/subsampled_balanced_complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_5_seed_.json",
-                        default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
@@ -214,7 +216,9 @@ def main():
                         help="Type of task")
     # parser.add_argument("--output_dir", type=str, default="src/data/subsampled_balanced_complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes",
                         # help="Directory to save preprocessed files")
-    parser.add_argument("--output_dir", type=str, default="src/data/shuffled_held_out_exps_preprocessed_separate_enhanced",
+    parser.add_argument("--output_dir", type=str, 
+                        # default="src/data/shuffled_held_out_exps_preprocessed_separate_enhanced",
+                        default='src/data/decomposition_shuffled_support_preprocessed',
                         help="Directory to save preprocessed files")
     parser.add_argument("--filter_query_from_support", action="store_true", default=True,
                         help="Filter query examples from support sets")

@@ -295,6 +295,7 @@ def generate_support_and_query_examples(
     num_samples: int, 
     support_hop_length: int = 1, 
     query_hop_length: int = 1,
+    shuffle_decomposition_support: bool = False
 ) -> Dict[str, Any]:  # Corrected return type hint
     """Generate a set of random samples from a single episode's chemistry graph."""
     samples = []
@@ -345,6 +346,11 @@ def generate_support_and_query_examples(
 
             # Record the start node encountered in support
             support_start_nodes.add(s_info["start_node"])
+            
+            
+    # Shuffle support samples if requested (for decompositional tasks)
+    if shuffle_decomposition_support and support_hop_length > query_hop_length:
+        random.shuffle(samples)
 
     # Phase 2: collect queries with filtering based on support coverage
     is_decompositional_1hop = (support_hop_length > query_hop_length and query_hop_length == 1)
@@ -433,22 +439,25 @@ def main():
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=10000,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=1,
+    parser.add_argument("--support_steps", type=int, default=2,
                         help="Minimum number of transformation steps in each sample")
     parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
+    
+    parser.add_argument("--shuffle_decomposition_support", action="store_true",
+                        help="Shuffle the support samples for decompositional tasks", default=True)
     # parser.add_argument("--seed", type=int, default=0,
     #                     help="Random seed for reproducibility")
     parser.add_argument("--create_val_from_train", action="store_true",
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
                         help="Process the complete graphs only", default=True)
-    parser.add_argument("--output_dir", default="shuffled_held_out_exps_generated_data_enhanced",
+    parser.add_argument("--output_dir", default="decomposition_shuffled_support_generated_data",
                         help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced, generated_data_enhanced_qnodes_in_snodes_complete_graphs_only
     
     # Add a new argument for your experiment
     parser.add_argument("--held_out_color_exp", action="store_true",
-                        help="Generate data for the held-out color pair experiment.", default=True)
+                        help="Generate data for the held-out color pair experiment.", default=False)
     parser.add_argument("--num_held_out_edges", type=int, default=4,
                         help="Number of edges to hold out for the held-out color pair experiment. Default is 1. Ignored if --held_out_color_exp is not set.")
 
@@ -557,6 +566,8 @@ def main():
             # Process each training episode
             total_train_samples = 0
             print("\nProcessing training episodes...")
+            complete_graph_train_count = sum(1 for ep in train_graphs.values() if ep.get("is_complete", False))
+            print(f"Number of complete graphs in training set: {complete_graph_train_count} out of {len(train_graphs)}")
             
             for episode_id, episode_data in tqdm(train_graphs.items(), desc="Processing Training Episodes"):
                 
@@ -591,6 +602,7 @@ def main():
                         args.samples_per_episode,
                         args.support_steps,
                         args.query_steps,
+                        args.shuffle_decomposition_support
                     )
                 
                 # Store the episode samples
@@ -629,6 +641,12 @@ def main():
         # Process validation episodes if requested
         if args.create_val_from_train and val_graphs:
             # Initialize output structure for validation
+            
+            # Count complete graphs in validation set
+            complete_graph_val_count = sum(1 for ep in val_graphs.values() if ep.get("is_complete", False))
+            print(f"Number of complete graphs in validation set: {complete_graph_val_count} out of {len(val_graphs)}")
+            
+            
             val_output_data = {
                 "metadata": {
                     "num_episodes": len(val_graphs),
