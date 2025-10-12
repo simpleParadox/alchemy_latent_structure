@@ -92,7 +92,7 @@ def parse_args():
                         help="Use learning rate scheduler. Default is True.")
 
     parser.add_argument("--scheduler_type", type=str, default="cosine", 
-                        choices=["cosine", "exponential", "cosine_restarts", "none", 'reduce_on_plateau', 'sequential_lr', 'step_lr'],
+                        choices=["cosine", "exponential", "cosine_restarts", "none", 'reduce_on_plateau', 'sequential_lr', 'step_lr', 'multi_step_lr'],
                         help="Type of learning rate scheduler: 'cosine', 'exponential', or 'none'.")
     parser.add_argument("--reduce_factor", type=float, default=0.1,
                         help="Factor by which to reduce learning rate for ReduceLROnPlateau scheduler.")
@@ -1263,6 +1263,16 @@ def main():
                 step_size = int(args.step_size) * accelerator.num_processes
                 scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[step_size], gamma=args.reduce_factor)
                 print(f"Using StepLR with step_size={step_size}, gamma={args.reduce_factor}")
+
+        elif args.scheduler_type == 'multi_step_lr':
+            # Multiple the step_dize by the number of gpus.
+            if ',' in args.step_size:
+                step_sizes = [int(x) for x in args.step_size.split(',')]
+                step_sizes = [x * accelerator.num_processes for x in step_sizes]
+            else:
+                step_sizes = [int(args.step_size) * accelerator.num_processes]
+            scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=step_sizes, gamma=args.reduce_factor)
+            print(f"Using MultiStepLR with step_sizes={step_sizes}, gamma={args.reduce_factor}")
     else:
         print("No scheduler will be used")
 
@@ -1344,6 +1354,7 @@ def main():
         args.model_size,
         args.model_architecture,
         args.task_type,
+        args.scheduler_type,
         f"input_{args.input_format or 'default'}",
         f"output_{args.output_format or 'default'}",
         f"shop_{support_hop}_qhop_{query_hop}",
@@ -1391,6 +1402,12 @@ def main():
             if scheduler and args.scheduler_type == 'step_lr':
                 # This should be called always after validation when using StepLR.
                 print(f"Stepping StepLR scheduler.")
+                # Step only on the main process to avoid multiple steps
+                if accelerator.is_main_process:
+                    scheduler.step()
+            if scheduler and args.scheduler_type == 'multi_step_lr':
+                # This should be called always after validation when using MultiStepLR.
+                print(f"Stepping MultiStepLR scheduler.")
                 # Step only on the main process to avoid multiple steps
                 if accelerator.is_main_process:
                     scheduler.step()
