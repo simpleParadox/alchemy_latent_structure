@@ -31,11 +31,11 @@ def process_episode_worker(args):
     processed_data = []
     
     # If num_query_samples is specified, select the first num_query_samples queries
-    if num_query_samples is not None:
-        query_examples_str = query_examples_str[:num_query_samples]
-        print(f"Episode {episode_id}: Limiting to first {num_query_samples} query samples out of {len(episode_content.get('query', []))}")
-    else:
-        print(f"Episode {episode_id}: Using all {len(query_examples_str)} query samples")
+    # if num_query_samples is not None:
+    #     # query_examples_str = query_examples_str[:num_query_samples]
+    #     print(f"Episode {episode_id}: Limiting to the first {num_query_samples} query samples out of {len(episode_content.get('query', []))}")
+    # else:
+    #     print(f"Episode {episode_id}: Using all {len(query_examples_str)} query samples")
     for query_ex_str in query_examples_str:
         # Filter support examples. Essentially, we want to remove the query example from the support set if filter_query_from_support is True.
         filtered_support_examples_str = filter_support_examples_helper(
@@ -401,6 +401,7 @@ class AlchemyDataset(Dataset):
         self.preprocessed_dir = preprocessed_dir 
         self.use_preprocessed = use_preprocessed 
         self.architecture = model_architecture
+        print("Random igib aspdofij apsodifj apsdoifja spdofija spdfoij")
         
         # Set default input/output formats based on task_type if not specified
         if input_format is None:
@@ -652,6 +653,9 @@ class AlchemyDataset(Dataset):
             
             self.num_output_features = len(self.feature_to_idx_map_output)
             print(f"Built output feature mapping for multi-label classification: {self.num_output_features} unique features.")
+            
+
+        # If the output_format is not "features", we do not need the feature mappings.
 
         self.data = self._load_and_preprocess_data(json_file_path, self.num_workers, self.chunk_size, num_query_samples=num_query_samples)
 

@@ -61,10 +61,10 @@ def generate_single_step_sample(graph: Dict, node_id: str, generate_all_edges: b
 
     if generate_all_edges:
         all_step_samples = []
-        for transition in node_data["transitions"]:
+        for transition in node_data["transitions"]: # Generate the transitions for each outgoing edge (complete or not).
             potion = transition["potion_color"]
             next_node_id = transition["next_node_str"]
-            if next_node_id not in graph: continue # Skip if next node doesn't exist
+            if next_node_id not in graph: assert False # Should ideally never happen with valid graph.
             stone_state_2 = get_stone_description(graph[next_node_id])
             sample_str = f"{stone_state_1} {potion} -> {stone_state_2}"
             sample_info = {
@@ -295,7 +295,9 @@ def generate_support_and_query_examples(
     num_samples: int, 
     support_hop_length: int = 1, 
     query_hop_length: int = 1,
-    shuffle_decomposition_support: bool = False
+    shuffle_support: bool = False,
+    max_queries_per_start_node: int = 10000
+    
 ) -> Dict[str, Any]:  # Corrected return type hint
     """Generate a set of random samples from a single episode's chemistry graph."""
     samples = []
@@ -310,7 +312,7 @@ def generate_support_and_query_examples(
     support_start_nodes: Set[str] = set()
 
     node_ids_available = list(graph.keys())
-    random.shuffle(node_ids_available)
+    random.shuffle(node_ids_available) # Shuffle the nodes to ensure randomness.
 
     # Phase 1: collect support first (exhaustive per node, uniqueness-checked)
     for start_node_id in node_ids_available:
@@ -349,16 +351,15 @@ def generate_support_and_query_examples(
             
             
     # Shuffle support samples if requested (for decompositional tasks)
-    if shuffle_decomposition_support and support_hop_length > query_hop_length:
+    if shuffle_support:
         random.shuffle(samples)
 
-    # Phase 2: collect queries with filtering based on support coverage
+    # Phase 2: collect queries with balanced sampling per start node
     is_decompositional_1hop = (support_hop_length > query_hop_length and query_hop_length == 1)
 
+    # Group potential queries by start node first
+    queries_by_start_node = {}
     for start_node_id in node_ids_available:
-        if len(query_samples) >= num_samples:
-            break
-
         if not graph.get(start_node_id) or not graph[start_node_id].get("transitions"):
             continue
 
@@ -368,36 +369,168 @@ def generate_support_and_query_examples(
                 graph, start_node_id, generate_all_edges=True
             )
         else:
-            # Compositional case where the query hop length is greater than 1.
             potential_query_trajectories = generate_multi_step_sample(
                 graph, start_node_id, query_hop_length
             )
 
         random.shuffle(potential_query_trajectories)
+        queries_by_start_node[start_node_id] = potential_query_trajectories
 
-        for q_str, q_info in potential_query_trajectories:
-            if len(query_samples) >= num_samples:
-                break
+    # Now sample queries with appropriate strategy based on task type.
+    # For compositional tasks with multi-hop queries (support_hop=1, query_hop>1):
+    # Use stratified sampling by end state to ensure diverse end states
+    if support_hop_length == 1 and query_hop_length > 1:
+        print(f"Using stratified sampling by end state for compositional task (support_hop={support_hop_length}, query_hop={query_hop_length})")
+        
+        for start_node_id, trajectories in queries_by_start_node.items():
+            # Group trajectories by their end stone state
+            trajectories_by_end_state = {}
+            for q_str, q_info in trajectories:
+                end_node = q_info["end_node"]
+                if end_node not in trajectories_by_end_state:
+                    trajectories_by_end_state[end_node] = []
+                trajectories_by_end_state[end_node].append((q_str, q_info))
+            
+            # Get unique end states
+            unique_end_states = list(trajectories_by_end_state.keys())
+            random.shuffle(unique_end_states)  # Randomize order of end states
+            
+            count_for_this_node = 0
+            
+            # Strategy: Round-robin selection from each unique end state
+            # This ensures maximum diversity of end states
+            end_state_idx = 0
+            attempts = 0
+            max_attempts = len(trajectories) * 2  # Prevent infinite loops
+            
+            while count_for_this_node < max_queries_per_start_node and attempts < max_attempts:
+                attempts += 1
+                
+                if len(query_samples) >= num_samples: # Ideally, num_samples should be a very high number.
+                    print("Maximum number of query samples reached. This should not happen here but it did, so might be worth investigating.")
+                    break
+                
+                # If we've exhausted all end states, break
+                if not unique_end_states:
+                    break
+                
+                # Get the next end state in round-robin fashion
+                current_end_state = unique_end_states[end_state_idx % len(unique_end_states)]
+                
+                # Get samples for this end state
+                available_samples = trajectories_by_end_state[current_end_state]
+                
+                # Try to find a valid sample for this end state
+                found_valid_sample = False
+                for q_str, q_info in available_samples:
+                    # Uniqueness checks
+                    if query_hop_length == 1:
+                        is_duplicate = (q_str in query_generated_samples)
+                    else:
+                        is_duplicate = (q_str in generated_samples) or (q_str in query_generated_samples)
 
-            # Uniqueness checks (preserve previous behavior)
-            if query_hop_length == 1:
-                is_duplicate = (q_str in query_generated_samples)
-            else:
-                is_duplicate = (q_str in generated_samples) or (q_str in query_generated_samples)
+                    if is_duplicate:
+                        continue
 
-            if is_duplicate:
-                continue
+                    # Strict validity for decompositional 1-hop
+                    if is_decompositional_1hop:
+                        # NOTE: For complete graphs, the following if condition is always true.
+                        q_start = q_info["start_node"]
+                        q_end = q_info["end_node"]
+                        if not (q_start in support_start_nodes and q_end in support_start_nodes):
+                            assert False, "This condition is supposed to be always true for complete graphs."
 
-            # Strict validity: both endpoints must be support start nodes for decompositional 1-hop. Otherwise, this will lead to invalid query examples. But actually this is irrelevant if using complete graphs.
-            if is_decompositional_1hop:
-                q_start = q_info["start_node"]
-                q_end = q_info["end_node"]
-                if not (q_start in support_start_nodes and q_end in support_start_nodes):
+                    # Valid sample found!
+                    query_samples.append(q_str)
+                    query_samples_info.append(q_info)
+                    query_generated_samples.add(q_str)
+                    count_for_this_node += 1
+                    found_valid_sample = True
+                    
+                    # Remove this sample from the available pool
+                    trajectories_by_end_state[current_end_state].remove((q_str, q_info))
+                    break
+                
+                # If no valid sample found for this end state or it's exhausted, remove it
+                if not found_valid_sample or not trajectories_by_end_state[current_end_state]:
+                    unique_end_states.remove(current_end_state)
+                    # Adjust index if needed
+                    if unique_end_states and end_state_idx >= len(unique_end_states):
+                        end_state_idx = 0
+                else:
+                    # Move to next end state in round-robin. If everything is okay.
+                    end_state_idx += 1
+            
+            # If we still haven't reached max_queries_per_start_node, fill with remaining samples
+            # (edge case: when many duplicates exist and unique end states exhausted)
+            if count_for_this_node < max_queries_per_start_node and unique_end_states:
+                print("Filling remaining query slots with available samples from the most populous end state.")
+                # Find the end state with most remaining samples
+                max_remaining = max(
+                    (len(trajectories_by_end_state[es]), es) 
+                    for es in unique_end_states
+                )
+                most_populous_end_state = max_remaining[1]
+                
+                for q_str, q_info in trajectories_by_end_state[most_populous_end_state]:
+                    if count_for_this_node >= max_queries_per_start_node:
+                        break
+                    if len(query_samples) >= num_samples:
+                        break
+                    
+                    # Same validation as before
+                    if query_hop_length == 1:
+                        is_duplicate = (q_str in query_generated_samples)
+                    else:
+                        is_duplicate = (q_str in generated_samples) or (q_str in query_generated_samples)
+
+                    if is_duplicate:
+                        continue
+
+                    if is_decompositional_1hop:
+                        q_start = q_info["start_node"]
+                        q_end = q_info["end_node"]
+                        if not (q_start in support_start_nodes and q_end in support_start_nodes):
+                            continue
+
+                    query_samples.append(q_str)
+                    query_samples_info.append(q_info)
+                    query_generated_samples.add(q_str)
+                    count_for_this_node += 1
+
+    else:
+        print(f"Using simple balanced sampling for task (support_hop={support_hop_length}, query_hop={query_hop_length})")
+        # NOTE: This is the setting where we just select the 'first' 'max_queries_per_start_node' samples
+        # without grouping by end state. This means that the selection of samples is not balanced.
+        for start_node_id, trajectories in queries_by_start_node.items():
+            count_for_this_node = 0
+            
+            for q_str, q_info in trajectories:
+                if count_for_this_node >= max_queries_per_start_node:
+                    break
+                if len(query_samples) >= num_samples:
+                    break
+
+                # Uniqueness checks
+                if query_hop_length == 1:
+                    is_duplicate = (q_str in query_generated_samples)
+                else:
+                    is_duplicate = (q_str in generated_samples) or (q_str in query_generated_samples)
+
+                if is_duplicate:
                     continue
 
-            query_samples.append(q_str)
-            query_samples_info.append(q_info)
-            query_generated_samples.add(q_str)
+                # Strict validity for decompositional 1-hop
+                if is_decompositional_1hop:
+                    q_start = q_info["start_node"]
+                    q_end = q_info["end_node"]
+                    if not (q_start in support_start_nodes and q_end in support_start_nodes):
+                        continue
+
+                query_samples.append(q_str)
+                query_samples_info.append(q_info)
+                query_generated_samples.add(q_str)
+                count_for_this_node += 1
 
     all_samples_data = {
         "support": samples,
@@ -439,20 +572,20 @@ def main():
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=10000,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=2,
+    parser.add_argument("--support_steps", type=int, default=1,
                         help="Minimum number of transformation steps in each sample")
-    parser.add_argument("--query_steps", type=int, default=1,
+    parser.add_argument("--query_steps", type=int, default=2,
                         help="Maximum number of transformation steps in each sample")
     
-    parser.add_argument("--shuffle_decomposition_support", action="store_true",
-                        help="Shuffle the support samples for decompositional tasks", default=True)
+    parser.add_argument("--shuffle_support", action="store_true",
+                        help="Extra shuffle the support samples for decompositional tasks", default=False)
     # parser.add_argument("--seed", type=int, default=0,
     #                     help="Random seed for reproducibility")
     parser.add_argument("--create_val_from_train", action="store_true",
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
                         help="Process the complete graphs only", default=True)
-    parser.add_argument("--output_dir", default="decomposition_shuffled_support_generated_data",
+    parser.add_argument("--output_dir", default="src/data/complete_graph_composition_cluster_shuffled_balanced_grouped_by_unique_end_state_generated_data",
                         help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced, generated_data_enhanced_qnodes_in_snodes_complete_graphs_only
     
     # Add a new argument for your experiment
@@ -460,6 +593,9 @@ def main():
                         help="Generate data for the held-out color pair experiment.", default=False)
     parser.add_argument("--num_held_out_edges", type=int, default=4,
                         help="Number of edges to hold out for the held-out color pair experiment. Default is 1. Ignored if --held_out_color_exp is not set.")
+
+    parser.add_argument("--max_queries_per_start_node", type=int, default=6,
+                        help="Maximum number of query samples to generate per start node. Default is 6.")
 
     args = parser.parse_args()
     
@@ -602,7 +738,8 @@ def main():
                         args.samples_per_episode,
                         args.support_steps,
                         args.query_steps,
-                        args.shuffle_decomposition_support
+                        args.shuffle_support,
+                        args.max_queries_per_start_node
                     )
                 
                 # Store the episode samples
@@ -690,6 +827,8 @@ def main():
                         args.samples_per_episode,
                         args.support_steps,
                         args.query_steps,
+                        args.shuffle_support,
+                        max_queries_per_start_node=args.max_queries_per_start_node
                     )
                 
                 # Store the episode samples
