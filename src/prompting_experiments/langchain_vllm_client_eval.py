@@ -1245,23 +1245,22 @@ class ChemistryPromptEvaluator:
             wandb.finish()
 
 
-def load_data_from_file(file_path: str, use_all_episodes: bool = False) -> Dict[str, List[str]]:
+def load_data_from_file(file_path: str, limit_episodes: int = None) -> Dict[str, List[str]]:
     """Load chemistry data from a JSON file."""
     with open(file_path, 'r') as f:
         data = json.load(f)
     
     if isinstance(data, dict):
-        if "support" in data and "query" in data:
-            return data
-        elif "episodes" in data:
-            if use_all_episodes:
+        if limit_episodes == None:
+            if "support" in data and "query" in data:
                 return data
-            else:
-                first_episode = list(data["episodes"].values())[0]
-                return {
-                    "support": first_episode["support"],
-                    "query": first_episode["query"]
-                }
+        elif limit_episodes is not None:
+            print(f"Limiting to first {limit_episodes} episodes.")
+            if "episodes" in data:
+                limited_episodes = dict(sorted(list(data["episodes"].items()))[:limit_episodes])
+                return {"episodes": limited_episodes}
+        else:
+            print("Invalid selection while loading data.")
     
     raise ValueError("Data format not recognized. Expected dict with 'support' and 'query' keys")
 
@@ -1318,6 +1317,7 @@ def main():
     parser.add_argument("--batch_mode", type=str, default="global", choices=["global", "per_episode"], 
                         help="Batch mode: 'global' (across episodes) or 'per_episode' (within each episode)")
     
+    parser.add_argument("--limit_episodes", type=int, default=None, help="Limit number of episodes to evaluate.") 
     
     parser.add_argument("--temperature", type=float, default=0.0, help="Temperature for generation (not used currently)")
     
@@ -1353,6 +1353,7 @@ def main():
     
 
     if args.data and args.data.endswith('.json'):
+        # Use the combined dataset if available.
         args.data = args.data.replace('.json', f'_combined.json')
         print("Using data file:", args.data)
     # Create experiment_name
@@ -1378,7 +1379,7 @@ def main():
     
     # Print configuration info
     api_type = "chat" if args.use_chat_api else "completions"
-    print(f"🔧 Configuration: {args.provider} provider, {api_type} API, model: {args.model_name}")
+    print(f"Configuration: {args.provider} provider, {api_type} API, model: {args.model_name}")
 
     # Get the shop, qhop, and seed from the filename if possible
     shop_length, qhop_length, data_split_seed = None, None, None
@@ -1419,7 +1420,8 @@ def main():
         if args.use_sample_data:
             data = create_sample_data()
         elif args.data:
-            data = load_data_from_file(args.data, use_all_episodes=True)
+            data = load_data_from_file(args.data, limit_episodes=args.limit_episodes)
+            print(f"Loaded data with {len(data.get('episodes', {}))} episodes.")
         else:
             print("❌ Error: Must provide --data or --use-sample-data")
             sys.exit(1)

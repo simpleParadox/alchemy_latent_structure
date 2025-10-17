@@ -1347,6 +1347,9 @@ def main():
         args.save_dir = os.path.join(args.save_dir, f"complete_graph")
     else:
         args.save_dir = os.path.join(args.save_dir, f"all_graphs")
+
+    if 'fully_shuffled' in args.train_data_path:
+        args.save_dir = os.path.join(args.save_dir, f"fully_shuffled")
     
         
     hierarchical_save_dir = os.path.join(

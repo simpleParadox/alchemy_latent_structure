@@ -103,7 +103,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         # Create a hashable string key
         support_key = tuple(support)
         
-        if support_key not in support_to_query_mappings:
+        if support_key not in support_to_query_mappings: # This is for the input to the model. This will be the same for all epochs.
             support_to_query_mappings[support_key] = {}
             
             
@@ -197,7 +197,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             correct_half_chemistry = support_to_query_mappings[support_key][feature_to_id_vocab[query_potion]]
             other_half_chemistry = support_to_query_mappings[support_key][potions_for_support[0]] if potions_for_support[1] == feature_to_id_vocab[query_potion] else support_to_query_mappings[support_key][potions_for_support[1]]
 
-            if exp_typ == 'decomposition':
+            if exp_typ == 'decomposition' or exp_typ == 'composition':
                 # Create a set of all stones in the support set.
                 all_stones_in_support = set()
                 for potion in potions_for_support:
@@ -322,94 +322,94 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     # # Return the list of epoch_accuracies and epoch_within_class_accuracies for later plotting.
     # return epoch_accuracies, epoch_within_class_accuracies, other_half_accuracies
 
-def analyze_model_selection_behavior(data, vocab, stone_state_to_id, predictions_by_epoch):
-    """
-    Analyze which stone state from the input context the model selects at different epochs.
+# def analyze_model_selection_behavior(data, vocab, stone_state_to_id, predictions_by_epoch):
+#     """
+#     Analyze which stone state from the input context the model selects at different epochs.
     
-    Args:
-        data: List of validation samples
-        vocab: Vocabulary dictionaries  
-        stone_state_to_id: Mapping from stone state strings to class IDs
-        predictions_by_epoch: Dict {epoch: list_of_predictions}
+#     Args:
+#         data: List of validation samples
+#         vocab: Vocabulary dictionaries  
+#         stone_state_to_id: Mapping from stone state strings to class IDs
+#         predictions_by_epoch: Dict {epoch: list_of_predictions}
     
-    Returns:
-        Dictionary with analysis results per epoch
-    """
-    id_to_stone_state = create_reverse_stone_mapping(stone_state_to_id)
-    input_vocab = vocab['input_word2idx']
+#     Returns:
+#         Dictionary with analysis results per epoch
+#     """
+#     id_to_stone_state = create_reverse_stone_mapping(stone_state_to_id)
+#     input_vocab = vocab['input_word2idx']
     
-    results_by_epoch = {}
+#     results_by_epoch = {}
     
-    for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Analyzing epochs"):
-        epoch_results = {
-            'total_samples': len(data),
-            'target_selected': [],
-            'selection_positions': [],  # Which position in context was selected (0=first, 1=second, etc.)
-            'num_context_stones': [],   # How many stone states in each context
-            'target_positions': [],     # Position of target in context
-            'in_context_ids': [],       # Class IDs of stones in context,
-            'num_unique_context_stones': [],  # Number of unique stones in context
-            'unique_context_ids': [],  # Unique class IDs in context
-            'unique_context_stones': [],  # Unique stone states in context
-            'predicted_in_context': []  # Whether predicted stone was in context
-        }
+#     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Analyzing epochs"):
+#         epoch_results = {
+#             'total_samples': len(data),
+#             'target_selected': [],
+#             'selection_positions': [],  # Which position in context was selected (0=first, 1=second, etc.)
+#             'num_context_stones': [],   # How many stone states in each context
+#             'target_positions': [],     # Position of target in context
+#             'in_context_ids': [],       # Class IDs of stones in context,
+#             'num_unique_context_stones': [],  # Number of unique stones in context
+#             'unique_context_ids': [],  # Unique class IDs in context
+#             'unique_context_stones': [],  # Unique stone states in context
+#             'predicted_in_context': []  # Whether predicted stone was in context
+#         }
         
-        for i, sample in enumerate(data):
-            encoder_input_ids = sample['encoder_input_ids']
-            target_class_id = sample['target_class_id']
-            predicted_class_id = predictions[i]
+#         for i, sample in enumerate(data):
+#             encoder_input_ids = sample['encoder_input_ids']
+#             target_class_id = sample['target_class_id']
+#             predicted_class_id = predictions[i]
             
-            # Parse stone states from input context
-            context_stones = parse_stone_states_from_input(
-                encoder_input_ids, input_vocab, stone_state_to_id
-            )
+#             # Parse stone states from input context
+#             context_stones = parse_stone_states_from_input(
+#                 encoder_input_ids, input_vocab, stone_state_to_id
+#             )
             
-            context_class_ids = [class_id for _, class_id in context_stones]
+#             context_class_ids = [class_id for _, class_id in context_stones]
             
-            # Find position of prediction in context. Not really necessary to calculate this.
-            if predicted_class_id in context_class_ids:
-                selection_pos = context_class_ids.index(predicted_class_id)
-                epoch_results['selection_positions'].append(selection_pos)
+#             # Find position of prediction in context. Not really necessary to calculate this.
+#             if predicted_class_id in context_class_ids:
+#                 selection_pos = context_class_ids.index(predicted_class_id)
+#                 epoch_results['selection_positions'].append(selection_pos)
             
-            # # Find position of target in context
-            # if target_class_id in context_class_ids:
-            #     target_pos = context_class_ids.index(target_class_id)
-            #     epoch_results['target_positions'].append(target_pos)
-            # else:
-            #     epoch_results['target_positions'].append(-1)  # Target not in context
+#             # # Find position of target in context
+#             # if target_class_id in context_class_ids:
+#             #     target_pos = context_class_ids.index(target_class_id)
+#             #     epoch_results['target_positions'].append(target_pos)
+#             # else:
+#             #     epoch_results['target_positions'].append(-1)  # Target not in context
             
-            # Theh following condition is 8 vs 108.
-            if predicted_class_id in context_class_ids:
-                epoch_results['predicted_in_context'].append(1)
-            else:
-                epoch_results['predicted_in_context'].append(0)
+#             # Theh following condition is 8 vs 108.
+#             if predicted_class_id in context_class_ids:
+#                 epoch_results['predicted_in_context'].append(1)
+#             else:
+#                 epoch_results['predicted_in_context'].append(0)
             
-            # Check if target was selected. This is the global accuracy (1 vs 108).
-            if predicted_class_id == target_class_id:
-                epoch_results['target_selected'].append(1)
-            else:
-                epoch_results['target_selected'].append(0)
+#             # Check if target was selected. This is the global accuracy (1 vs 108).
+#             if predicted_class_id == target_class_id:
+#                 epoch_results['target_selected'].append(1)
+#             else:
+#                 epoch_results['target_selected'].append(0)
             
-            epoch_results['num_context_stones'].append(len(context_stones))
-            epoch_results['num_unique_context_stones'].append(len(set(context_class_ids)))
-            epoch_results['unique_context_ids'].append(list(set(context_class_ids)))
-            epoch_results['unique_context_stones'].append([list(set([stone for stone, _ in context_stones]))])
+#             epoch_results['num_context_stones'].append(len(context_stones))
+#             epoch_results['num_unique_context_stones'].append(len(set(context_class_ids)))
+#             epoch_results['unique_context_ids'].append(list(set(context_class_ids)))
+#             epoch_results['unique_context_stones'].append([list(set([stone for stone, _ in context_stones]))])
             
         
-        # Calculate recall (only for samples where target was in context)
-        samples_with_target_in_context = epoch_results['total_samples'] - epoch_results['target_positions'].count(-1)
-        recalled_count = sum(epoch_results['target_selected']) / samples_with_target_in_context if samples_with_target_in_context > 0 else 0
-        # Store the predicted_in_context accuracy
-        epoch_results['predicted_in_context_accuracy'] = sum(epoch_results['predicted_in_context']) / epoch_results['total_samples']
+#         # Calculate recall (only for samples where target was in context)
+#         samples_with_target_in_context = epoch_results['total_samples'] - epoch_results['target_positions'].count(-1)
+#         recalled_count = sum(epoch_results['target_selected']) / samples_with_target_in_context if samples_with_target_in_context > 0 else 0
+#         # Store the predicted_in_context accuracy
+#         epoch_results['predicted_in_context_accuracy'] = sum(epoch_results['predicted_in_context']) / epoch_results['total_samples']
 
         
-        # Calculate accuracy
-        epoch_results['accuracy'] = sum(epoch_results['target_selected']) / epoch_results['total_samples']
-        epoch_results['recall'] = recalled_count
+#         # Calculate accuracy
+#         epoch_results['accuracy'] = sum(epoch_results['target_selected']) / epoch_results['total_samples']
+#         epoch_results['recall'] = recalled_count
         
-        results_by_epoch[epoch] = epoch_results
+#         results_by_epoch[epoch] = epoch_results
 
-    return results_by_epoch
+#     return results_by_epoch
 
 def plot_selection_analysis(results_by_epoch):
     """Plot analysis of model selection behavior over epochs."""
@@ -521,6 +521,8 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
                     
             elif exp_typ == 'decomposition':
                 base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_{hop}_qhop_1/seed_{seed}/predictions" 
+            elif exp_typ == 'composition':
+                base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/fully_shuffled/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_1_qhop_{hop}/seed_{seed}/predictions"
                 
                     
             predictions_raw_file_path = f'{base_file_path}/predictions_classification_epoch_{epoch_number}.npz'
@@ -569,10 +571,10 @@ import argparse
 
 # Parse command line arguments for experiment type and hop count.
 parser = argparse.ArgumentParser(description="Analyze model predictions for different experiment types and hops.")
-parser.add_argument('--exp_typ', type=str, choices=['held_out', 'decomposition'], default='decomposition',
+parser.add_argument('--exp_typ', type=str, choices=['held_out', 'decomposition', 'composition'], default='composition',
                     help="Type of experiment: 'held_out' or 'decomposition'")
 parser.add_argument('--hop', type=int, choices=[2, 3, 4, 5], default=2,
-                    help="Hop count for decomposition experiments (ignored for held_out)")
+                    help="Hop count for decomposition and composition experiments (ignored for held_out)")
 args = parser.parse_args()
 # exp_typ = 'decomposition'  # 'held_out' or 'decomposition'
 exp_typ = args.exp_typ
@@ -589,14 +591,27 @@ hop_to_epoch_values = {
     4: four_hop_epoch_values_text,
     5: five_hop_epoch_values_text
 }
+if exp_typ == 'composition':
+    hop_to_epoch_values = {
+        2: [0, 200, 400, 499],
+        3: [0, 200, 400, 499],
+        4: [0, 200, 400, 499],
+        5: [0, 200, 400, 499]
+    }
 
-scheduler_prefix = 'cosine_restarts/' if hop in [2,3,4] else ''
+scheduler_prefix = 'cosine/' if hop in [2,3,4] else ''
 # scheduler_prefix = '' 
 # seed_values = [2,3,4]
-seed_values_2_hop = [2,3,4]
-seed_values_3_hop = [0,1,2,3,4]
-seed_values_4_hop = [2,3,4] # For the 4
-seed_values_5_hop = [1,2,3]
+if exp_typ == 'decomposition':
+    seed_values_2_hop = [2,3,4]
+    seed_values_3_hop = [0,1,2,3,4]
+    seed_values_4_hop = [2,3,4] # For the 4
+    seed_values_5_hop = [1,2,3]
+else:
+    seed_values_2_hop = [2,3,4]
+    seed_values_3_hop = [2,3,4]
+    seed_values_4_hop = [2,3,4]
+    seed_values_5_hop = [2,3,4]
 
 
 seed_values_hop_dict = {
@@ -642,6 +657,11 @@ for seed in predictions_by_epoch_by_seed.keys():
         data_files = {
             "metadata": f"/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_{hop}_qhop_1_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json",
             "vocab": f"/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_{hop}_qhop_1_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
+        }
+    elif exp_typ == 'composition':
+        data_files = {
+            "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_0_classification_filter_True_input_features_output_stone_states_metadata.json",
+            "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_0_classification_filter_True_input_features_output_stone_states_vocab.pkl",
         }
 
         with open(data_files["metadata"], "r") as f:
