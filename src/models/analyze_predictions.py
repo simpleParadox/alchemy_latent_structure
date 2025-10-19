@@ -14,15 +14,6 @@ else:
     # Usually for cirrus but might change later.
     infix = ''
 
-
-
-# decomposition_data_files = {
-#     "data": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/
-
-
-
-
-
 def create_reverse_stone_mapping(stone_state_to_id):
     """Create reverse mapping from class ID to stone state string."""
     return {v: k for k, v in stone_state_to_id.items()}
@@ -82,7 +73,7 @@ def parse_stone_states_from_input(encoder_input_ids, input_vocab, stone_state_to
 
 
 
-def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions_by_epoch, exp_typ='held_out'):
+def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions_by_epoch, exp_typ='held_out', hop=2):
     """
     Analyze model behavior on half-chemistry tasks where only one stone is present.
     
@@ -117,9 +108,20 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         # Create a hashable string key
         support_key = tuple(support)
         
-        query = encoder_input_ids[-5:]    # Last 5 tokens
-        query_potion = query[-1]
-        query_stones = query[:-1]
+        if exp_typ == 'composition':
+            # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
+            query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+            query_potion = query[-hop:]  # Last hop tokens
+            query_stones = query[:-hop]
+            
+            # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+            query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+            query_potion = query_potion_str
+            
+        else:
+            query = encoder_input_ids[-5:]    # Last 5 tokens
+            query_potion = query[-1]
+            query_stones = query[:-1]
         
         # First check if the query_potion key is already a list. If not, create an empty list.
         if feature_to_id_vocab[query_potion] not in support_to_query_mappings[support_key]:
@@ -136,7 +138,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         support_to_query_per_epoch_predictions[epoch] = {}
         for support_key in support_to_query_mappings.keys():
             support_to_query_per_epoch_predictions[epoch][support_key] = {}
-            for potion in support_to_query_mappings[support_key].keys():
+            for potion in support_to_query_mappings[support_key].keys(): # For the composition experiments, this will be multiple potions.
                 support_to_query_per_epoch_predictions[epoch][support_key][potion] = []
 
 
@@ -148,12 +150,22 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             predicted_class_id = predictions[i]
             support = encoder_input_ids[:-5]  # Everything except last 5 tokens
             support_key = tuple(support)
-            query = encoder_input_ids[-5:]    # Last 5 tokens
-            query_potion = query[-1]
+            
+            if exp_typ == 'composition':
+                # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
+                query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+                query_potion = query[-hop:]  # Last hop tokens
+                
+                # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+                query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+                query_potion = query_potion_str
+                
+            else:  
+                query = encoder_input_ids[-5:]    # Last 5 tokens
+                query_potion = query[-1]
 
             support_to_query_per_epoch_predictions[epoch][support_key][feature_to_id_vocab[query_potion]].append(predicted_class_id)
 
-            
             
     # Now for each of the predictions, we can check which half-chemistry for that support set does the true target belong to.
     
@@ -185,14 +197,27 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             predicted_class_id = predictions[i]
             support = encoder_input_ids[:-5]  # Everything except last 5 tokens
             support_key = tuple(support)
-            query = encoder_input_ids[-5:]    # Last 5 tokens
-            query_potion = query[-1]
-
-
+            
+            if exp_typ == 'composition':
+                # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
+                query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+                query_potion = query[-hop:]  # Last hop tokens
+                
+                # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+                query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+                query_potion = query_potion_str
+            else:
+                query = encoder_input_ids[-5:]    # Last 5 tokens
+                query_potion = query[-1]
 
             # First we check if the predicted class ID is in any of the two half-chemistry sets for this support key.
 
             potions_for_support = list(support_to_query_mappings[support_key].keys())
+            # TODO: This will fail for composition experiments because the keys will be a combination of potions. Thus we need to adjust this.
+            
+            if exp_typ == 'composition':
+                raise NotImplementedError("Half-chemistry analysis for composition experiments is not implemented yet.")
+            
             assert len(potions_for_support) in [2,6], f"Expected 2 or 6 potions."
             correct_half_chemistry = support_to_query_mappings[support_key][feature_to_id_vocab[query_potion]]
             other_half_chemistry = support_to_query_mappings[support_key][potions_for_support[0]] if potions_for_support[1] == feature_to_id_vocab[query_potion] else support_to_query_mappings[support_key][potions_for_support[1]]
@@ -209,9 +234,6 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 assert len(combined_set) < 8, f"Expected 8 unique stones for support {support_key}, got {len(combined_set)}"
 
             import pdb; pdb.set_trace()
-
-
-
 
             # First do the classification for 8 vs 108.
             if predicted_class_id in combined_set:
@@ -263,6 +285,410 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
 
     return predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, predicted_correct_within_context
+
+
+def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix=''):
+    """
+    Load predictions and inputs/targets/predictions for specified experiment type and hop (if applicable).
+    
+    Args:
+        exp_typ: 'latent' or 'classification'
+        hops: List of hop counts to load data for
+    """ 
+
+    
+    epoch_start, epoch_end = epoch_range
+    
+    predictions_by_epoch_by_seed = {}
+    
+    inputs_by_seed = {}
+    targets_by_seed = {}
+
+    print("Seeds to load: ", seeds)
+
+    for seed in tqdm(seeds):
+        predictions_by_epoch = {}
+        
+        for epoch in range(epoch_start, epoch_end + 1):
+            # Reformat the epoch_number because the files are saved with epoch numbers like 001, 002, ..., 1000
+            epoch_number = str(epoch).zfill(3)
+            
+            # for hop in hops:
+            base_file_path = ''
+            
+            if exp_typ == 'held_out':
+                base_file_path = f'/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_{hop}/all_graphs/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_1_qhop_1/seed_{seed}/predictions'
+                    
+            elif exp_typ == 'decomposition':
+                base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_{hop}_qhop_1/seed_{seed}/predictions" 
+            elif exp_typ == 'composition':
+                base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/fully_shuffled/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_1_qhop_{hop}/seed_{seed}/predictions"
+                
+                    
+            predictions_raw_file_path = f'{base_file_path}/predictions_classification_epoch_{epoch_number}.npz'
+            
+            try:
+                # if exp_typ == 'decomposition':
+                #     if epoch_number == '035':
+                #         continue
+
+                print(f"epoch number, ", epoch_number)
+                if epoch_number == '828' and exp_typ == 'held_out':
+                    continue
+
+                predictions_raw = np.load(predictions_raw_file_path, allow_pickle=True)['predictions']
+                # Store predictions for this epoch
+                predictions_by_epoch[epoch_number] = predictions_raw.tolist()
+                
+                # print(f"Loaded epoch {epoch_number}: {len(predictions_raw)} predictions")
+                
+            except FileNotFoundError:
+                print(f"Warning: Files for epoch {epoch_number} not found, skipping...")
+                continue
+
+        try:
+
+            predictions_by_epoch_by_seed[seed] = predictions_by_epoch 
+            inputs_raw_file_path = f'{base_file_path}/inputs_classification_epoch_001.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs.
+            targets_raw_file_path = f'{base_file_path}/targets_classification_epoch_001.npz' # Use the last epoch number loaded.
+            inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
+            targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
+            
+            stacked_inputs = np.vstack(inputs_raw) # Flatten inputs from (39, 32, 181) to (1240, 181) 
+            data_with_targets = [{'encoder_input_ids': stacked_inputs[i].tolist(), 'target_class_id': int(targets_raw[i])} for i in range(len(targets_raw))]
+            
+            inputs_by_seed[seed] = data_with_targets
+        except FileNotFoundError:
+            print(f"Warning: Input/target files for seed {seed} not found, skipping...")
+            continue
+        
+    return predictions_by_epoch_by_seed, inputs_by_seed
+        
+   
+import argparse
+
+# Parse command line arguments for experiment type and hop count.
+parser = argparse.ArgumentParser(description="Analyze model predictions for different experiment types and hops.")
+parser.add_argument('--exp_typ', type=str, choices=['held_out', 'decomposition', 'composition'], default='composition',
+                    help="Type of experiment: 'held_out' or 'decomposition'")
+parser.add_argument('--hop', type=int, choices=[2, 3, 4, 5], default=2,
+                    help="Hop count for decomposition and composition experiments (ignored for held_out)")
+args = parser.parse_args()
+# exp_typ = 'decomposition'  # 'held_out' or 'decomposition'
+exp_typ = args.exp_typ
+hop = args.hop  # Only relevant for composition and decomposition experiments.
+two_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
+three_hop_epoch_values_text = [0, 200, 600, 800, 999]
+four_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
+five_hop_epoch_values_text = [0, 200, 600, 800, 999]
+
+# Create a dictionary mapping hop counts to their hop-specific epoch values
+hop_to_epoch_values = {
+    2: two_hop_epoch_values_text,
+    3: three_hop_epoch_values_text,
+    4: four_hop_epoch_values_text,
+    5: five_hop_epoch_values_text
+}
+
+
+scheduler_prefix = 'cosine/' if hop in [2,3,4] else ''
+# scheduler_prefix = '' 
+# seed_values = [2,3,4]
+if exp_typ == 'decomposition':
+    
+    # NOTE: Do not change this.
+    seed_values_2_hop = [2,3,4]
+    seed_values_3_hop = [0,1,2,3,4]
+    seed_values_4_hop = [2,3,4] # For the 4
+    seed_values_5_hop = [1,2,3]
+elif exp_typ == 'held_out':
+    seed_values_2_hop = [2,3,4]
+    seed_values_3_hop = [2,3,4]
+    seed_values_4_hop = [2,3,4]
+    seed_values_5_hop = [2,3,4]
+
+seed_values_hop_dict = {
+    2: seed_values_2_hop,
+    3: seed_values_3_hop,
+    4: seed_values_4_hop,
+    5: seed_values_5_hop
+}
+elif exp_typ == 'composition':
+    hop_to_epoch_values = {
+        2: [0, 200, 400, 499],
+        3: [0, 200, 400, 499],
+        4: [0, 200, 400, 499],
+        5: [0, 200, 400, 499]
+    }
+    
+    seed_values_hop_dict = {
+        2: [0, 16, 29],
+        3: [0, 16, 29],
+        4: [0, 16, 29],
+        5: [0, 16, 29]
+    }
+    
+
+"""
+for 2 hop, use seeds
+for 3 hop, use seeds 4, and 0.
+for 4 hop, can use seeds 2,3,4
+for 5 hop, use seed 1,2,3
+"""
+# Load the for all the seeds.
+predictions_by_epoch_by_seed, inputs_by_seed  = load_epoch_data(
+    exp_typ = exp_typ,
+    hop = hop,
+    epoch_range = (hop_to_epoch_values[hop][0], hop_to_epoch_values[hop][-1]),
+    seeds = seed_values_hop_dict[hop],
+    scheduler_prefix = scheduler_prefix
+)
+# import pdb; pdb.set_trace()
+seed_data_files = {}
+for seed in predictions_by_epoch_by_seed.keys():
+    if exp_typ == 'held_out':
+        data_files = {
+            "data": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_data.pkl",
+            "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
+            "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
+        }
+
+        vocab = pickle.load(open(data_files["vocab"], "rb"))
+        with open(data_files["metadata"], "r") as f:
+            metadata = json.load(f)
+
+        seed_data_files[seed] = {'vocab': vocab, 'metadata': metadata}
+
+
+    elif exp_typ == 'decomposition':
+        data_files = {
+            "metadata": f"/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_{hop}_qhop_1_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json",
+            "vocab": f"/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_{hop}_qhop_1_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
+        }
+        
+        with open(data_files["metadata"], "r") as f:
+            metadata = json.load(f)
+        vocab = pickle.load(open(data_files["vocab"], "rb"))
+
+        seed_data_files[seed] = {'vocab': vocab, 'metadata': metadata}
+        
+    elif exp_typ == 'composition':
+        data_files = {
+            "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_0_classification_filter_True_input_features_output_stone_states_metadata.json",
+            "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_0_classification_filter_True_input_features_output_stone_states_vocab.pkl",
+        }
+
+        with open(data_files["metadata"], "r") as f:
+            metadata = json.load(f)
+        vocab = pickle.load(open(data_files["vocab"], "rb"))
+
+        seed_data_files[seed] = {'vocab': vocab, 'metadata': metadata}
+
+
+# Whether it predicts the correct half, if within the correct half, whether it predicts the correct stone, and whether the model predicts that
+# the stone is in the other incorrect half.
+seed_results = {}
+for seed in predictions_by_epoch_by_seed.keys():
+    print(f"\n\nAnalyzing seed {seed}...")
+    predictions_by_epoch = predictions_by_epoch_by_seed[seed]
+    data_with_predictions = inputs_by_seed[seed]
+    
+    # Load the correct vocab for this seed
+    vocab = seed_data_files[seed]['vocab']
+    
+    # Run the analysis
+    print("\n" + "="*60)
+    print("Running half-chemistry behavior analysis...")
+    print("="*60)
+    # model_selection_results = analyze_model_selection_behavior(
+    #     data_with_predictions, 
+    #     vocab, 
+    #     vocab['stone_state_to_id'], 
+    #     predictions_by_epoch
+    # )
+
+    # Get half_chemistry_analysis results.
+    half_chemistry_results = analyze_half_chemistry_behaviour(
+        data_with_predictions, vocab, vocab['stone_state_to_id'], predictions_by_epoch, exp_typ=exp_typ, hop=hop
+    )
+    predicted_in_context_accuracies, \
+        predicted_in_context_correct_half_accuracies, \
+            predicted_in_context_other_half_accuracies, \
+                predicted_in_context_correct_half_exact_accuracies, \
+                    predicted_correct_within_context = half_chemistry_results
+
+    # Store results for this seed
+    seed_results[seed] = {
+        'predicted_in_context_accuracies': predicted_in_context_accuracies,
+        'predicted_in_context_correct_half_accuracies': predicted_in_context_correct_half_accuracies,
+        'predicted_in_context_other_half_accuracies': predicted_in_context_other_half_accuracies,
+        'predicted_in_context_correct_half_exact_accuracies': predicted_in_context_correct_half_exact_accuracies,
+        'predicted_correct_within_context': predicted_correct_within_context
+    }
+
+# import pdb; pdb.set_trace()
+# Now the plotting begins. First we need to average the result for each metric across seeds.
+# Average results across seeds
+averaged_results = {}
+std_errors = {}
+for metric in ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context']:
+    all_seed_values = [seed_results[seed][metric] for seed in seed_results.keys()]
+    
+    # Find the maximum length across all seeds
+    max_length = max(len(values) for values in all_seed_values)
+    
+    # Pad shorter sequences with imputed values
+    padded_seed_values = []
+    for values in all_seed_values:
+        if len(values) < max_length:
+            # For missing epochs, compute mean from seeds that have data at those epochs
+            padded_values = list(values)
+            for epoch_idx in range(len(values), max_length):
+                # Get values from all seeds that have this epoch
+                available_values = [seed_vals[epoch_idx] for seed_vals in all_seed_values if len(seed_vals) > epoch_idx]
+                if available_values:
+                    imputed_value = np.mean(available_values)
+                else:
+                    # Fallback: use the last available value from this seed
+                    imputed_value = values[-1]
+                padded_values.append(imputed_value)
+            padded_seed_values.append(padded_values)
+        else:
+            padded_seed_values.append(values)
+    
+    # Now all sequences have the same length, can safely stack
+    all_seed_values = np.array(padded_seed_values)
+    averaged_results[metric] = np.mean(all_seed_values, axis=0)
+    std_errors[metric] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
+    print(f"\nAveraged {metric} over seeds:")
+
+# Plot the averaged results with error bars using fill_between
+plt.figure(figsize=(14, 10))
+epochs = range(len(averaged_results['predicted_in_context_accuracies']))
+
+metrics = [
+    ('predicted_in_context_accuracies', 'Prediction in support (8 out of 108)'),
+    ('predicted_in_context_correct_half_accuracies', 'Correct Half accuracy (4 out of 8)'),
+    ('predicted_in_context_other_half_accuracies', 'Incorrect Half accuracy (4 out of 8)'),
+    ('predicted_in_context_correct_half_exact_accuracies', 'Within correct half Accuracy (1 out of 4)'),
+    # ('predicted_correct_within_context', 'Exact Accuracy (1 out of 8)'),
+]
+if exp_typ == 'decomposition':
+    # Only print the predicted_in_context_accuracies and the predicted_correct_within_context.
+    metrics = [
+        ('predicted_in_context_accuracies', 'In-support gating (8 out of 108)'),
+        ('predicted_correct_within_context', 'In-support gated exact match (1 out of 8)'),
+    ]
+linestyles = {'predicted_in_context_accuracies': 'solid', 'predicted_correct_within_context': 'solid'}
+colors = {
+    2: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:blue'},
+    3: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:green'},
+    4: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:gray'},
+    5: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:red'},
+}
+
+held_out_colors = {
+    'predicted_in_context_accuracies': 'tab:blue',
+    'predicted_in_context_correct_half_accuracies': 'tab:orange',
+    'predicted_in_context_other_half_accuracies': 'tab:green',
+    'predicted_in_context_correct_half_exact_accuracies': 'tab:red',
+    # 'predicted_correct_within_context': 'tab:red',
+}
+for metric, label in metrics:
+    mean = averaged_results[metric]
+    sem = std_errors[metric]
+    colors = held_out_colors if exp_typ == 'held_out' else colors
+    if exp_typ == 'held_out':
+        plt.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(metric, 'black'))
+    else:
+        plt.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(hop, {}).get(metric, 'black'))
+    plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(hop, {}).get(metric, 'black'))
+    
+    # Add text annotations at specific epochs
+    annotate_epochs = hop_to_epoch_values[hop]
+    for anno_epoch in annotate_epochs:
+        if anno_epoch < len(mean):
+            try:
+                plt.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
+                        fontsize=20, ha='center', va='bottom',
+                        color='black')
+            except:
+                print(f"Could not annotate epoch {anno_epoch} for metric {metric}")
+
+plt.xlabel('Epoch', fontsize=26)
+plt.ylabel('Accuracy', fontsize=26)
+plt.xticks(fontsize=24)
+plt.yticks(fontsize=24)
+# if exp_typ == 'decomposition':
+#     plt.title(f'Phasic learning of intermediate stone inference ({hop}-hop)', fontsize=24, pad=60)
+# else:
+#     plt.title(f'Phasic learning of latent structure learning', fontsize=24, pad=60)
+plt.legend(fontsize=18, loc='upper center', bbox_to_anchor=(0.5, 1.10), ncol=2, frameon=True)
+plt.grid(True, alpha=0.3)
+plt.ylim(0, 1)
+# plt.tight_layout()
+plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.png')
+plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inches='tight')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# epoch_accuracies = [results[epoch]['predicted_in_context_accuracy'] for epoch in sorted(results.keys())]
+# epoch_within_class_accuracies = [results[epoch]['recall'] for epoch in sorted(results.keys())]
+# other_half_accuracies = [results[epoch]['accuracy'] for epoch in sorted(results.keys())]
+
+
+# # # Plot half-chemistry accuracies over epochs
+# plt.figure(figsize=(10, 5))
+# plt.plot(range(len(epoch_accuracies)), half_chemistry_epoch_accuracies, label='Half-Chemistry Accuracy')
+# plt.plot(range(len(epoch_within_class_accuracies)), epoch_within_class_accuracies , label='Within-Class Accuracy')
+# plt.plot(range(len(other_half_accuracies)), other_half_accuracies , label='Other Half-Chemistry Accuracy')
+# plt.xlabel('Epoch')
+# plt.ylabel('Accuracy')
+# plt.title('Predicted Stone in Context Accuracy Over Epochs')
+# plt.legend()
+# plt.grid(True, alpha=0.3)
+# plt.savefig('predicted_in_context.png')
+# # Print results
+# for epoch, result in results.items():
+#     print(f"\n--- Epoch {epoch} Results ---")
+#     print(f"Accuracy: {result['accuracy']:.4f} ({result['target_selected']}/{result['total_samples']})")
+#     print(f"Avg context stones: {np.mean(result['num_context_stones']):.2f}")
+
+
+
 
 
 
@@ -411,434 +837,78 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
 #     return results_by_epoch
 
-def plot_selection_analysis(results_by_epoch):
-    """Plot analysis of model selection behavior over epochs."""
-    epochs = sorted(results_by_epoch.keys())
-    accuracies = [results_by_epoch[epoch]['accuracy'] for epoch in epochs]
+# def plot_selection_analysis(results_by_epoch):
+    # """Plot analysis of model selection behavior over epochs."""
+    # epochs = sorted(results_by_epoch.keys())
+    # accuracies = [results_by_epoch[epoch]['accuracy'] for epoch in epochs]
     
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    # fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     
-    # Plot 1: Accuracy over epochs
-    axes[0, 0].plot(epochs, accuracies, 'b-', linewidth=2)
-    axes[0, 0].set_xlabel('Epoch')
-    axes[0, 0].set_ylabel('Accuracy')
-    axes[0, 0].set_title('Validation Accuracy Over Training')
-    axes[0, 0].grid(True, alpha=0.3)
+    # # Plot 1: Accuracy over epochs
+    # axes[0, 0].plot(epochs, accuracies, 'b-', linewidth=2)
+    # axes[0, 0].set_xlabel('Epoch')
+    # axes[0, 0].set_ylabel('Accuracy')
+    # axes[0, 0].set_title('Validation Accuracy Over Training')
+    # axes[0, 0].grid(True, alpha=0.3)
     
-    # Plot 2: Selection position distribution for early vs late epochs
-    early_epoch = epochs[len(epochs)//4]  # 25% through training
-    late_epoch = epochs[-1]  # Final epoch
+    # # Plot 2: Selection position distribution for early vs late epochs
+    # early_epoch = epochs[len(epochs)//4]  # 25% through training
+    # late_epoch = epochs[-1]  # Final epoch
     
-    early_positions = results_by_epoch[early_epoch]['selection_positions']
-    late_positions = results_by_epoch[late_epoch]['selection_positions']
+    # early_positions = results_by_epoch[early_epoch]['selection_positions']
+    # late_positions = results_by_epoch[late_epoch]['selection_positions']
     
-    max_pos = max(max(early_positions, default=0), max(late_positions, default=0))
-    bins = range(max_pos + 2)
+    # max_pos = max(max(early_positions, default=0), max(late_positions, default=0))
+    # bins = range(max_pos + 2)
     
-    axes[0, 1].hist(early_positions, bins=bins, alpha=0.7, label=f'Epoch {early_epoch}', density=True)
-    axes[0, 1].hist(late_positions, bins=bins, alpha=0.7, label=f'Epoch {late_epoch}', density=True)
-    axes[0, 1].set_xlabel('Position in Context (0=first stone)')
-    axes[0, 1].set_ylabel('Density')
-    axes[0, 1].set_title('Selection Position Distribution')
-    axes[0, 1].legend()
-    axes[0, 1].grid(True, alpha=0.3)
+    # axes[0, 1].hist(early_positions, bins=bins, alpha=0.7, label=f'Epoch {early_epoch}', density=True)
+    # axes[0, 1].hist(late_positions, bins=bins, alpha=0.7, label=f'Epoch {late_epoch}', density=True)
+    # axes[0, 1].set_xlabel('Position in Context (0=first stone)')
+    # axes[0, 1].set_ylabel('Density')
+    # axes[0, 1].set_title('Selection Position Distribution')
+    # axes[0, 1].legend()
+    # axes[0, 1].grid(True, alpha=0.3)
     
-    # Plot 3: Target position vs selection position correlation
-    target_pos = results_by_epoch[late_epoch]['target_positions']
-    select_pos = results_by_epoch[late_epoch]['selection_positions']
+    # # Plot 3: Target position vs selection position correlation
+    # target_pos = results_by_epoch[late_epoch]['target_positions']
+    # select_pos = results_by_epoch[late_epoch]['selection_positions']
     
-    axes[1, 0].scatter(target_pos, select_pos, alpha=0.6)
-    axes[1, 0].plot([0, max_pos], [0, max_pos], 'r--', label='Perfect correlation')
-    axes[1, 0].set_xlabel('Target Position in Context')
-    axes[1, 0].set_ylabel('Selected Position in Context')
-    axes[1, 0].set_title(f'Position Correlation (Epoch {late_epoch})')
-    axes[1, 0].legend()
-    axes[1, 0].grid(True, alpha=0.3)
+    # axes[1, 0].scatter(target_pos, select_pos, alpha=0.6)
+    # axes[1, 0].plot([0, max_pos], [0, max_pos], 'r--', label='Perfect correlation')
+    # axes[1, 0].set_xlabel('Target Position in Context')
+    # axes[1, 0].set_ylabel('Selected Position in Context')
+    # axes[1, 0].set_title(f'Position Correlation (Epoch {late_epoch})')
+    # axes[1, 0].legend()
+    # axes[1, 0].grid(True, alpha=0.3)
     
-    # Plot 4: Evolution of selection bias over epochs
-    position_evolution = defaultdict(list)
-    for epoch in epochs[::10]:  # Sample every 10 epochs
-        positions = results_by_epoch[epoch]['selection_positions']
-        pos_counts = defaultdict(int)
-        for pos in positions:
-            pos_counts[pos] += 1
-        total = len(positions)
+    # # Plot 4: Evolution of selection bias over epochs
+    # position_evolution = defaultdict(list)
+    # for epoch in epochs[::10]:  # Sample every 10 epochs
+    #     positions = results_by_epoch[epoch]['selection_positions']
+    #     pos_counts = defaultdict(int)
+    #     for pos in positions:
+    #         pos_counts[pos] += 1
+    #     total = len(positions)
         
-        for pos in range(max_pos + 1):
-            proportion = pos_counts[pos] / total if total > 0 else 0
-            position_evolution[pos].append(proportion)
+    #     for pos in range(max_pos + 1):
+    #         proportion = pos_counts[pos] / total if total > 0 else 0
+    #         position_evolution[pos].append(proportion)
     
-    sampled_epochs = epochs[::10]
-    for pos in range(min(4, max_pos + 1)):  # Show first 4 positions
-        axes[1, 1].plot(sampled_epochs, position_evolution[pos], 
-                       label=f'Position {pos}', marker='o', markersize=3)
+    # sampled_epochs = epochs[::10]
+    # for pos in range(min(4, max_pos + 1)):  # Show first 4 positions
+    #     axes[1, 1].plot(sampled_epochs, position_evolution[pos], 
+    #                    label=f'Position {pos}', marker='o', markersize=3)
     
-    axes[1, 1].set_xlabel('Epoch')
-    axes[1, 1].set_ylabel('Selection Proportion')
-    axes[1, 1].set_title('Evolution of Position Selection Bias')
-    axes[1, 1].legend()
-    axes[1, 1].grid(True, alpha=0.3)
+    # axes[1, 1].set_xlabel('Epoch')
+    # axes[1, 1].set_ylabel('Selection Proportion')
+    # axes[1, 1].set_title('Evolution of Position Selection Bias')
+    # axes[1, 1].legend()
+    # axes[1, 1].grid(True, alpha=0.3)
     
-    plt.tight_layout()
-    plt.show()
+    # plt.tight_layout()
+    # plt.show()
     
-    return fig
-
-
-
-
-def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix=''):
-    """
-    Load predictions and inputs/targets/predictions for specified experiment type and hop (if applicable).
-    
-    Args:
-        exp_typ: 'latent' or 'classification'
-        hops: List of hop counts to load data for
-    """ 
-
-    
-    epoch_start, epoch_end = epoch_range
-    
-    predictions_by_epoch_by_seed = {}
-    
-    inputs_by_seed = {}
-    targets_by_seed = {}
-
-    print("Seeds to load: ", seeds)
-
-    for seed in tqdm(seeds):
-        predictions_by_epoch = {}
-        
-        for epoch in range(epoch_start, epoch_end + 1):
-            # Reformat the epoch_number because the files are saved with epoch numbers like 001, 002, ..., 1000
-            epoch_number = str(epoch).zfill(3)
-            
-            # for hop in hops:
-            base_file_path = ''
-            
-            if exp_typ == 'held_out':
-                base_file_path = f'/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_{hop}/all_graphs/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_1_qhop_1/seed_{seed}/predictions'
-                    
-            elif exp_typ == 'decomposition':
-                base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_{hop}_qhop_1/seed_{seed}/predictions" 
-            elif exp_typ == 'composition':
-                base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/fully_shuffled/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_1_qhop_{hop}/seed_{seed}/predictions"
-                
-                    
-            predictions_raw_file_path = f'{base_file_path}/predictions_classification_epoch_{epoch_number}.npz'
-            
-            try:
-                # if exp_typ == 'decomposition':
-                #     if epoch_number == '035':
-                #         continue
-
-                print(f"epoch number, ", epoch_number)
-                if epoch_number == '828' and exp_typ == 'held_out':
-                    continue
-
-                predictions_raw = np.load(predictions_raw_file_path, allow_pickle=True)['predictions']
-                # Store predictions for this epoch
-                predictions_by_epoch[epoch_number] = predictions_raw.tolist()
-                
-                # print(f"Loaded epoch {epoch_number}: {len(predictions_raw)} predictions")
-                
-            except FileNotFoundError:
-                print(f"Warning: Files for epoch {epoch_number} not found, skipping...")
-                continue
-
-        try:
-
-            predictions_by_epoch_by_seed[seed] = predictions_by_epoch 
-            inputs_raw_file_path = f'{base_file_path}/inputs_classification_epoch_001.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs.
-            targets_raw_file_path = f'{base_file_path}/targets_classification_epoch_001.npz' # Use the last epoch number loaded.
-            inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
-            targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
-            
-            stacked_inputs = np.vstack(inputs_raw) # Flatten inputs from (39, 32, 181) to (1240, 181) 
-            data_with_targets = [{'encoder_input_ids': stacked_inputs[i].tolist(), 'target_class_id': int(targets_raw[i])} for i in range(len(targets_raw))]
-            
-            inputs_by_seed[seed] = data_with_targets
-        except FileNotFoundError:
-            print(f"Warning: Input/target files for seed {seed} not found, skipping...")
-            continue
-        
-        
-        
-    return predictions_by_epoch_by_seed, inputs_by_seed
-        
-   
-import argparse
-
-# Parse command line arguments for experiment type and hop count.
-parser = argparse.ArgumentParser(description="Analyze model predictions for different experiment types and hops.")
-parser.add_argument('--exp_typ', type=str, choices=['held_out', 'decomposition', 'composition'], default='composition',
-                    help="Type of experiment: 'held_out' or 'decomposition'")
-parser.add_argument('--hop', type=int, choices=[2, 3, 4, 5], default=2,
-                    help="Hop count for decomposition and composition experiments (ignored for held_out)")
-args = parser.parse_args()
-# exp_typ = 'decomposition'  # 'held_out' or 'decomposition'
-exp_typ = args.exp_typ
-hop = args.hop  # Only relevant for decomposition experiments
-two_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
-three_hop_epoch_values_text = [0, 200, 600, 800, 999]
-four_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
-five_hop_epoch_values_text = [0, 200, 600, 800, 999]
-
-# Create a dictionary mapping hop counts to their hop-specific epoch values
-hop_to_epoch_values = {
-    2: two_hop_epoch_values_text,
-    3: three_hop_epoch_values_text,
-    4: four_hop_epoch_values_text,
-    5: five_hop_epoch_values_text
-}
-if exp_typ == 'composition':
-    hop_to_epoch_values = {
-        2: [0, 200, 400, 499],
-        3: [0, 200, 400, 499],
-        4: [0, 200, 400, 499],
-        5: [0, 200, 400, 499]
-    }
-
-scheduler_prefix = 'cosine/' if hop in [2,3,4] else ''
-# scheduler_prefix = '' 
-# seed_values = [2,3,4]
-if exp_typ == 'decomposition':
-    seed_values_2_hop = [2,3,4]
-    seed_values_3_hop = [0,1,2,3,4]
-    seed_values_4_hop = [2,3,4] # For the 4
-    seed_values_5_hop = [1,2,3]
-else:
-    seed_values_2_hop = [2,3,4]
-    seed_values_3_hop = [2,3,4]
-    seed_values_4_hop = [2,3,4]
-    seed_values_5_hop = [2,3,4]
-
-
-seed_values_hop_dict = {
-    2: seed_values_2_hop,
-    3: seed_values_3_hop,
-    4: seed_values_4_hop,
-    5: seed_values_5_hop
-}
-# seed_values = [2,3,4] # For the 4-edge held out experiment. 
-# scheduler_prefix = ''
-"""
-for 2 hop, use seeds
-for 3 hop, use seeds 4, and 0.
-for 4 hop, can use seeds 2,3,4
-for 5 hop, use seed 1,2,3
-"""
-# Load the for all the seeds.
-predictions_by_epoch_by_seed, inputs_by_seed  = load_epoch_data(
-    exp_typ = exp_typ,
-    hop = hop,
-    epoch_range = (0, 1000), 
-    seeds = seed_values_hop_dict[hop],
-    scheduler_prefix = scheduler_prefix
-)
-# import pdb; pdb.set_trace()
-seed_data_files = {}
-for seed in predictions_by_epoch_by_seed.keys():
-    if exp_typ == 'held_out':
-        data_files = {
-            "data": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_data.pkl",
-            "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
-            "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
-        }
-
-        vocab = pickle.load(open(data_files["vocab"], "rb"))
-        with open(data_files["metadata"], "r") as f:
-            metadata = json.load(f)
-
-        seed_data_files[seed] = {'vocab': vocab, 'metadata': metadata}
-
-
-    elif exp_typ == 'decomposition':
-        data_files = {
-            "metadata": f"/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_{hop}_qhop_1_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json",
-            "vocab": f"/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_{hop}_qhop_1_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
-        }
-    elif exp_typ == 'composition':
-        data_files = {
-            "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_0_classification_filter_True_input_features_output_stone_states_metadata.json",
-            "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_0_classification_filter_True_input_features_output_stone_states_vocab.pkl",
-        }
-
-        with open(data_files["metadata"], "r") as f:
-            metadata = json.load(f)
-        vocab = pickle.load(open(data_files["vocab"], "rb"))
-
-        seed_data_files[seed] = {'vocab': vocab, 'metadata': metadata}
-
-
-# Whether it predicts the correct half, if within the correct half, whether it predicts the correct stone, and whether the model predicts that
-# the stone is in the other incorrect half.
-seed_results = {}
-for seed in predictions_by_epoch_by_seed.keys():
-    print(f"\n\nAnalyzing seed {seed}...")
-    predictions_by_epoch = predictions_by_epoch_by_seed[seed]
-    data_with_predictions = inputs_by_seed[seed]
-    
-    # Load the correct vocab for this seed
-    vocab = seed_data_files[seed]['vocab']
-    
-    # Run the analysis
-    print("\n" + "="*60)
-    print("Running half-chemistry behavior analysis...")
-    print("="*60)
-    # model_selection_results = analyze_model_selection_behavior(
-    #     data_with_predictions, 
-    #     vocab, 
-    #     vocab['stone_state_to_id'], 
-    #     predictions_by_epoch
-    # )
-
-    # Get half_chemistry_analysis results.
-    predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, predicted_correct_within_context = analyze_half_chemistry_behaviour(
-        data_with_predictions, vocab, vocab['stone_state_to_id'], predictions_by_epoch, exp_typ=exp_typ
-    )
-
-    # Store results for this seed
-    seed_results[seed] = {
-        'predicted_in_context_accuracies': predicted_in_context_accuracies,
-        'predicted_in_context_correct_half_accuracies': predicted_in_context_correct_half_accuracies,
-        'predicted_in_context_other_half_accuracies': predicted_in_context_other_half_accuracies,
-        'predicted_in_context_correct_half_exact_accuracies': predicted_in_context_correct_half_exact_accuracies,
-        'predicted_correct_within_context': predicted_correct_within_context
-    }
-
-# import pdb; pdb.set_trace()
-# Now the plotting begins. First we need to average the result for each metric across seeds.
-# Average results across seeds
-averaged_results = {}
-std_errors = {}
-for metric in ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context']:
-    all_seed_values = [seed_results[seed][metric] for seed in seed_results.keys()]
-    
-    # Find the maximum length across all seeds
-    max_length = max(len(values) for values in all_seed_values)
-    
-    # Pad shorter sequences with imputed values
-    padded_seed_values = []
-    for values in all_seed_values:
-        if len(values) < max_length:
-            # For missing epochs, compute mean from seeds that have data at those epochs
-            padded_values = list(values)
-            for epoch_idx in range(len(values), max_length):
-                # Get values from all seeds that have this epoch
-                available_values = [seed_vals[epoch_idx] for seed_vals in all_seed_values if len(seed_vals) > epoch_idx]
-                if available_values:
-                    imputed_value = np.mean(available_values)
-                else:
-                    # Fallback: use the last available value from this seed
-                    imputed_value = values[-1]
-                padded_values.append(imputed_value)
-            padded_seed_values.append(padded_values)
-        else:
-            padded_seed_values.append(values)
-    
-    # Now all sequences have the same length, can safely stack
-    all_seed_values = np.array(padded_seed_values)
-    averaged_results[metric] = np.mean(all_seed_values, axis=0)
-    std_errors[metric] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
-    print(f"\nAveraged {metric} over seeds:")
-
-# Plot the averaged results with error bars using fill_between
-plt.figure(figsize=(14, 10))
-epochs = range(len(averaged_results['predicted_in_context_accuracies']))
-
-metrics = [
-    ('predicted_in_context_accuracies', 'Prediction in support (8 out of 108)'),
-    ('predicted_in_context_correct_half_accuracies', 'Correct Half accuracy (4 out of 8)'),
-    ('predicted_in_context_other_half_accuracies', 'Incorrect Half accuracy (4 out of 8)'),
-    ('predicted_in_context_correct_half_exact_accuracies', 'Within correct half Accuracy (1 out of 4)'),
-    # ('predicted_correct_within_context', 'Exact Accuracy (1 out of 8)'),
-]
-if exp_typ == 'decomposition':
-    # Only print the predicted_in_context_accuracies and the predicted_correct_within_context.
-    metrics = [
-        ('predicted_in_context_accuracies', 'In-support gating (8 out of 108)'),
-        ('predicted_correct_within_context', 'In-support gated exact match (1 out of 8)'),
-    ]
-linestyles = {'predicted_in_context_accuracies': 'solid', 'predicted_correct_within_context': 'solid'}
-colors = {
-    2: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:blue'},
-    3: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:green'},
-    4: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:gray'},
-    5: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:red'},
-}
-
-held_out_colors = {
-    'predicted_in_context_accuracies': 'tab:blue',
-    'predicted_in_context_correct_half_accuracies': 'tab:orange',
-    'predicted_in_context_other_half_accuracies': 'tab:green',
-    'predicted_in_context_correct_half_exact_accuracies': 'tab:red',
-    # 'predicted_correct_within_context': 'tab:red',
-}
-for metric, label in metrics:
-    mean = averaged_results[metric]
-    sem = std_errors[metric]
-    colors = held_out_colors if exp_typ == 'held_out' else colors
-    if exp_typ == 'held_out':
-        plt.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(metric, 'black'))
-    else:
-        plt.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(hop, {}).get(metric, 'black'))
-    plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(hop, {}).get(metric, 'black'))
-    
-    # Add text annotations at specific epochs
-    annotate_epochs = hop_to_epoch_values[hop]
-    for anno_epoch in annotate_epochs:
-        if anno_epoch < len(mean):
-            try:
-                plt.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
-                        fontsize=20, ha='center', va='bottom',
-                        color='black')
-            except:
-                print(f"Could not annotate epoch {anno_epoch} for metric {metric}")
-
-plt.xlabel('Epoch', fontsize=26)
-plt.ylabel('Accuracy', fontsize=26)
-plt.xticks(fontsize=24)
-plt.yticks(fontsize=24)
-# if exp_typ == 'decomposition':
-#     plt.title(f'Phasic learning of intermediate stone inference ({hop}-hop)', fontsize=24, pad=60)
-# else:
-#     plt.title(f'Phasic learning of latent structure learning', fontsize=24, pad=60)
-plt.legend(fontsize=18, loc='upper center', bbox_to_anchor=(0.5, 1.10), ncol=2, frameon=True)
-plt.grid(True, alpha=0.3)
-plt.ylim(0, 1)
-# plt.tight_layout()
-plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.png')
-plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inches='tight')
-
-
-
-# epoch_accuracies = [results[epoch]['predicted_in_context_accuracy'] for epoch in sorted(results.keys())]
-# epoch_within_class_accuracies = [results[epoch]['recall'] for epoch in sorted(results.keys())]
-# other_half_accuracies = [results[epoch]['accuracy'] for epoch in sorted(results.keys())]
-
-
-# # # Plot half-chemistry accuracies over epochs
-# plt.figure(figsize=(10, 5))
-# plt.plot(range(len(epoch_accuracies)), half_chemistry_epoch_accuracies, label='Half-Chemistry Accuracy')
-# plt.plot(range(len(epoch_within_class_accuracies)), epoch_within_class_accuracies , label='Within-Class Accuracy')
-# plt.plot(range(len(other_half_accuracies)), other_half_accuracies , label='Other Half-Chemistry Accuracy')
-# plt.xlabel('Epoch')
-# plt.ylabel('Accuracy')
-# plt.title('Predicted Stone in Context Accuracy Over Epochs')
-# plt.legend()
-# plt.grid(True, alpha=0.3)
-# plt.savefig('predicted_in_context.png')
-# # Print results
-# for epoch, result in results.items():
-#     print(f"\n--- Epoch {epoch} Results ---")
-#     print(f"Accuracy: {result['accuracy']:.4f} ({result['target_selected']}/{result['total_samples']})")
-#     print(f"Avg context stones: {np.mean(result['num_context_stones']):.2f}")
-
-
-
-
-
+    # return fig
 
 
 
@@ -986,3 +1056,7 @@ plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inc
 # # Plot results
 # print("\nGenerating visualization...")
 # plot_selection_analysis(results)
+
+
+
+

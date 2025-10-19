@@ -1237,7 +1237,7 @@ class ChemistryPromptEvaluator:
         }
         with open(output_file, 'w') as f:
             json.dump(output_data, f, indent=2)
-        print(f"💾 Results saved to {output_file}")
+        print(f"Results saved to {output_file}")
 
     def finish_wandb(self):
         """Properly finish W&B run."""
@@ -1245,19 +1245,26 @@ class ChemistryPromptEvaluator:
             wandb.finish()
 
 
-def load_data_from_file(file_path: str, limit_episodes: int = None) -> Dict[str, List[str]]:
+def load_data_from_file(file_path: str, episodes_slice=None) -> Dict[str, List[str]]:
     """Load chemistry data from a JSON file."""
     with open(file_path, 'r') as f:
         data = json.load(f)
     
+    print("Episodes_slice:", episodes_slice)
+    print("Type(episodes_slice):", type(episodes_slice))
+    print("Data keys:", data.keys() if isinstance(data, dict) else "N/A")
+    
     if isinstance(data, dict):
-        if limit_episodes == None:
-            if "support" in data and "query" in data:
-                return data
-        elif limit_episodes is not None:
-            print(f"Limiting to first {limit_episodes} episodes.")
+        if episodes_slice == None or episodes_slice.lower() == "none":
             if "episodes" in data:
-                limited_episodes = dict(sorted(list(data["episodes"].items()))[:limit_episodes])
+                print("Using all episodes in the data because episodes_slice is None.")
+                return data
+        elif episodes_slice is not None:
+            start_episode, end_episode = episodes_slice.split('-')
+            if "episodes" in data:
+                print("Slicing episodes from", start_episode, "to", end_episode)
+                limited_episodes = dict(sorted(list(data["episodes"].items()))[int(start_episode):int(end_episode)])
+                print("Episodes loaded:", limited_episodes.keys())
                 return {"episodes": limited_episodes}
         else:
             print("Invalid selection while loading data.")
@@ -1317,7 +1324,7 @@ def main():
     parser.add_argument("--batch_mode", type=str, default="global", choices=["global", "per_episode"], 
                         help="Batch mode: 'global' (across episodes) or 'per_episode' (within each episode)")
     
-    parser.add_argument("--limit_episodes", type=int, default=None, help="Limit number of episodes to evaluate.") 
+    parser.add_argument("--episodes_slice", type=str, default=None, help="Slice of episodes to evaluate, e.g., '0-10'. None for all episodes.") 
     
     parser.add_argument("--temperature", type=float, default=0.0, help="Temperature for generation (not used currently)")
     
@@ -1420,7 +1427,7 @@ def main():
         if args.use_sample_data:
             data = create_sample_data()
         elif args.data:
-            data = load_data_from_file(args.data, limit_episodes=args.limit_episodes)
+            data = load_data_from_file(args.data, episodes_slice=args.episodes_slice)
             print(f"Loaded data with {len(data.get('episodes', {}))} episodes.")
         else:
             print("❌ Error: Must provide --data or --use-sample-data")
@@ -1432,7 +1439,12 @@ def main():
         # Create output directory and save results
         if not os.path.exists('prompting_results'):
             os.makedirs('prompting_results')
-        args.output = f'prompting_results/{evaluator.experiment_name}_results.json'
+        # Build output filename with slice information if provided
+        output_filename = f'{evaluator.experiment_name}_results'
+        if args.episodes_slice is not None:
+            output_filename += f'_slice_{args.episodes_slice}'
+        output_filename += '.json'
+        args.output = f'prompting_results/{output_filename}'
         
         evaluator.save_results(results, args.output)
         

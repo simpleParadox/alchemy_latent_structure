@@ -677,6 +677,10 @@ def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_c
             "num_decoder_layers": 4, "emb_size": 256, "nhead": 4, 
             "dim_feedforward": 512, "dropout": 0.1
         },
+        "xsmall_deep": {
+            "num_decoder_layers": 6, "emb_size": 256, "nhead": 4, 
+            "dim_feedforward": 512, "dropout": 0.1
+        },
         "small": { 
             "num_decoder_layers": 4, "emb_size": 256, "nhead": 4, 
             "dim_feedforward": 1024, "dropout": 0.1
