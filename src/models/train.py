@@ -1350,6 +1350,19 @@ def main():
 
     if 'fully_shuffled' in args.train_data_path:
         args.save_dir = os.path.join(args.save_dir, f"fully_shuffled")
+
+    # Add to save_dir if using scheduler    
+    if use_scheduler and args.scheduler_type != "none":
+        args.save_dir = os.path.join(args.save_dir, f"scheduler_{args.scheduler_type}")
+    else:
+        args.save_dir = os.path.join(args.save_dir, f"no_scheduler")
+
+
+    # Also add the weight decay and learning rate to the save_dir
+    args.save_dir = os.path.join(args.save_dir, f"wd_{args.weight_decay}_lr_{args.learning_rate}")
+    if args.scheduler_type == 'step_lr' or args.scheduler_type == 'multi_step_lr':
+        args.save_dir = os.path.join(args.save_dir, f"step_size_{args.step_size}_gamma_{args.reduce_factor}")
+
     
         
     hierarchical_save_dir = os.path.join(
@@ -1357,7 +1370,6 @@ def main():
         args.model_size,
         args.model_architecture,
         args.task_type,
-        args.scheduler_type,
         f"input_{args.input_format or 'default'}",
         f"output_{args.output_format or 'default'}",
         f"shop_{support_hop}_qhop_{query_hop}",

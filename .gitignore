@@ -72,3 +72,5 @@ src/prompting_experiments/test.py
 *.log
 hf_token.txt
 vllm_error.txt
+*.pdf
+*.md
