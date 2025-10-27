@@ -900,14 +900,22 @@ def main():
     
     print("Base path: ", base_path)
     print("Profile cluster: ", cluster)
-    
+
+    if args.val_data_path is None or args.val_data_path == 'None':
+        # Create a validation data path by replacing 'train' with 'val' in the train_data_path
+        args.val_data_path = args.train_data_path.replace('train', 'val')
+        print("No validation data path provided. Using: ", args.val_data_path)
+
+    else:
+        print("Validation data path provided: ", args.val_data_path)
+
     # First, add the 'data_split_seed' to the train_data_path and val_data_path
     args.train_data_path = f"{args.train_data_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
     args.val_data_path = f"{args.val_data_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
         
     # Update data paths to be relative to the base path
     args.train_data_path = os.path.join(base_path, args.train_data_path)
-    args.val_data_path = os.path.join(base_path, args.val_data_path) if args.val_data_path else None
+    args.val_data_path = os.path.join(base_path, args.val_data_path)
     args.save_dir = os.path.join(base_path, args.save_dir)
     print("Updated train data path: ", args.train_data_path)
     print("Updated validation data path: ", args.val_data_path if args.val_data_path else "None")
@@ -1360,6 +1368,9 @@ def main():
 
     # Also add the weight decay and learning rate to the save_dir
     args.save_dir = os.path.join(args.save_dir, f"wd_{args.weight_decay}_lr_{args.learning_rate}")
+    # Add the eta_min if using cosine scheduler
+    if args.scheduler_type == "cosine" or args.scheduler_type == "cosine_restarts":
+        args.save_dir = os.path.join(args.save_dir, f"eta_min_{args.eta_min}")
     if args.scheduler_type == 'step_lr' or args.scheduler_type == 'multi_step_lr':
         args.save_dir = os.path.join(args.save_dir, f"step_size_{args.step_size}_gamma_{args.reduce_factor}")
 

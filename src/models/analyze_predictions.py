@@ -319,6 +319,9 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 
                 # per-support metrics
                 per_support_metrics = {}
+
+                # Define the list to store the per prefix reachable accuracies across query stones
+                all_query_stone_accuracies_per_prefix = []
                 
                 # iterate through each support key
                 for support_key in epoch_overlap_analysis.keys():
@@ -330,6 +333,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                     # NEW: Track per-query-stone accuracies within this support
                     per_query_stone_accuracies = []
                     per_query_stone_metrics = {}
+                    per_query_stone_reachable_accuracies = []
                     
                     # iterate through query stones for this support key
                     for query_stone_str in epoch_overlap_analysis[support_key][overlap_count].keys():
@@ -338,20 +342,26 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                         total_overlap_query_stone = 0
                         all_predictions_query_stone = []
                         all_reachable_query_stone = set()
+                        reachable_per_prefix = {}
+
+                        # Define the reachable accuracy prefix wise.
+                        query_stone_reachable_accuracy_per_prefix = []
                         
                         # Now calculate metrics for each prefix under this query stone
                         for potion_prefix, data in epoch_overlap_analysis[support_key][overlap_count][query_stone_str].items():
-                            reachable_stones = data['reachable_stones'] # set of reachable stones for this prefix and for this query stone
-                            predictions = data['predictions'] # list of predictions for this prefix and for this query stone
+                            query_prefix_reachable_stones = data['reachable_stones'] # set of reachable stones for this prefix and for this query stone. Size is 2 for two hop.
+                            predictions = data['predictions'] # list of predictions for this prefix and for this query stone.
                             
-                            all_reachable_support.update(reachable_stones) # For this support key, what are all the reachable stones across query stones and prefixes.
+                            all_reachable_support.update(query_prefix_reachable_stones) # For this support key, what are all the reachable stones across ALL query stones and prefixes - it will update over time.
                             # This is me writing for clarity: the union of all reachable stones for this support key across all query stones and prefixes. The size should be eight.
 
+                            all_reachable_query_stone.update(query_prefix_reachable_stones) 
 
-                            all_reachable_query_stone.update(reachable_stones) # For this specific query stone, what are all the reachable stones across prefixes.
+                            # Store the reachable stones for this prefix
+                            reachable_per_prefix[potion_prefix] = query_prefix_reachable_stones
                             
-                            for pred in predictions:
-                                total_overlap_query_stone += 1
+                            for pred in predictions: # Length of the this predictions should be 2 for the composition setting because I balance the samples for each query stone state.
+                                total_overlap_query_stone += 1 # At the end, the value of this should be 6.
                                 all_predictions_query_stone.append(pred)
                                 
                                 total_overlap_support += 1
@@ -360,15 +370,31 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                                 total_overlap_total += 1
                                 all_predictions_total.append(pred)
                                 
-                                if pred in reachable_stones:
+                                if pred in query_prefix_reachable_stones: # Reachable stones FROM this prefix for THIS query stone.
                                     predicted_reachable_query_stone += 1
                                     predicted_reachable_support += 1
                                     predicted_reachable_total += 1
+
+                                    query_stone_reachable_accuracy_per_prefix.append(1)
+                                else:
+                                    query_stone_reachable_accuracy_per_prefix.append(0)
                         
                         #  Calculate and store accuracy for THIS query stone
                         query_stone_accuracy = predicted_reachable_query_stone / total_overlap_query_stone if total_overlap_query_stone > 0 else 0.0
+                        
+                        query_stone_per_prefix_reachable_accuracy = np.mean(query_stone_reachable_accuracy_per_prefix) if query_stone_reachable_accuracy_per_prefix else 0.0
+
+
+
+
+                        per_query_stone_reachable_accuracies.append(query_stone_per_prefix_reachable_accuracy)
+
+                        all_query_stone_accuracies_per_prefix.append(query_stone_per_prefix_reachable_accuracy)
                         per_query_stone_accuracies.append(query_stone_accuracy)
                         all_query_stone_accuracies.append(query_stone_accuracy)
+
+                        # if pred_epoch == '050':
+                            # import pdb; pdb.set_trace()
                         
                         # Store per-query-stone metrics
                         per_query_stone_metrics[query_stone_str] = {
@@ -377,7 +403,9 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                             'predicted_reachable': predicted_reachable_query_stone,
                             'prediction_distribution': Counter(all_predictions_query_stone),
                             'reachable_stones': all_reachable_query_stone,
-                            'per_prefix_data': epoch_overlap_analysis[support_key][overlap_count][query_stone_str]
+                            'per_prefix_data': epoch_overlap_analysis[support_key][overlap_count][query_stone_str],
+                            # 'per_prefix_reachable_stones': reachable_per_prefix,
+                            'per_prefix_reachable_accuracy_per_query': query_stone_per_prefix_reachable_accuracy
                         }
                     
                     # store per-support metrics
@@ -387,7 +415,9 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                         
                         # NEW: Unweighted per-query-stone average (what you want to plot)
                         'reachable_accuracy_per_query_stone': np.mean(per_query_stone_accuracies) if per_query_stone_accuracies else 0.0,
+                        'per_query_stone_reachable_accuracy_per_prefix': np.mean(per_query_stone_reachable_accuracies) if per_query_stone_reachable_accuracies else 0.0,
                         
+                        'per_prefix_reachable_accu'
                         'total': total_overlap_support,
                         'predicted_reachable': predicted_reachable_support,
                         'prediction_distribution': Counter(all_predictions_support),
@@ -406,6 +436,8 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                     
                     # NEW: Unweighted per-query-stone average
                     'reachable_accuracy_per_query_stone': np.mean(all_query_stone_accuracies) if all_query_stone_accuracies else 0.0,
+
+                    'per_query_stone_reachable_accuracy_per_prefix': np.mean(all_query_stone_accuracies_per_prefix) if all_query_stone_accuracies_per_prefix else 0.0,
                     
                     'total': total_overlap_total,
                     'predicted_reachable': predicted_reachable_total,
@@ -434,34 +466,37 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 correct_within_candidates, overlap_metrics_by_epoch)
 
 
-    # The following are the for the decomposition experiments.
+    # The following are the for the decomposition experiments and held-out experiments.
 
     # Now for each sample, we can store the prediction in the corresponding support key and query potion.
+    print("Decomposition / Held-out experiment.")
+    if exp_typ in ['decomposition', 'held_out']:
+        hop = 1
     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Organizing predictions by support and query"):
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
             target_class_id = sample['target_class_id']
             predicted_class_id = predictions[i]
-            support = encoder_input_ids[:-(hop + 4)]  # Everything except last 5 tokens
+            support = encoder_input_ids[:-(hop + 4)]  # Everything except last 5 tokens for decomposition and held_out.
             support_key = tuple(support)
             
-            if exp_typ == 'composition':
-                # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
-                query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-                query_potion = query[-hop:]  # Last hop tokens
+            # if exp_typ == 'composition':
+            #     # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
+            #     query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+            #     query_potion = query[-hop:]  # Last hop tokens
                 
-                # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
-                query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
-                query_potion = query_potion_str
+            #     # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+            #     query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+            #     query_potion = query_potion_str
                 
-            else:  
-                query = encoder_input_ids[-5:]    # Last 5 tokens
-                query_potion = query[-1]
-            if exp_typ == 'composition':
-                support_to_query_per_epoch_predictions[epoch][support_key][query_potion].append(predicted_class_id)
+            # else:  
+            query = encoder_input_ids[-(hop + 4):]    # Last 5 tokens for decomposition and held_out.
+            query_potion = query[-1]
+            # if exp_typ == 'composition':
+            #     support_to_query_per_epoch_predictions[epoch][support_key][query_potion].append(predicted_class_id)
 
-            else:
-                support_to_query_per_epoch_predictions[epoch][support_key][feature_to_id_vocab[query_potion]].append(predicted_class_id)
+            # else:
+            support_to_query_per_epoch_predictions[epoch][support_key][feature_to_id_vocab[query_potion]].append(predicted_class_id)
     
 
     # Now for each of the predictions, we can check which half-chemistry for that support set does the true target belong to.
@@ -495,32 +530,32 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             support = encoder_input_ids[:-(hop + 4)]  # Everything except last 5 tokens
             support_key = tuple(support)
             
-            if exp_typ == 'composition':
-                # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
-                query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-                query_potion = query[-hop:]  # Last hop tokens
+            # if exp_typ == 'composition':
+            #     # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
+            #     query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+            #     query_potion = query[-hop:]  # Last hop tokens
                 
-                # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
-                query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
-                query_potion = query_potion_str
-            else:
-                query = encoder_input_ids[-5:]    # Last 5 tokens
-                query_potion = query[-1]
+            #     # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+            #     query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+            #     query_potion = query_potion_str
+            # else:
+            query = encoder_input_ids[-5:]    # Last 5 tokens
+            query_potion = query[-1]
 
             # First we check if the predicted class ID is in any of the two half-chemistry sets for this support key.
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
 
             potions_for_support = list(support_to_query_mappings[support_key].keys())
             # TODO: This will fail for composition experiments because the keys will be a combination of potions. Thus we need to adjust this.
             
-            if exp_typ == 'composition':
-                raise NotImplementedError("Half-chemistry analysis for composition experiments is not implemented yet.")
+            # if exp_typ == 'composition':
+            #     raise NotImplementedError("Half-chemistry analysis for composition experiments is not implemented yet.")
             
             assert len(potions_for_support) in [2,6], f"Expected 2 or 6 potions."
             correct_half_chemistry = support_to_query_mappings[support_key][feature_to_id_vocab[query_potion]]
             other_half_chemistry = support_to_query_mappings[support_key][potions_for_support[0]] if potions_for_support[1] == feature_to_id_vocab[query_potion] else support_to_query_mappings[support_key][potions_for_support[1]]
 
-            if exp_typ == 'decomposition' or exp_typ == 'composition':
+            if exp_typ == 'decomposition': 
                 # Create a set of all stones in the support set.
                 all_stones_in_support = set()
                 for potion in potions_for_support:
@@ -531,7 +566,6 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 combined_set = set(correct_half_chemistry + other_half_chemistry)
                 assert len(combined_set) < 8, f"Expected 8 unique stones for support {support_key}, got {len(combined_set)}"
 
-            import pdb; pdb.set_trace()
 
             # First do the classification for 8 vs 108.
             if predicted_class_id in combined_set:
@@ -585,7 +619,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     return predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, predicted_correct_within_context
 
 
-def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix=''):
+def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix='', file_paths = None):
     """
     Load predictions and inputs/targets/predictions for specified experiment type and hop (if applicable).
     
@@ -601,6 +635,58 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
     
     inputs_by_seed = {}
     targets_by_seed = {}
+
+    # file_paths is a list 
+    if file_paths is not None:
+        seeds = []
+        for path in file_paths:
+            # Extract seed from the path assuming the path contains 'seed_{seed_number}'
+            import re
+            match = re.search(r'seed_(\d+)', path)
+            if match:
+                seed_number = int(match.group(1))
+                seeds.append(seed_number)
+            else:
+                raise ValueError(f"Seed not found in the provided file path: {path}")
+
+        # Load the data for each provided file path
+        print("Loading data from provided file paths for seeds: ", seeds)
+        for i, path in enumerate(file_paths):
+            print("Loading data for seed ", seeds[i], " from path ", path)
+            seed = seeds[i]
+            predictions_by_epoch = {}
+            
+            for epoch in range(epoch_start, epoch_end + 1):
+                # Reformat the epoch_number because the files are saved with epoch numbers like 001, 002, ..., 1000
+                epoch_number = str(epoch).zfill(3)
+                
+                predictions_raw_file_path = f'{path}/predictions_classification_epoch_{epoch_number}.npz'
+                
+                try:
+                    predictions_raw = np.load(predictions_raw_file_path, allow_pickle=True)['predictions']
+                    # Store predictions for this epoch
+                    predictions_by_epoch[epoch_number] = predictions_raw.tolist()
+                    
+                except FileNotFoundError:
+                    print(f"Warning: Files for epoch {epoch_number} not found in path {path}, skipping...")
+                    continue
+
+            predictions_by_epoch_by_seed[seed] = predictions_by_epoch 
+            inputs_raw_file_path = f'{path}/inputs_classification_epoch_001.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs.
+            targets_raw_file_path = f'{path}/targets_classification_epoch_001.npz' # Use the last epoch number loaded.
+            inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
+            targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
+            
+            stacked_inputs = np.vstack(inputs_raw) # Flatten inputs from (39, 32, 181) to (1240, 181) 
+            data_with_targets = [{'encoder_input_ids': stacked_inputs[i].tolist(), 'target_class_id': int(targets_raw[i])} for i in range(len(targets_raw))]
+            
+            inputs_by_seed[seed] = data_with_targets
+
+        return predictions_by_epoch_by_seed, inputs_by_seed
+
+
+
+
 
     print("Seeds to load: ", seeds)
 
@@ -670,7 +756,7 @@ import argparse
 parser = argparse.ArgumentParser(description="Analyze model predictions for different experiment types and hops.")
 parser.add_argument('--exp_typ', type=str, choices=['held_out', 'decomposition', 'composition'], default='composition',
                     help="Type of experiment: 'held_out' or 'decomposition'")
-parser.add_argument('--hop', type=int, choices=[2, 3, 4, 5], default=3,
+parser.add_argument('--hop', type=int, choices=[2, 3, 4, 5], default=4,
                     help="Hop count for decomposition and composition experiments (ignored for held_out)")
 args = parser.parse_args()
 # exp_typ = 'decomposition'  # 'held_out' or 'decomposition'
@@ -691,6 +777,14 @@ hop_to_epoch_values = {
 
 
 scheduler_prefix = 'scheduler_cosine/' 
+# NOTE: Do not change the following prefix values.
+if exp_typ == 'decomposition':
+    # These are the orginal settings used for the decomposition experiments - they might change based on the new results of hyperparemeter tuning. NOTE: the seeds might be different too.
+    if hop in [2, 3, 4]:
+        scheduler_prefix = 'cosine_restarts/'
+    elif hop == 5:
+        scheduler_prefix = ''
+
 # scheduler_prefix = '' 
 # seed_values = [2,3,4]
 if exp_typ == 'decomposition':
@@ -715,15 +809,15 @@ if exp_typ == 'decomposition' or exp_typ == 'held_out':
     }
 if exp_typ == 'composition':
     hop_to_epoch_values = {
-        2: [0, 200, 400, 499],
-        3: [0, 200, 400, 499],
-        4: [0, 200, 400, 499],
-        5: [0, 200, 400, 499]
+        2: [0, 200, 400, 600, 800, 999],
+        3: [0, 200, 400, 600, 800, 999],
+        4: [0, 200, 400, 600, 800, 999],
+        5: [0, 200, 400, 600, 800, 999]
     }
     
     seed_values_hop_dict = {
-        2: [16, 29],
-        3: [0, 16],
+        2: [0, 16, 29],
+        3: [0, 16, 29],
         4: [0, 16, 29],
         5: [0, 16, 29]
     }
@@ -736,12 +830,31 @@ for 4 hop, can use seeds 2,3,4
 for 5 hop, use seed 1,2,3
 """
 # Load the for all the seeds.
+composition_file_paths = {
+    2: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_step_lr/wd_0.001_lr_0.0001/step_size_165_gamma_0.2/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/predictions',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_16/predictions', 
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_step_lr/wd_0.001_lr_0.0001/step_size_250_gamma_0.4/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_29/predictions'
+        ],
+    3: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_0/predictions', 
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_16/predictions', 
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.1_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_29/predictions'],
+
+    4: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_0/predictions', 
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_16/predictions', 
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_29/predictions'],
+
+    5: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine_restarts/wd_0.001_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_0/predictions',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.1_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_16/predictions',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_29/predictions']
+}
+
 predictions_by_epoch_by_seed, inputs_by_seed  = load_epoch_data(
     exp_typ = exp_typ,
     hop = hop,
     epoch_range = (hop_to_epoch_values[hop][0], hop_to_epoch_values[hop][-1]),
     seeds = seed_values_hop_dict[hop],
-    scheduler_prefix = scheduler_prefix
+    scheduler_prefix = scheduler_prefix,
+    file_paths = composition_file_paths[hop] if exp_typ == 'composition' else None
 )
 # import pdb; pdb.set_trace()
 seed_data_files = {}
@@ -869,35 +982,6 @@ for metric in metrics:
     std_errors[metric] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
     print(f"\nAveraged {metric} over seeds:")
 
-# Average overlap metrics across seeds
-max_epochs = max(len(seed_results[seed]['predicted_in_context_accuracies']) for seed in seed_results.keys())    
-averaged_overlap_metrics = {}
-for overlap_count in range(1, hop):
-    averaged_overlap_metrics[overlap_count] = {
-        'reachable_accuracy': [],
-        'std_error': []
-    }
-    
-    for epoch_idx in range(max_epochs):
-        epoch_accuracies = []
-        
-        for seed in seed_results.keys():
-            overlap_data = seed_results[seed]['overlap_metrics_by_epoch']
-            epoch_keys = sorted(overlap_data.keys())
- 
-            if epoch_idx < len(epoch_keys):
-                epoch_key = epoch_keys[epoch_idx]
-                if overlap_count in overlap_data[epoch_key]:
-                    # NEW: Use per-query-stone-averaged accuracy
-                    accuracy = overlap_data[epoch_key][overlap_count]['reachable_accuracy_per_query_stone']
-                    epoch_accuracies.append(accuracy)
-        
-        if epoch_accuracies:
-            averaged_overlap_metrics[overlap_count]['reachable_accuracy'].append(np.mean(epoch_accuracies))
-            averaged_overlap_metrics[overlap_count]['std_error'].append(
-                np.std(epoch_accuracies) / np.sqrt(len(epoch_accuracies))
-            )
-
 # Plot the averaged results with error bars using fill_between
 plt.figure(figsize=(14, 10))
 epochs = range(len(averaged_results['predicted_in_context_accuracies']))
@@ -913,7 +997,9 @@ if exp_typ == 'decomposition':
     # Only print the predicted_in_context_accuracies and the predicted_correct_within_context.
     metrics = [
         ('predicted_in_context_accuracies', 'In-support gating (8 out of 108)'),
-        ('predicted_correct_within_context', 'In-support gated exact match (1 out of 8)'),
+        ('predicted_in_context_correct_half_accuracies', 'In-support gated correct half (4 out of 8)'),
+        ('predicted_in_context_correct_half_exact_accuracies', 'In-support gated within correct half (1 out of 4)'),
+        ('predicted_correct_within_context', 'Exact Accuracy (1 out of 8)'),
     ]
 elif exp_typ == 'composition':
     metrics = [
@@ -923,10 +1009,10 @@ elif exp_typ == 'composition':
     ]
 linestyles = {'predicted_in_context_accuracies': 'solid', 'predicted_correct_within_context': 'solid'}
 colors = {
-    2: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:blue'},
-    3: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:green'},
-    4: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:gray'},
-    5: {'predicted_in_context_accuracies': 'orange', 'predicted_correct_within_context': 'tab:red'},
+    2: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:blue'},
+    3: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:green'},
+    4: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:gray'},
+    5: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:red'},
 }
 colors_composition = {
     2: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_candidate_accuracies': 'purple', 'correct_within_candidates': 'tab:blue'},
@@ -945,7 +1031,13 @@ held_out_colors = {
 for metric, label in metrics:
     mean = averaged_results[metric]
     sem = std_errors[metric]
-    colors = held_out_colors if exp_typ == 'held_out' else colors
+    # colors = held_out_colors if exp_typ == 'held_out' else colors
+    if exp_typ == 'composition':
+        colors = colors_composition
+    elif exp_typ == 'held_out':
+        colors = held_out_colors
+    else:
+        colors = colors
     if exp_typ == 'held_out':
         plt.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(metric, 'black'))
     else:
@@ -979,7 +1071,62 @@ plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.png')
 plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inches='tight')
 
 # Create multi-panel figure for 3-hop case
-if hop >= 3:
+
+# Create multi-panel figure for 3-hop case
+if exp_typ == 'composition':
+
+    # Average overlap metrics across seeds
+    max_epochs = max(len(seed_results[seed]['predicted_in_context_accuracies']) for seed in seed_results.keys())    
+    averaged_overlap_metrics = {}
+    for overlap_count in range(1, hop):
+        averaged_overlap_metrics[overlap_count] = {
+            'reachable_accuracy_weighted': [],
+            'reachable_accuracy_per_query_stone': [],
+            'std_error_weighted': [],
+            'std_error_per_query_stone': [],
+            'per_prefix_reachable_accuracy': [],
+            'std_error_per_prefix_reachable_accuracy': []
+        }
+        
+        for epoch_idx in range(max_epochs):
+            epoch_accuracies_weighted = []
+            epoch_accuracies_per_query_stone = []
+            epoch_accuracies_per_query_stone_per_prefix = []
+            
+            for seed in seed_results.keys():
+                overlap_data = seed_results[seed]['overlap_metrics_by_epoch']
+                epoch_keys = sorted(overlap_data.keys())
+    
+                if epoch_idx < len(epoch_keys):
+                    epoch_key = epoch_keys[epoch_idx]
+                    if overlap_count in overlap_data[epoch_key]:
+                        # Weighted accuracy (old metric)
+                        accuracy_weighted = overlap_data[epoch_key][overlap_count]['reachable_accuracy_weighted']
+                        epoch_accuracies_weighted.append(accuracy_weighted)
+                        
+                        # Per-query-stone-averaged accuracy (new metric)
+                        accuracy_per_query_stone = overlap_data[epoch_key][overlap_count]['reachable_accuracy_per_query_stone']
+                        accuracy_per_query_stone_per_prefix = overlap_data[epoch_key][overlap_count]['per_query_stone_reachable_accuracy_per_prefix']
+                        epoch_accuracies_per_query_stone.append(accuracy_per_query_stone)
+                        epoch_accuracies_per_query_stone_per_prefix.append(accuracy_per_query_stone_per_prefix)
+            
+            if epoch_accuracies_weighted:
+                averaged_overlap_metrics[overlap_count]['reachable_accuracy_weighted'].append(np.mean(epoch_accuracies_weighted))
+                averaged_overlap_metrics[overlap_count]['std_error_weighted'].append(
+                    np.std(epoch_accuracies_weighted) / np.sqrt(len(epoch_accuracies_weighted))
+                )
+            
+            if epoch_accuracies_per_query_stone:
+                averaged_overlap_metrics[overlap_count]['reachable_accuracy_per_query_stone'].append(np.mean(epoch_accuracies_per_query_stone))
+                averaged_overlap_metrics[overlap_count]['std_error_per_query_stone'].append(
+                    np.std(epoch_accuracies_per_query_stone) / np.sqrt(len(epoch_accuracies_per_query_stone))
+                )
+                
+                averaged_overlap_metrics[overlap_count]['per_prefix_reachable_accuracy'].append(np.mean(epoch_accuracies_per_query_stone_per_prefix, axis=0))
+                averaged_overlap_metrics[overlap_count]['std_error_per_prefix_reachable_accuracy'].append(
+                    np.std(epoch_accuracies_per_query_stone_per_prefix, axis=0) / np.sqrt(len(epoch_accuracies_per_query_stone_per_prefix))
+                )
+
     fig = plt.figure(figsize=(18, 12))
     gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
     
@@ -1007,37 +1154,56 @@ if hop >= 3:
     ax1.set_ylim(0, 1)
     ax1.tick_params(labelsize=14)
     
-    # Panel B: Overlap analysis line plot.
+    # Panel B: Overlap analysis line plot - BOTH weighted and per-query-stone metrics
     ax2 = fig.add_subplot(gs[1, :])
     
     overlap_colors = {1: 'tab:purple', 2: 'tab:cyan', 3: 'tab:pink', 4: 'tab:brown'}
     
+    # Plot per-query-stone-averaged accuracy (solid lines)
     for overlap_count in range(1, hop):
         if overlap_count in averaged_overlap_metrics:
-            mean = averaged_overlap_metrics[overlap_count]['reachable_accuracy']
-            sem = averaged_overlap_metrics[overlap_count]['std_error']
+            mean = averaged_overlap_metrics[overlap_count]['per_prefix_reachable_accuracy']
+            # sem = averaged_overlap_metrics[overlap_count]['std_error_per_query_stone']
             
-            label = f'{overlap_count}-potion overlap ({overlap_count}/{hop} potions)'
+            label = f'{overlap_count}-potion (per-stone avg)'
             color = overlap_colors.get(overlap_count, 'black')
             
-            ax2.plot(epochs[:len(mean)], mean, label=label, linewidth=2, color=color, marker='o', markersize=4)
+            ax2.plot(epochs[:len(mean)], mean, label=label, linewidth=2.5, color=color, 
+                    linestyle='solid', marker='o', markersize=5)
             ax2.fill_between(epochs[:len(mean)], 
                             np.array(mean) - np.array(sem), 
                             np.array(mean) + np.array(sem), 
                             alpha=0.2, color=color)
     
+    # Plot weighted accuracy (dashed lines) for comparison
+    for overlap_count in range(1, hop):
+        if overlap_count in averaged_overlap_metrics:
+            mean = averaged_overlap_metrics[overlap_count]['reachable_accuracy_weighted']
+            sem = averaged_overlap_metrics[overlap_count]['std_error_weighted']
+            
+            label = f'{overlap_count}-potion (weighted)'
+            color = overlap_colors.get(overlap_count, 'black')
+            
+            ax2.plot(epochs[:len(mean)], mean, label=label, linewidth=1.5, color=color, 
+                    linestyle='dashed', alpha=0.7)
+            ax2.fill_between(epochs[:len(mean)], 
+                            np.array(mean) - np.array(sem), 
+                            np.array(mean) + np.array(sem), 
+                            alpha=0.1, color=color)
+    
     ax2.set_xlabel('Epoch', fontsize=18)
     ax2.set_ylabel('Reachable Stone Accuracy', fontsize=18)
     ax2.set_title(f'B. Compositional Reasoning: Accuracy vs Potion Overlap', fontsize=20, fontweight='bold', pad=20)
-    ax2.legend(fontsize=14, loc='lower right')
+    ax2.legend(fontsize=12, loc='lower right', ncol=2)
     ax2.grid(True, alpha=0.3)
     ax2.set_ylim(0, 1)
     ax2.tick_params(labelsize=14)
     
-    # Add annotation explaining the metric
+    # Add annotation explaining both metrics
     ax2.text(0.02, 0.98, 
-             'Higher overlap means more constrained possible outcomes\n'
-             'Model should predict only stones reachable via prefix path',
+             'Solid lines: Per-query-stone average (unweighted)\n'
+             'Dashed lines: Weighted average across all predictions\n'
+             'Higher overlap → more constrained outcomes',
              transform=ax2.transAxes, fontsize=11, verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
     
@@ -1057,31 +1223,48 @@ if hop >= 3:
         if epoch_idx < len(epoch_keys):
             epoch_key = epoch_keys[epoch_idx]
             
-            # Create grouped bar chart
+            # Create grouped bar chart showing both metrics
             overlap_counts = list(range(1, hop))
-            reachable_accs = [overlap_data[epoch_key].get(oc, {}).get('reachable_accuracy', 0) 
-                             for oc in overlap_counts]
+            x = np.arange(len(overlap_counts))
+            width = 0.35
             
-            bars = ax.bar(overlap_counts, reachable_accs, color=[overlap_colors.get(oc) for oc in overlap_counts])
+            # Per-query-stone accuracies
+            reachable_accs_per_stone = [overlap_data[epoch_key].get(oc, {}).get('reachable_accuracy_per_query_stone', 0)
+                                        for oc in overlap_counts]
+            
+            # Weighted accuracies
+            reachable_accs_weighted = [overlap_data[epoch_key].get(oc, {}).get('reachable_accuracy_weighted', 0) 
+                                      for oc in overlap_counts]
+            
+            bars1 = ax.bar(x - width/2, reachable_accs_per_stone, width, 
+                          label='Per-stone avg',
+                          color=[overlap_colors.get(oc) for oc in overlap_counts],
+                          alpha=0.8)
+            
+            bars2 = ax.bar(x + width/2, reachable_accs_weighted, width,
+                          label='Weighted',
+                          color=[overlap_colors.get(oc) for oc in overlap_counts],
+                          alpha=0.4,
+                          hatch='//')
             
             # Add value labels on bars
-            for bar, acc in zip(bars, reachable_accs):
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2., height,
-                       f'{acc:.2f}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+            for bars in [bars1, bars2]:
+                for bar in bars:
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2., height,
+                           f'{height:.2f}', ha='center', va='bottom', 
+                           fontsize=10, fontweight='bold')
             
             ax.set_xlabel('Potion Overlap Count', fontsize=14)
             ax.set_ylabel('Reachable Accuracy', fontsize=14)
             ax.set_title(f'C{idx+1}. {epoch_label}', fontsize=16, fontweight='bold')
             ax.set_ylim(0, 1)
-            ax.set_xticks(overlap_counts)
+            ax.set_xticks(x)
+            ax.set_xticklabels(overlap_counts)
+            ax.legend(fontsize=11)
             ax.grid(True, alpha=0.3, axis='y')
             ax.tick_params(labelsize=12)
     
     plt.savefig(f'composition_{hop}_hop_comprehensive_overlap_analysis.png', dpi=300, bbox_inches='tight')
     plt.savefig(f'composition_{hop}_hop_comprehensive_overlap_analysis.pdf', bbox_inches='tight')
     print(f"\nSaved comprehensive multi-panel figure for {hop}-hop composition analysis")
-
-
-
-
