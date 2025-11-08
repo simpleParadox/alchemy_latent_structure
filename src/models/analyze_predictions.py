@@ -6,6 +6,8 @@ from collections import defaultdict, Counter
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from cluster_profile import cluster
+import os
+import re
 
 # Load the metadata, data, and vocab.
 if cluster == 'vulcan':
@@ -73,7 +75,8 @@ def parse_stone_states_from_input(encoder_input_ids, input_vocab, stone_state_to
 
 
 
-def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions_by_epoch, exp_typ='held_out', hop=2, overlap_potion_count=1):
+def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions_by_epoch, exp_typ='held_out', hop=2,
+                                    composition_full_target_data=None, factorize_within_half_predictions=False):
     """
     Analyze model behavior on half-chemistry tasks where only one stone is present.
     
@@ -93,11 +96,11 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     for i, sample in enumerate(data):
         encoder_input_ids = sample['encoder_input_ids']
         target_class_id = sample['target_class_id']
-        support = encoder_input_ids[:-(hop + 4)]  # Everything except last 5 tokens. Works for decomposition too.
-        # Create a hashable string key
+        support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens. works for decomposition too.
+        # create a hashable string key
         support_key = tuple(support)
         
-        if support_key not in support_to_query_mappings: # This is for the input to the model. This will be the same for all epochs.
+        if support_key not in support_to_query_mappings: # this is for the input to the model. this will be the same for all epochs.
             support_to_query_mappings[support_key] = {}
             
             
@@ -107,27 +110,27 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     for i, sample in enumerate(data):
         encoder_input_ids = sample['encoder_input_ids']
         target_class_id = sample['target_class_id']
-        support = encoder_input_ids[:-(hop + 4)]  # Everything except last 5 tokens. Works for decomposition too.
-        # Create a hashable string key
+        support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens. works for decomposition too.
+        # create a hashable string key
         support_key = tuple(support)
         
         if exp_typ == 'composition':
-            # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
+            # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
             query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-            query_potion = query[-hop:]  # Last hop tokens
+            query_potion = query[-hop:]  # last hop tokens
             query_stones = query[:-hop]
             
-            # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+            # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
             query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
             query_potion = query_potion_str
             
         else:
-            # For decomposition and held_out experiments.
-            query = encoder_input_ids[-5:]    # Last 5 tokens
+            # for decomposition and held_out experiments.
+            query = encoder_input_ids[-5:]    # last 5 tokens
             query_potion = query[-1]
             query_stones = query[:-1]
 
-        # First check if the query_potion key is already a list. If not, create an empty list.
+        # first check if the query_potion key is already a list. if not, create an empty list.
         if exp_typ == 'composition':
             if query_potion not in support_to_query_mappings[support_key]:
                 support_to_query_mappings[support_key][query_potion] = [target_class_id]
@@ -142,7 +145,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             else:
                 support_to_query_mappings[support_key][feature_to_id_vocab[query_potion]].append(target_class_id)
 
-    # Store the predictions for each support key and query potion.
+    # store the predictions for each support key and query potion.
 
     support_to_query_per_epoch_predictions = {}
 
@@ -150,29 +153,43 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         support_to_query_per_epoch_predictions[epoch] = {}
         for support_key in support_to_query_mappings.keys():
             support_to_query_per_epoch_predictions[epoch][support_key] = {}
-            for potion in support_to_query_mappings[support_key].keys(): # For the composition experiments, this will be multiple potions.
+            for potion in support_to_query_mappings[support_key].keys(): # for the composition experiments, this will be multiple potions.
                 support_to_query_per_epoch_predictions[epoch][support_key][potion] = []
 
 
-    # Create another dict called composition_per_query_support_to_query_mappings that will store for each support_key, and each query_start_stone, the list of the target class ids for each potion combination.
+    # create another dict called composition_per_query_support_to_query_mappings that will store for each support_key, and each query_start_stone, the list of the target class ids for each potion combination.
 
     """
-    The following code block stores the mapping from support sets to query stones and potions for composition experiments. For each support key, it organizes the target class IDs based on the query stones and potions for that support key.
+    the following code block stores the mapping from support sets to query stones and potions for composition experiments. for each support key, it organizes the target class ids based on the query stones and potions for that support key.
     """
     if exp_typ == 'composition':
-        composition_per_query_support_to_query_mappings = {}
+        composition_per_query_support_to_query_mappings = {} # This is only for the subsampled data that was shown to the model.
+        composition_full_target_per_query_support_to_query_mappings = {} # This is for the full data, to get the full target class ids for each support and query stone combination.
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
             target_class_id = sample['target_class_id']
-            support = encoder_input_ids[:-(hop + 4)]  # Everything except last 5 tokens
+            support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
             support_key = tuple(support)
+
+            # Split the support key on '23' and sort the stones to create a normalized support key.
+            support_key_string = ' '.join(str(token_id) for token_id in support_key)
+            support_key = sorted([chunk.strip() for chunk in support_key_string.split('23')])
+
+            support_key = tuple(support_key)
+
+            # import pdb; pdb.set_trace()
+
+
+
             
-            # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
+
+            
+            # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
             query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-            query_potion = query[-hop:]  # Last hop tokens
+            query_potion = query[-hop:]  # last hop tokens
             query_stones = query[:-hop]
             
-            # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+            # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
             query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
             query_potion = query_potion_str
             
@@ -187,10 +204,72 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             else:
                 composition_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion].append(target_class_id)
 
+        # now do the same for the full target data.
+        for i, sample in enumerate(composition_full_target_data):
+            encoder_input_ids = sample['encoder_input_ids']
+            target_class_id = sample['target_class_id']
+            support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
+            support_key = tuple(support)
 
+            # Split the support key on '23' and sort the stones to create a normalized support key.
+            support_key_string = ' '.join(str(token_id) for token_id in support_key)
+            support_key = sorted([chunk.strip() for chunk in support_key_string.split('23')])
+
+            support_key = tuple(support_key)
+            
+            # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
+            query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+            query_potion = query[-hop:]  # last hop tokens
+            query_stones = query[:-hop]
+            
+            # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+            query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+            query_potion = query_potion_str
+            
+            query_stone_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_stones])
+            
+            if support_key not in composition_full_target_per_query_support_to_query_mappings:
+                composition_full_target_per_query_support_to_query_mappings[support_key] = {}
+            if query_stone_str not in composition_full_target_per_query_support_to_query_mappings[support_key]:
+                composition_full_target_per_query_support_to_query_mappings[support_key][query_stone_str] = {}
+            if query_potion not in composition_full_target_per_query_support_to_query_mappings[support_key][query_stone_str]:
+                composition_full_target_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion] = [target_class_id]
+            else:
+                composition_full_target_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion].append(target_class_id)
+
+        target_support_keys = list(composition_full_target_per_query_support_to_query_mappings.keys())
+        original_support_keys = list(composition_per_query_support_to_query_mappings.keys())
+        test = [1 for key in target_support_keys if key not in original_support_keys]
+        assert len(test) == 0, "Support keys in full target data do not match those in subsampled data."
+
+
+
+        # NEW: Create the mapping for all possible outcomes for each query stone, organized by support_key
+        per_query_reachable_stone_mapping = {}
+        for support_key, query_stones_map in composition_full_target_per_query_support_to_query_mappings.items():
+            per_query_reachable_stone_mapping[support_key] = defaultdict(set)
+            for query_stone_str, potions_map in query_stones_map.items():
+                for full_potion_sequence, target_stones in potions_map.items():
+                    per_query_reachable_stone_mapping[support_key][query_stone_str].update(target_stones)
+
+
+        # BUG FIX: Pre-calculate the correct reachable stones for each prefix
+        prefix_to_reachable_stones_mapping = {}
+        for support_key, query_stones_map in composition_full_target_per_query_support_to_query_mappings.items():
+            prefix_to_reachable_stones_mapping[support_key] = {}
+            for query_stone_str, potions_map in query_stones_map.items():
+                prefix_to_reachable_stones_mapping[support_key][query_stone_str] = {}
+                for overlap_count in range(1, hop):
+                    prefix_to_reachable_stones_mapping[support_key][query_stone_str][overlap_count] = defaultdict(set)
+
+                for full_potion_sequence, target_stones in potions_map.items():
+                    potion_tokens = full_potion_sequence.split(' | ')
+                    for overlap_count in range(1, hop):
+                        potion_prefix = ' | '.join(potion_tokens[:overlap_count])
+                        prefix_to_reachable_stones_mapping[support_key][query_stone_str][overlap_count][potion_prefix].update(target_stones)
 
         
-        # Now, for each query_stone for that support key, we can also store the predictions for each potion combination in a new dict.
+        # now, for each query_stone for that support key, we can also store the 'predictions' for each potion combination in a new dict.
         predictions_composition_per_query_support_to_query_mappings = {}
         for epoch in predictions_by_epoch.keys():
             predictions_composition_per_query_support_to_query_mappings[epoch] = {}
@@ -202,38 +281,44 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                         predictions_composition_per_query_support_to_query_mappings[epoch][support_key][query_stone_str][query_potion] = []
 
 
-        for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Organizing composition predictions by support, query stones, and potions"):
+        for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="organizing composition predictions by support, query stones, and potions"):
             for i, sample in enumerate(data):
                 encoder_input_ids = sample['encoder_input_ids']
                 target_class_id = sample['target_class_id']
                 predicted_class_id = predictions[i]
-                support = encoder_input_ids[:-(hop + 4)]  # Everything except last 5 tokens
+                support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
                 support_key = tuple(support)
 
-                # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
+                # Split the support key on '23' and sort the stones to create a normalized support key.
+                support_key_string = ' '.join(str(token_id) for token_id in support_key)
+                support_key = sorted([chunk.strip() for chunk in support_key_string.split('23')])
+                support_key = tuple(support_key)
+
+                # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
                 query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-                query_potion = query[-hop:]  # Last hop tokens
+                query_potion = query[-hop:]  # last hop tokens
                 query_stones = query[:-hop]
-                # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+                # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
                 query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
                 query_potion = query_potion_str
                 query_stone_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_stones])
 
-                # Now directly store the predicted class id in the corresponding dict.
-                predictions_composition_per_query_support_to_query_mappings[epoch][support_key][query_stone_str][query_potion].append(predicted_class_id) # The dictionary is already created above.
+                # now directly store the predicted class id in the corresponding dict.
+                predictions_composition_per_query_support_to_query_mappings[epoch][support_key][query_stone_str][query_potion].append(predicted_class_id) # the dictionary is already created above.
 
         
 
-        # Now we calculate metrics based on the above predictions and mappings.
-        # 1. For each query stone and potion combination, calculate if the prediction was in the support set. The support set is union of all the target class ids for that support key.
-        # 2. For each query stone and potion combination, calculate if the prediction was in the possible target class ids for that query stone (across all potion combinations) if the query output was in the support set.
+        # now we calculate metrics based on the above predictions and mappings.
+        # 1. for each query stone and potion combination, calculate if the prediction was in the support set. the support set is union of all the target class ids for that support key.
+        # 2. for each query stone and potion combination, calculate if the prediction was in the possible target class ids for that query stone (across all potion combinations) if the query output was in the support set.
+        # import pdb; pdb.set_trace()
 
         predicted_in_context_accuracies = []
         predicted_in_context_correct_candidate_accuracies = []
         correct_within_candidates = []
-        overlap_metrics_by_epoch = {}  # Initialize here, populate in the main loop
+        overlap_metrics_by_epoch = {}  # initialize here, populate in the main loop
 
-        for pred_epoch in tqdm(predictions_composition_per_query_support_to_query_mappings.keys(), desc="Analyzing composition epochs"):
+        for pred_epoch in tqdm(predictions_composition_per_query_support_to_query_mappings.keys(), desc="analyzing composition epochs"):
             correct = 0
             correct_candidate = 0
             total = 0
@@ -241,11 +326,11 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
             epoch_preds = predictions_composition_per_query_support_to_query_mappings[pred_epoch]
             
-            # Initialize overlap analysis for this epoch
+            # initialize overlap analysis for this epoch
             epoch_overlap_analysis = {}
 
             for support_key in composition_per_query_support_to_query_mappings.keys():
-                # Initialize for this support_key
+                # initialize for this support_key
                 if support_key not in epoch_overlap_analysis:
                     epoch_overlap_analysis[support_key] = {}
                     for overlap_count in range(1, hop):
@@ -253,19 +338,19 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 
                 res = list(composition_per_query_support_to_query_mappings[support_key].values())
                 all_target_class_ids = set([v[0] for sublist in res for k, v in sublist.items()])
-                assert len(all_target_class_ids) == 8, f"Expected 8 unique target class ids for support {support_key}, got {len(all_target_class_ids)}"
+                assert len(all_target_class_ids) == 8, f"expected 8 unique target class ids for support {support_key}, got {len(all_target_class_ids)}"
 
-                # For each query stone and potion combination, check the predictions
+                # for each query stone and potion combination, check the predictions
                 for query_stone_str in composition_per_query_support_to_query_mappings[support_key].keys():
                     for query_potion in composition_per_query_support_to_query_mappings[support_key][query_stone_str].keys():
                         
                         pred = epoch_preds[support_key][query_stone_str][query_potion][0]
                         total += 1
 
-                        # Get the set of target_class_ids for this query_stone and ALL potion combinations.
+                        # get the set of target_class_ids for this query_stone and all potion combinations.
                         possible_target_class_ids_for_this_query_stone = set([v for sublist in composition_per_query_support_to_query_mappings[support_key][query_stone_str].values() for v in sublist])
 
-                        # Calculate standard composition metrics
+                        # calculate standard composition metrics
                         if pred in all_target_class_ids:
                             predicted_in_context_count += 1
 
@@ -275,7 +360,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                                 if pred in composition_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion]:
                                     correct += 1
 
-                        # Populate overlap analysis - now organized by support_key
+                        # populate overlap analysis - now organized by support_key
                         potion_tokens = query_potion.split(' | ')
                         
                         for overlap_count in range(1, hop):
@@ -287,20 +372,33 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                             
                             # initialize potion_prefix dict if not exists
                             if potion_prefix not in epoch_overlap_analysis[support_key][overlap_count][query_stone_str]:
+                                # Use the pre-calculated reachable stones
+                                reachable_stones_for_prefix = prefix_to_reachable_stones_mapping[support_key][query_stone_str][overlap_count][potion_prefix]
                                 epoch_overlap_analysis[support_key][overlap_count][query_stone_str][potion_prefix] = {
-                                    'reachable_stones': set(),
+                                    'reachable_stones': reachable_stones_for_prefix,
                                     'full_sequences': [],
                                     'predictions': []
                                 }
                             
-                            # add reachable stones for this full sequence
-                            target_stones = composition_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion]
-                            epoch_overlap_analysis[support_key][overlap_count][query_stone_str][potion_prefix]['reachable_stones'].update(target_stones)
                             # add full sequence
                             epoch_overlap_analysis[support_key][overlap_count][query_stone_str][potion_prefix]['full_sequences'].append(query_potion)
                             
                             # add prediction
                             epoch_overlap_analysis[support_key][overlap_count][query_stone_str][potion_prefix]['predictions'].append(pred)
+                            # import pdb; pdb.set_trace()
+                    
+
+
+            
+            # calculate and store standard metrics
+            predicted_in_context_accuracy = predicted_in_context_count / total if total > 0 else 0
+            # predicted_in_context_accuracies.append(predicted_in_context_accuracy)
+            
+            predicted_in_context_correct_candidate_accuracy = correct_candidate / predicted_in_context_count if predicted_in_context_count > 0 else 0
+            # predicted_in_context_correct_candidate_accuracies.append(predicted_in_context_correct_candidate_accuracy)
+
+            correct_within_candidate = correct / correct_candidate if correct_candidate > 0 else 0
+            # correct_within_candidates.append(correct_within_candidate)
 
 
             # calculate overlap metrics for this epoch
@@ -308,161 +406,77 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             epoch_overlap_metrics = {}
 
             for overlap_count in range(1, hop):
-                # aggregated metrics across all support keys
-                predicted_reachable_total = 0
-                total_overlap_total = 0
-                all_predictions_total = []
-                all_reachable_total = set()
-                
-                # NEW: Track per-query-stone accuracies for unweighted averaging
-                all_query_stone_accuracies = []
-                
-                # per-support metrics
                 per_support_metrics = {}
-
-                # Define the list to store the per prefix reachable accuracies across query stones
-                all_query_stone_accuracies_per_prefix = []
                 
-                # iterate through each support key
                 for support_key in epoch_overlap_analysis.keys():
-                    predicted_reachable_support = 0
-                    total_overlap_support = 0
-                    all_predictions_support = []
-                    all_reachable_support = set()
                     
-                    # NEW: Track per-query-stone accuracies within this support
-                    per_query_stone_accuracies = []
-                    per_query_stone_metrics = {}
-                    per_query_stone_reachable_accuracies = []
-                    
-                    # iterate through query stones for this support key
+                    # This dict will hold the accuracy for each query stone for the current overlap_count
+                    per_query_accuracies = {}
+
                     for query_stone_str in epoch_overlap_analysis[support_key][overlap_count].keys():
-                        # Initialize counters for this specific query stone
-                        predicted_reachable_query_stone = 0
-                        total_overlap_query_stone = 0
-                        all_predictions_query_stone = []
-                        all_reachable_query_stone = set()
-                        reachable_per_prefix = {}
-
-                        # Define the reachable accuracy prefix wise.
-                        query_stone_reachable_accuracy_per_prefix = []
                         
-                        # Now calculate metrics for each prefix under this query stone
+                        # This list will hold the accuracy for each prefix of the current length
+                        prefix_accuracies = []
+
                         for potion_prefix, data in epoch_overlap_analysis[support_key][overlap_count][query_stone_str].items():
-                            query_prefix_reachable_stones = data['reachable_stones'] # set of reachable stones for this prefix and for this query stone. Size is 2 for two hop.
-                            predictions = data['predictions'] # list of predictions for this prefix and for this query stone.
-                            
-                            all_reachable_support.update(query_prefix_reachable_stones) # For this support key, what are all the reachable stones across ALL query stones and prefixes - it will update over time.
-                            # This is me writing for clarity: the union of all reachable stones for this support key across all query stones and prefixes. The size should be eight.
+                            predictions = data['predictions']
+                            reachable_stones_k = data['reachable_stones'] # Reachable set for prefix of length k
 
-                            all_reachable_query_stone.update(query_prefix_reachable_stones) 
 
-                            # Store the reachable stones for this prefix
-                            reachable_per_prefix[potion_prefix] = query_prefix_reachable_stones
-                            
-                            for pred in predictions: # Length of the this predictions should be 2 for the composition setting because I balance the samples for each query stone state.
-                                total_overlap_query_stone += 1 # At the end, the value of this should be 6.
-                                all_predictions_query_stone.append(pred)
+                            # Determine the denominator set based on overlap_count
+                            if overlap_count == 1:
+                                # For 1-potion overlap, the denominator is the set of all possible candidates for this query stone.
+                                denominator_set = per_query_reachable_stone_mapping[support_key][query_stone_str]
+                            else:
+                                # For k > 1, the denominator is the reachable set from the (k-1) prefix.
+                                parent_prefix = ' | '.join(potion_prefix.split(' | ')[:-1])
+                                denominator_set = epoch_overlap_analysis[support_key][overlap_count - 1][query_stone_str][parent_prefix]['reachable_stones']
+
+                            # Denominator: How many predictions fell into the denominator_set?
+                            preds_in_denominator = [p for p in predictions if p in denominator_set]
+                            denominator_count = len(preds_in_denominator)
+
+                            if denominator_count > 0:
+                                # Numerator: Of those, how many also fell into the more constrained set for the current prefix?
+                                numerator_count = sum(1 for p in preds_in_denominator if p in reachable_stones_k)
                                 
-                                total_overlap_support += 1
-                                all_predictions_support.append(pred)
-                                
-                                total_overlap_total += 1
-                                all_predictions_total.append(pred)
-                                
-                                if pred in query_prefix_reachable_stones: # Reachable stones FROM this prefix for THIS query stone.
-                                    predicted_reachable_query_stone += 1
-                                    predicted_reachable_support += 1
-                                    predicted_reachable_total += 1
+                                # Accuracy for this specific prefix
+                                prefix_accuracy = numerator_count / denominator_count
+                                prefix_accuracies.append(prefix_accuracy)
+                            # if pred_epoch == '100':
+                            #     import pdb; pdb.set_trace()
 
-                                    query_stone_reachable_accuracy_per_prefix.append(1)
-                                else:
-                                    query_stone_reachable_accuracy_per_prefix.append(0)
-                        
-                        #  Calculate and store accuracy for THIS query stone
-                        query_stone_accuracy = predicted_reachable_query_stone / total_overlap_query_stone if total_overlap_query_stone > 0 else 0.0
-                        
-                        query_stone_per_prefix_reachable_accuracy = np.mean(query_stone_reachable_accuracy_per_prefix) if query_stone_reachable_accuracy_per_prefix else 0.0
+                        # Average the accuracies across all prefixes for this query stone
+                        if prefix_accuracies:
+                            per_query_accuracies[query_stone_str] = np.mean(prefix_accuracies)
 
-
-
-
-                        per_query_stone_reachable_accuracies.append(query_stone_per_prefix_reachable_accuracy)
-
-                        all_query_stone_accuracies_per_prefix.append(query_stone_per_prefix_reachable_accuracy)
-                        per_query_stone_accuracies.append(query_stone_accuracy)
-                        all_query_stone_accuracies.append(query_stone_accuracy)
-
-                        # if pred_epoch == '050':
-                            # import pdb; pdb.set_trace()
-                        
-                        # Store per-query-stone metrics
-                        per_query_stone_metrics[query_stone_str] = {
-                            'reachable_accuracy': query_stone_accuracy,
-                            'total': total_overlap_query_stone,
-                            'predicted_reachable': predicted_reachable_query_stone,
-                            'prediction_distribution': Counter(all_predictions_query_stone),
-                            'reachable_stones': all_reachable_query_stone,
-                            'per_prefix_data': epoch_overlap_analysis[support_key][overlap_count][query_stone_str],
-                            # 'per_prefix_reachable_stones': reachable_per_prefix,
-                            'per_prefix_reachable_accuracy_per_query': query_stone_per_prefix_reachable_accuracy
-                        }
-                    
-                    # store per-support metrics
+                    # Calculate per-support metrics by averaging over query stones
                     per_support_metrics[support_key] = {
-                        # OLD: Weighted aggregation (what you're currently plotting)
-                        'reachable_accuracy_weighted': predicted_reachable_support / total_overlap_support if total_overlap_support > 0 else 0.0,
-                        
-                        # NEW: Unweighted per-query-stone average (what you want to plot)
-                        'reachable_accuracy_per_query_stone': np.mean(per_query_stone_accuracies) if per_query_stone_accuracies else 0.0,
-                        'per_query_stone_reachable_accuracy_per_prefix': np.mean(per_query_stone_reachable_accuracies) if per_query_stone_reachable_accuracies else 0.0,
-                        
-                        'per_prefix_reachable_accu'
-                        'total': total_overlap_support,
-                        'predicted_reachable': predicted_reachable_support,
-                        'prediction_distribution': Counter(all_predictions_support),
-                        'reachable_stones': all_reachable_support,
-                        'per_query_stone_data': epoch_overlap_analysis[support_key][overlap_count],
-                        'per_query_stone_metrics': per_query_stone_metrics,
-                        
-                        # NEW: Store individual query stone accuracies for variance analysis
-                        'per_query_stone_accuracies': per_query_stone_accuracies
+                        'incremental_learning_accuracy': np.mean(list(per_query_accuracies.values())) if per_query_accuracies else 0.0
                     }
-                
-                # store both aggregated and per-support metrics
+
                 epoch_overlap_metrics[overlap_count] = {
-                    # OLD: Weighted aggregation
-                    'reachable_accuracy_weighted': predicted_reachable_total / total_overlap_total if total_overlap_total > 0 else 0.0,
-                    
-                    # NEW: Unweighted per-query-stone average
-                    'reachable_accuracy_per_query_stone': np.mean(all_query_stone_accuracies) if all_query_stone_accuracies else 0.0,
-
-                    'per_query_stone_reachable_accuracy_per_prefix': np.mean(all_query_stone_accuracies_per_prefix) if all_query_stone_accuracies_per_prefix else 0.0,
-                    
-                    'total': total_overlap_total,
-                    'predicted_reachable': predicted_reachable_total,
-                    'prediction_distribution': Counter(all_predictions_total),
-                    'reachable_stones': all_reachable_total,
-                    'per_support_metrics': per_support_metrics
+                    'per_support_metrics': per_support_metrics,
                 }
+                
+            overlap_metrics_by_epoch[pred_epoch] = {
+                'epoch_overlap_metrics': epoch_overlap_metrics,
+                'predicted_in_context_accuracy': predicted_in_context_accuracy,
+                'predicted_in_context_correct_candidate_accuracy': predicted_in_context_correct_candidate_accuracy,
+                'correct_within_candidate': correct_within_candidate
+            }
 
+         # Extract standard metrics as lists for compatibility with plotting code
+        predicted_in_context_accuracies = []
+        predicted_in_context_correct_candidate_accuracies = []
+        correct_within_candidates = []
+        
+        for epoch_key in sorted(overlap_metrics_by_epoch.keys()):
+            predicted_in_context_accuracies.append(overlap_metrics_by_epoch[epoch_key]['predicted_in_context_accuracy'])
+            predicted_in_context_correct_candidate_accuracies.append(overlap_metrics_by_epoch[epoch_key]['predicted_in_context_correct_candidate_accuracy'])
+            correct_within_candidates.append(overlap_metrics_by_epoch[epoch_key]['correct_within_candidate'])
 
-            # store overlap metrics for this epoch
-            overlap_metrics_by_epoch[pred_epoch] = epoch_overlap_metrics
-
-            # Calculate and store standard metrics
-            predicted_in_context_accuracy = predicted_in_context_count / total if total > 0 else 0
-            predicted_in_context_accuracies.append(predicted_in_context_accuracy)
-            
-            predicted_in_context_correct_candidate_accuracy = correct_candidate / predicted_in_context_count if predicted_in_context_count > 0 else 0
-            predicted_in_context_correct_candidate_accuracies.append(predicted_in_context_correct_candidate_accuracy)
-
-            correct_within_candidate = correct / correct_candidate if correct_candidate > 0 else 0
-            correct_within_candidates.append(correct_within_candidate)
-
-        # Return overlap metrics along with existing metrics.
-        # import pdb; pdb.set_trace()
-        return (predicted_in_context_accuracies, predicted_in_context_correct_candidate_accuracies, 
+        return (predicted_in_context_accuracies, predicted_in_context_correct_candidate_accuracies,
                 correct_within_candidates, overlap_metrics_by_epoch)
 
 
@@ -472,6 +486,10 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     print("Decomposition / Held-out experiment.")
     if exp_typ in ['decomposition', 'held_out']:
         hop = 1
+
+
+    import pdb; pdb.set_trace()
+    
     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Organizing predictions by support and query"):
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
@@ -507,9 +525,16 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     predicted_in_context_other_half_accuracies = []
     predicted_in_context_correct_half_exact_accuracies = []
     predicted_correct_within_context = []
+
+
+
+    predicted_exact_out_of_all_108 = []
+
+
+
+    query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
     
     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Analyzing epochs"):
-        # print(f"\n--- Epoch {epoch} Half-Chemistry Analysis ---")
         correct = 0
         other_half_correct = 0
         total = 0
@@ -522,6 +547,10 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         correct_half_chemistry_count = 0
 
         predicted_correct_within_context_count = 0
+
+        predicted_exact_out_of_all_108_count = 0
+
+        per_epoch_query_stone_state_per_reward_binned_counts = {'-3': [], '-1': [], '1': [], '3': []}
         
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
@@ -541,6 +570,10 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             # else:
             query = encoder_input_ids[-5:]    # Last 5 tokens
             query_potion = query[-1]
+
+
+            # Get the reward value for the query stone to bin the accuracies later. Reward is the 4th feature in the stone state just before the potion.
+            query_start_stone_reward = feature_to_id_vocab[query[-2]]  # second last token in the query is the reward of the stone.
 
             # First we check if the predicted class ID is in any of the two half-chemistry sets for this support key.
             # import pdb; pdb.set_trace()
@@ -564,10 +597,18 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 assert len(combined_set) == 8, f"Expected 8 unique stones for support {support_key}, got {len(combined_set)}"
             else:
                 combined_set = set(correct_half_chemistry + other_half_chemistry)
-                assert len(combined_set) < 8, f"Expected 8 unique stones for support {support_key}, got {len(combined_set)}"
+                assert len(combined_set) <= 8, f"Expected 8 unique stones for support {support_key}, got {len(combined_set)}"
 
 
             # First do the classification for 8 vs 108.
+
+            if predicted_class_id == target_class_id:
+                predicted_exact_out_of_all_108_count += 1
+                
+
+
+
+
             if predicted_class_id in combined_set:
                 predicted_in_context_count += 1
 
@@ -614,17 +655,22 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         predicted_correct_within_context_accuracy = predicted_correct_within_context_count / predicted_in_context_count if predicted_in_context_count > 0 else 0 # The chance is 1/8 here.
         predicted_correct_within_context.append(predicted_correct_within_context_accuracy)
 
+        # Now calculate the exact out of all 108 accuracy.
+        predicted_exact_out_of_all_108_accuracy = predicted_exact_out_of_all_108_count / total if total > 0 else 0 # The chance is 1/108 here.
+        predicted_exact_out_of_all_108.append(predicted_exact_out_of_all_108_accuracy)
 
 
-    return predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, predicted_correct_within_context
+    return predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, \
+        predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, \
+        predicted_correct_within_context, predicted_exact_out_of_all_108
 
 
-def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix='', file_paths = None):
+def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix='', file_paths = None, file_paths_non_subsampled = None):
     """
     Load predictions and inputs/targets/predictions for specified experiment type and hop (if applicable).
     
     Args:
-        exp_typ: 'latent' or 'classification'
+        exp_typ: 'held_out', 'decomposition', or 'composition'
         hops: List of hop counts to load data for
     """ 
 
@@ -634,7 +680,7 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
     predictions_by_epoch_by_seed = {}
     
     inputs_by_seed = {}
-    targets_by_seed = {}
+    non_subsampled_targets_by_seed = {}
 
     # file_paths is a list 
     if file_paths is not None:
@@ -655,6 +701,34 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
             print("Loading data for seed ", seeds[i], " from path ", path)
             seed = seeds[i]
             predictions_by_epoch = {}
+
+            if exp_typ == 'composition' or exp_typ == 'decomposition':
+                if file_paths_non_subsampled is not None:
+                    non_subsampled_path = file_paths_non_subsampled[hop][i]
+                    # Check if the seed in the non_subsampled_path matches the current seed
+                    match_non_subsampled = re.search(r'seed_(\d+)', non_subsampled_path)
+                    if match_non_subsampled:
+                        seed_non_subsampled = int(match_non_subsampled.group(1))
+                        # import pdb; pdb.set_trace()
+                        if seed_non_subsampled != seed:
+                            # print(f"Warning: Seed mismatch between subsampled and non-subsampled paths: {seed} vs {seed_non_subsampled}. Proceeding anyway.")
+                            raise ValueError(f"Seed mismatch between subsampled and non-subsampled paths: {seed} vs {seed_non_subsampled}")
+                        else:
+                            non_subsampled_path_val_data = pickle.load(open(non_subsampled_path, 'rb'))
+                            # Iterate through the non-subsampled data to extract inputs and targets
+                            inputs_raw = []
+                            targets_raw = []
+                            for sample in non_subsampled_path_val_data:
+                                inputs_raw.append(sample['encoder_input_ids'])
+                                targets_raw.append(sample['target_class_id'])
+                            
+                            # Create a data_with_targets list
+                            data_with_targets_non_subsampled = [{'encoder_input_ids': inputs_raw[i], 'target_class_id': targets_raw[i]} for i in range(len(targets_raw))]
+                            print("Created non-subsampled data for seed ", seed, " with ", len(data_with_targets_non_subsampled), " samples.")
+                            non_subsampled_targets_by_seed[seed] = data_with_targets_non_subsampled
+                    else:
+                        raise ValueError(f"Seed not found in the provided non-subsampled file path: {non_subsampled_path}")
+                        
             
             for epoch in range(epoch_start, epoch_end + 1):
                 # Reformat the epoch_number because the files are saved with epoch numbers like 001, 002, ..., 1000
@@ -674,15 +748,27 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
             predictions_by_epoch_by_seed[seed] = predictions_by_epoch 
             inputs_raw_file_path = f'{path}/inputs_classification_epoch_001.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs.
             targets_raw_file_path = f'{path}/targets_classification_epoch_001.npz' # Use the last epoch number loaded.
+
             inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
             targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
             
             stacked_inputs = np.vstack(inputs_raw) # Flatten inputs from (39, 32, 181) to (1240, 181) 
             data_with_targets = [{'encoder_input_ids': stacked_inputs[i].tolist(), 'target_class_id': int(targets_raw[i])} for i in range(len(targets_raw))]
+            # if file_paths_non_subsampled is not None and exp_typ == 'composition' and hop > 2:
+            #     data_with_targets = [{
+            #         'encoder_input_ids': stacked_inputs[i].tolist(),
+            #         'target_class_id': int(targets_raw[i])} 
+            #     } for i in range(len(targets_raw)) if {
+            #         'encoder_input_ids': stacked_inputs[i].tolist(),
+            #     ]
             
             inputs_by_seed[seed] = data_with_targets
+        # import pdb; pdb.set_trace()
+        
+        if file_paths_non_subsampled is not None:
+            return predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_targets_by_seed
 
-        return predictions_by_epoch_by_seed, inputs_by_seed
+        return predictions_by_epoch_by_seed, inputs_by_seed, None
 
 
 
@@ -702,6 +788,7 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
             
             if exp_typ == 'held_out':
                 base_file_path = f'/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_{hop}/all_graphs/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_1_qhop_1/seed_{seed}/predictions'
+                # import pdb; pdb.set_trace()
                     
             elif exp_typ == 'decomposition':
                 base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_{hop}_qhop_1/seed_{seed}/predictions" 
@@ -747,7 +834,7 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
             print(f"Warning: Input/target files for seed {seed} not found, skipping...")
             continue
         
-    return predictions_by_epoch_by_seed, inputs_by_seed
+    return predictions_by_epoch_by_seed, inputs_by_seed, None
         
    
 import argparse
@@ -756,8 +843,15 @@ import argparse
 parser = argparse.ArgumentParser(description="Analyze model predictions for different experiment types and hops.")
 parser.add_argument('--exp_typ', type=str, choices=['held_out', 'decomposition', 'composition'], default='composition',
                     help="Type of experiment: 'held_out' or 'decomposition'")
-parser.add_argument('--hop', type=int, choices=[2, 3, 4, 5], default=4,
+parser.add_argument('--hop', type=int, choices=[1, 2, 3, 4, 5], default=4,
                     help="Hop count for decomposition and composition experiments (ignored for held_out)")
+parser.add_argument('--custom_output_file', type=str, default=None,
+                    help="Custom output file name for saving results")
+parser.add_argument('--get_output_file_from_input_path', action='store_true',
+                    help="Flag to generate output file name based on input file paths", default=False)
+
+parser.add_argument('--plot_individual_seeds', action='store_true',
+                    help="Flag to plot individual seed results", default=False)
 args = parser.parse_args()
 # exp_typ = 'decomposition'  # 'held_out' or 'decomposition'
 exp_typ = args.exp_typ
@@ -766,6 +860,8 @@ two_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
 three_hop_epoch_values_text = [0, 200, 600, 800, 999]
 four_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
 five_hop_epoch_values_text = [0, 200, 600, 800, 999]
+
+four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 500]
 
 # Create a dictionary mapping hop counts to their hop-specific epoch values
 hop_to_epoch_values = {
@@ -784,15 +880,23 @@ if exp_typ == 'decomposition':
         scheduler_prefix = 'cosine_restarts/'
     elif hop == 5:
         scheduler_prefix = ''
+elif exp_typ == 'held_out':
+    scheduler_prefix = ''
 
 # scheduler_prefix = '' 
 # seed_values = [2,3,4]
 if exp_typ == 'decomposition':
     # NOTE: Do not change this.
-    seed_values_2_hop = [2,3,4]
-    seed_values_3_hop = [0,1,2,3,4]
-    seed_values_4_hop = [2,3,4] # For the 4
-    seed_values_5_hop = [1,2,3]
+    seed_values_2_hop = [0, 16, 29]
+    # seed_values_3_hop = [0,1,2,3,4]
+    # seed_values_3_hop = [3] # For the 3 Testing with only seed 3 for 3-hop decomposition for now.
+    seed_values_3_hop = [0,16,29]
+    # seed_values_4_hop = [2,3,4] # For the 4
+    seed_values_4_hop = [0,16,29]
+    # seed_values_5_hop = [1,2,3]
+
+    # TEMP:
+    seed_values_5_hop = [0,2,16] 
 elif exp_typ == 'held_out':
     # NOTE: Do not change this.
     seed_values_2_hop = [2,3,4]
@@ -800,8 +904,13 @@ elif exp_typ == 'held_out':
     seed_values_4_hop = [2,3,4]
     seed_values_5_hop = [2,3,4]
 
+    hop_to_epoch_values = {
+        4: four_edge_held_out_epoch_values_text
+    }
+
 if exp_typ == 'decomposition' or exp_typ == 'held_out':
     seed_values_hop_dict = {
+        1: seed_values_2_hop,  # Placeholder for 1-hop, can be adjusted if needed
         2: seed_values_2_hop,
         3: seed_values_3_hop,
         4: seed_values_4_hop,
@@ -830,12 +939,124 @@ for 4 hop, can use seeds 2,3,4
 for 5 hop, use seed 1,2,3
 """
 # Load the for all the seeds.
+
+# Specific run names for each hop count and seed.
+"""
+2: 29: classification_xsmall_20251027-023153, 16: classification_xsmall_20251026-224313, 0: classification_xsmall_20251026-224309
+3: 29: classification_xsmall_20251027-071259, 16: classification_xsmall_20251027-034414, 0: classification_xsmall_20251026-231232
+4:
+5:
+"""
+
+
+decomposition_file_paths_non_subsampled = {
+    2: [
+        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+        ],
+
+    3: [
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_3_classification_filter_True_input_features_output_stone_states_data.pkl', 
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl',
+        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_4_classification_filter_True_input_features_output_stone_states_data.pkl'
+
+        # Good runs from wandb.
+        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+    ],
+    4: [
+        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_4_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl', 
+        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_4_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_4_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+    ],
+
+
+    5: [
+        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_2_classification_filter_True_input_features_output_stone_states_data.pkl',
+        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl'
+        ]
+}
+
+
+
+decomposition_file_paths = {
+    2: [
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_0/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_16/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/',
+        ],
+
+        # NOTE: Why are there so many files for 3-hop decomposition? It's because we wanted to see if different hyperparameter settings made a difference in when the final phase was being learned and if there was overlap with other stages.
+
+    3: [
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/predictions', 
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_3/predictions',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_3/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_3/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_29/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_4/predictions'
+
+        # Control runs:
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/predictions/'
+
+        # Good runs from wandb.
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_16/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_29/predictions/',
+
+        ],
+
+    4: [
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_0/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_16/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_29/predictions/'],
+
+    5: [
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_2/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_16/predictions'
+        
+        
+        
+        # Don't use
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_16/predictions/',
+        ]
+}
+
+
+composition_file_paths_non_subsampled = {
+    2: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+        ],
+    3: [
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_3_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_3_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_3_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+        ],
+    4: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_4_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_4_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_4_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+        ],
+    5: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_5_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_5_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_5_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+        ]
+}
+
 composition_file_paths = {
     2: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_step_lr/wd_0.001_lr_0.0001/step_size_165_gamma_0.2/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/predictions',
         '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_16/predictions', 
         '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_step_lr/wd_0.001_lr_0.0001/step_size_250_gamma_0.4/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_29/predictions'
         ],
-    3: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_0/predictions', 
+    3: [
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_0/predictions', 
         '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_16/predictions', 
         '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.1_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_29/predictions'],
 
@@ -848,13 +1069,18 @@ composition_file_paths = {
         '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_29/predictions']
 }
 
-predictions_by_epoch_by_seed, inputs_by_seed  = load_epoch_data(
+
+
+
+
+predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_composition_data  = load_epoch_data(
     exp_typ = exp_typ,
     hop = hop,
     epoch_range = (hop_to_epoch_values[hop][0], hop_to_epoch_values[hop][-1]),
     seeds = seed_values_hop_dict[hop],
     scheduler_prefix = scheduler_prefix,
-    file_paths = composition_file_paths[hop] if exp_typ == 'composition' else None
+    file_paths = composition_file_paths[hop] if exp_typ == 'composition' else decomposition_file_paths[hop] if exp_typ == 'decomposition' else None,
+    file_paths_non_subsampled = composition_file_paths_non_subsampled if exp_typ == 'composition' else None
 )
 # import pdb; pdb.set_trace()
 seed_data_files = {}
@@ -910,7 +1136,7 @@ for seed in predictions_by_epoch_by_seed.keys():
     vocab = seed_data_files[seed]['vocab']
     
     # Run the analysis
-    print("Running half-chemistry behavior analysis...")
+    print("Running half-chemistry behavior analysis")
     # model_selection_results = analyze_model_selection_behavior(
     #     data_with_predictions, 
     #     vocab, 
@@ -920,7 +1146,8 @@ for seed in predictions_by_epoch_by_seed.keys():
 
     # Get half_chemistry_analysis results.
     half_chemistry_results = analyze_half_chemistry_behaviour(
-        data_with_predictions, vocab, vocab['stone_state_to_id'], predictions_by_epoch, exp_typ=exp_typ, hop=hop
+        data_with_predictions, vocab, vocab['stone_state_to_id'], predictions_by_epoch, exp_typ=exp_typ, hop=hop,
+        composition_full_target_data = non_subsampled_composition_data[seed] if non_subsampled_composition_data is not None else None
     )
     if exp_typ == 'composition':
         predicted_in_context_accuracies, \
@@ -935,14 +1162,15 @@ for seed in predictions_by_epoch_by_seed.keys():
             'overlap_metrics_by_epoch': overlap_metrics_by_epoch
         }
     else:
-        predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, predicted_correct_within_context = half_chemistry_results
+        predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, predicted_correct_within_context, predicted_exact_out_of_all_108 = half_chemistry_results
         # Store results for this seed
         seed_results[seed] = {
             'predicted_in_context_accuracies': predicted_in_context_accuracies,
             'predicted_in_context_correct_half_accuracies': predicted_in_context_correct_half_accuracies,
             'predicted_in_context_other_half_accuracies': predicted_in_context_other_half_accuracies,
             'predicted_in_context_correct_half_exact_accuracies': predicted_in_context_correct_half_exact_accuracies,
-            'predicted_correct_within_context': predicted_correct_within_context
+            'predicted_correct_within_context': predicted_correct_within_context,
+            'predicted_exact_out_of_all_108': predicted_exact_out_of_all_108
         }
 
 # import pdb; pdb.set_trace()
@@ -950,10 +1178,11 @@ for seed in predictions_by_epoch_by_seed.keys():
 # Average results across seeds
 averaged_results = {}
 std_errors = {}
-metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context'] if exp_typ != 'composition' else ['predicted_in_context_accuracies', 'predicted_in_context_correct_candidate_accuracies', 'correct_within_candidates']
+individual_seed_results = {}
+metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108'] if exp_typ != 'composition' else ['predicted_in_context_accuracies', 'predicted_in_context_correct_candidate_accuracies', 'correct_within_candidates']
 for metric in metrics:
     all_seed_values = [seed_results[seed][metric] for seed in seed_results.keys()]
-    
+
     # Find the maximum length across all seeds
     max_length = max(len(values) for values in all_seed_values)
     
@@ -979,40 +1208,44 @@ for metric in metrics:
     # Now all sequences have the same length, can safely stack
     all_seed_values = np.array(padded_seed_values)
     averaged_results[metric] = np.mean(all_seed_values, axis=0)
+
+    individual_seed_results[metric] = all_seed_values
+
     std_errors[metric] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
     print(f"\nAveraged {metric} over seeds:")
 
 # Plot the averaged results with error bars using fill_between
-plt.figure(figsize=(14, 10))
 epochs = range(len(averaged_results['predicted_in_context_accuracies']))
 
 metrics = [
-    ('predicted_in_context_accuracies', 'Prediction in support (8 out of 108)'),
-    ('predicted_in_context_correct_half_accuracies', 'Correct Half accuracy (4 out of 8)'),
-    ('predicted_in_context_other_half_accuracies', 'Incorrect Half accuracy (4 out of 8)'),
-    ('predicted_in_context_correct_half_exact_accuracies', 'Within correct half Accuracy (1 out of 4)'),
-    # ('predicted_correct_within_context', 'Exact Accuracy (1 out of 8)'),
+    ('predicted_in_context_accuracies', 'P(A) (8 out of 108)'),
+    ('predicted_in_context_correct_half_accuracies', 'P(B | A) (4 out of 8)'),
+    ('predicted_in_context_other_half_accuracies', '1 - P(B|A) (4 out of 8)'),
+    ('predicted_in_context_correct_half_exact_accuracies', 'P(C|A ∩ B) (1 out of 4)'),
 ]
 if exp_typ == 'decomposition':
     # Only print the predicted_in_context_accuracies and the predicted_correct_within_context.
     metrics = [
-        ('predicted_in_context_accuracies', 'In-support gating (8 out of 108)'),
-        ('predicted_in_context_correct_half_accuracies', 'In-support gated correct half (4 out of 8)'),
-        ('predicted_in_context_correct_half_exact_accuracies', 'In-support gated within correct half (1 out of 4)'),
-        ('predicted_correct_within_context', 'Exact Accuracy (1 out of 8)'),
+        ('predicted_in_context_accuracies', 'P(A) (8 out of 108)'),
+        ('predicted_in_context_correct_half_accuracies', 'P(B | A) (4 out of 8)'),
+        ('predicted_in_context_correct_half_exact_accuracies', 'P(C | A ∩ B) (1 out of 4)'),
+        # ('predicted_correct_within_context', 'Exact Accuracy (1 out of 8)'),
+        ('predicted_exact_out_of_all_108', 'P(C) = P(A) . P(B | A) . P(C | A ∩ B) (1 out of 108)'),
     ]
 elif exp_typ == 'composition':
     metrics = [
-        ('predicted_in_context_accuracies', 'Prediction in support (8 out of 108)'),
-        ('predicted_in_context_correct_candidate_accuracies', 'Correct Candidate accuracy'),
-        ('correct_within_candidates', 'Within correct candidate Accuracy'),
+        ('predicted_in_context_accuracies', 'P(A) (8 out of 108)'),
+        ('predicted_in_context_correct_candidate_accuracies', 'P(B | A) (reachable out of 8)'),
+        ('correct_within_candidates', 'P(C | A ∩ B) (1 out of reachable)'),
     ]
 linestyles = {'predicted_in_context_accuracies': 'solid', 'predicted_correct_within_context': 'solid'}
+exact_match_cycle_colors = ['tab:blue', 'tab:green', 'tab:gray', 'tab:red']
+exact_match_out_of_108_color = exact_match_cycle_colors[hop - 2]
 colors = {
-    2: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:blue'},
-    3: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:green'},
-    4: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:gray'},
-    5: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:red'},
+    2: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:blue', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color},
+    3: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:green', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color},
+    4: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:gray', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color},
+    5: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:red', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color},
 }
 colors_composition = {
     2: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_candidate_accuracies': 'purple', 'correct_within_candidates': 'tab:blue'},
@@ -1028,6 +1261,57 @@ held_out_colors = {
     'predicted_in_context_correct_half_exact_accuracies': 'tab:red',
     # 'predicted_correct_within_context': 'tab:red',
 }
+if args.plot_individual_seeds:
+    # Plot the metrics for each seed in a separate panel using the individual_seed_results
+    fig = plt.figure(figsize=(30, 10))
+    gs = fig.add_gridspec(1, len(seed_results), hspace=0.4)
+    for i, seed in enumerate(seed_results.keys()):
+        ax = fig.add_subplot(gs[0, i])
+        epochs = range(len(individual_seed_results['predicted_in_context_accuracies'][i]))
+        for metric, label in metrics:
+            mean = individual_seed_results[metric][i]
+            # Do not plot the exact out of 108 for individual seeds
+            if metric == 'predicted_exact_out_of_all_108':
+                continue
+            ax.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(hop, {}).get(metric, 'black'))
+        ax.set_title(f'Seed {seed}', fontsize=16)
+        ax.set_xlabel('Epoch', fontsize=14)
+        ax.set_ylabel('Accuracy', fontsize=14)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(0, 1)
+    # plt.suptitle(f'Phasic learning of latent structure learning ({hop}-hop) - Individual Seeds', fontsize=20, y=1.02)
+    plt.tight_layout()
+    plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds.png')
+    plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds.pdf', bbox_inches='tight')
+
+    # Also plot the final exact 1 out of 108 accuracy across seeds
+    # Now for each of the seeds, plot the exact out of 108 accuracy in the same plot.
+    fig = plt.figure(figsize=(8, 6))
+    for i, seed in enumerate(seed_results.keys()):
+        mean = individual_seed_results['predicted_exact_out_of_all_108'][i]
+        plt.plot(epochs, mean, label=f'Seed {seed}', linewidth=2)
+    plt.xlabel('Epoch', fontsize=14)
+    plt.ylabel('Exact Accuracy (1 out of 108)', fontsize=14)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.title(f'Exact accuracy (1 out of 108) across seeds ({hop}-hop)', fontsize=16)
+    plt.legend(fontsize=10)
+    plt.grid(True, alpha=0.3)
+    plt.ylim(0, 1)
+    plt.tight_layout()
+    plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds.png')
+    plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds.pdf', bbox_inches='tight')
+
+    # Exit after plotting individual seeds
+    exit()
+
+
+
+
+
+plt.figure(figsize=(14, 10))
+
 for metric, label in metrics:
     mean = averaged_results[metric]
     sem = std_errors[metric]
@@ -1063,81 +1347,60 @@ plt.yticks(fontsize=24)
 #     plt.title(f'Phasic learning of intermediate stone inference ({hop}-hop)', fontsize=24, pad=60)
 # else:
 #     plt.title(f'Phasic learning of latent structure learning', fontsize=24, pad=60)
-plt.legend(fontsize=18, loc='upper center', bbox_to_anchor=(0.5, 1.10), ncol=2, frameon=True)
+plt.legend(fontsize=18, loc='upper center', bbox_to_anchor=(0.5, 1.16), ncol=2, frameon=True)
 plt.grid(True, alpha=0.3)
 plt.ylim(0, 1)
 # plt.tight_layout()
-plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.png')
-plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inches='tight')
+custom_output_file = args.custom_output_file
+if custom_output_file is not None:
+    plt.savefig(f'{custom_output_file}.png')
+    plt.savefig(f'{custom_output_file}.pdf', bbox_inches='tight')
+else:
+    if args.get_output_file_from_input_path:
+        file_paths = composition_file_paths if exp_typ == 'composition' else decomposition_file_paths if exp_typ == 'decomposition' else None
+        assert len(file_paths[hop]) == 1, "Currently only supports single file path to get output file name."
+        input_path = file_paths[hop][0]
+        # Extract only the 'complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8.5e-05' and the seed value from the input path. Use regex.
+        match = re.search(r'complete_graph/(.+?)/seed_(\d+)', input_path)
+        if match:
+            # Make sure to replace '/' with '_' in the extracted part.
+            extracted_part = match.group(1).replace('/', '_')
+            seed_value = match.group(2)
+            output_file_name = f"{exp_typ}_{hop}hop_{extracted_part}_seed_{seed_value}_phasic_learning_of_latent_structure.png"
+            plt.savefig(output_file_name)
+            plt.savefig(output_file_name.replace('.png', '.pdf'), bbox_inches='tight')
+    else:
+        plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.png')
+        plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inches='tight')
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # Create multi-panel figure for 3-hop case
-
-# Create multi-panel figure for 3-hop case
+# ==============================================================================
 if exp_typ == 'composition':
-
-    # Average overlap metrics across seeds
-    max_epochs = max(len(seed_results[seed]['predicted_in_context_accuracies']) for seed in seed_results.keys())    
-    averaged_overlap_metrics = {}
-    for overlap_count in range(1, hop):
-        averaged_overlap_metrics[overlap_count] = {
-            'reachable_accuracy_weighted': [],
-            'reachable_accuracy_per_query_stone': [],
-            'std_error_weighted': [],
-            'std_error_per_query_stone': [],
-            'per_prefix_reachable_accuracy': [],
-            'std_error_per_prefix_reachable_accuracy': []
-        }
-        
-        for epoch_idx in range(max_epochs):
-            epoch_accuracies_weighted = []
-            epoch_accuracies_per_query_stone = []
-            epoch_accuracies_per_query_stone_per_prefix = []
-            
-            for seed in seed_results.keys():
-                overlap_data = seed_results[seed]['overlap_metrics_by_epoch']
-                epoch_keys = sorted(overlap_data.keys())
     
-                if epoch_idx < len(epoch_keys):
-                    epoch_key = epoch_keys[epoch_idx]
-                    if overlap_count in overlap_data[epoch_key]:
-                        # Weighted accuracy (old metric)
-                        accuracy_weighted = overlap_data[epoch_key][overlap_count]['reachable_accuracy_weighted']
-                        epoch_accuracies_weighted.append(accuracy_weighted)
-                        
-                        # Per-query-stone-averaged accuracy (new metric)
-                        accuracy_per_query_stone = overlap_data[epoch_key][overlap_count]['reachable_accuracy_per_query_stone']
-                        accuracy_per_query_stone_per_prefix = overlap_data[epoch_key][overlap_count]['per_query_stone_reachable_accuracy_per_prefix']
-                        epoch_accuracies_per_query_stone.append(accuracy_per_query_stone)
-                        epoch_accuracies_per_query_stone_per_prefix.append(accuracy_per_query_stone_per_prefix)
-            
-            if epoch_accuracies_weighted:
-                averaged_overlap_metrics[overlap_count]['reachable_accuracy_weighted'].append(np.mean(epoch_accuracies_weighted))
-                averaged_overlap_metrics[overlap_count]['std_error_weighted'].append(
-                    np.std(epoch_accuracies_weighted) / np.sqrt(len(epoch_accuracies_weighted))
-                )
-            
-            if epoch_accuracies_per_query_stone:
-                averaged_overlap_metrics[overlap_count]['reachable_accuracy_per_query_stone'].append(np.mean(epoch_accuracies_per_query_stone))
-                averaged_overlap_metrics[overlap_count]['std_error_per_query_stone'].append(
-                    np.std(epoch_accuracies_per_query_stone) / np.sqrt(len(epoch_accuracies_per_query_stone))
-                )
-                
-                averaged_overlap_metrics[overlap_count]['per_prefix_reachable_accuracy'].append(np.mean(epoch_accuracies_per_query_stone_per_prefix, axis=0))
-                averaged_overlap_metrics[overlap_count]['std_error_per_prefix_reachable_accuracy'].append(
-                    np.std(epoch_accuracies_per_query_stone_per_prefix, axis=0) / np.sqrt(len(epoch_accuracies_per_query_stone_per_prefix))
-                )
-
-    fig = plt.figure(figsize=(18, 12))
-    gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
+    fig = plt.figure(figsize=(12, 16))
+    gs = fig.add_gridspec(2, 1, hspace=0.4)
     
-    # Panel A: Existing composition metrics (spans both columns, top row)
-    ax1 = fig.add_subplot(gs[0, :])
+    # Panel A: Standard composition metrics (left panel)
+    ax1 = fig.add_subplot(gs[0, 0])
     epochs = range(len(averaged_results['predicted_in_context_accuracies']))
     
     composition_metrics = [
         ('predicted_in_context_accuracies', 'In-support gating (8/108)', 'tab:blue'),
-        ('predicted_in_context_correct_candidate_accuracies', 'Correct candidate (3-4/8)', 'tab:orange'),
-        ('correct_within_candidates', 'Exact match (1/3-4)', 'tab:green'),
+        ('predicted_in_context_correct_candidate_accuracies', 'Correct candidate', 'tab:orange'),
+        ('correct_within_candidates', 'Exact match', 'tab:green'),
     ]
     
     for metric, label, color in composition_metrics:
@@ -1145,6 +1408,13 @@ if exp_typ == 'composition':
         sem = std_errors[metric]
         ax1.plot(epochs, mean, label=label, linewidth=2, color=color)
         ax1.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=color)
+         # Add text annotations at specific epochs
+        annotate_epochs = [0, 25, 50, 75, 100, 150, 175, 200]
+        for anno_epoch in annotate_epochs:
+            if anno_epoch < len(mean):
+                ax1.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
+                         fontsize=12, ha='center', va='bottom', color='black',
+                         bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.6))
     
     ax1.set_xlabel('Epoch', fontsize=18)
     ax1.set_ylabel('Accuracy', fontsize=18)
@@ -1154,18 +1424,59 @@ if exp_typ == 'composition':
     ax1.set_ylim(0, 1)
     ax1.tick_params(labelsize=14)
     
-    # Panel B: Overlap analysis line plot - BOTH weighted and per-query-stone metrics
-    ax2 = fig.add_subplot(gs[1, :])
+    # Panel B: Potion overlap metrics (right panel)
+    # Panel B: Incremental Learning Metrics (right panel)
+    ax2 = fig.add_subplot(gs[1, 0])
     
+    # Extract the incremental learning metrics from seed_results
+    max_epochs = max(len(seed_results[seed]['predicted_in_context_accuracies']) for seed in seed_results.keys())
+    averaged_incremental_metrics = {}
+    
+    for overlap_count in range(1, hop):
+        averaged_incremental_metrics[overlap_count] = {
+            'incremental_accuracy': [],
+            'std_error': []
+        }
+        
+        for epoch_idx in range(max_epochs):
+            epoch_accuracies = []
+            
+            for seed in seed_results.keys():
+                overlap_data = seed_results[seed]['overlap_metrics_by_epoch']
+                epoch_keys = sorted(overlap_data.keys())
+                
+                if epoch_idx < len(epoch_keys):
+                    epoch_key = epoch_keys[epoch_idx]
+                    if 'epoch_overlap_metrics' in overlap_data[epoch_key]:
+                        if overlap_count in overlap_data[epoch_key]['epoch_overlap_metrics']:
+                            # Get per-support metrics and average them
+                            per_support_metrics = overlap_data[epoch_key]['epoch_overlap_metrics'][overlap_count]['per_support_metrics']
+                            
+                            # Extract the aggregated metric for each support
+                            support_accuracies = []
+                            for support_key, metrics in per_support_metrics.items():
+                                if 'incremental_learning_accuracy' in metrics:
+                                    support_accuracies.append(metrics['incremental_learning_accuracy'])
+                            
+                            if support_accuracies:
+                                # Average across all supports for this seed
+                                epoch_accuracies.append(np.mean(support_accuracies))
+            
+            if epoch_accuracies:
+                averaged_incremental_metrics[overlap_count]['incremental_accuracy'].append(np.mean(epoch_accuracies))
+                averaged_incremental_metrics[overlap_count]['std_error'].append(
+                    np.std(epoch_accuracies) / np.sqrt(len(epoch_accuracies))
+                )
+    
+    # Plot overlap metrics
     overlap_colors = {1: 'tab:purple', 2: 'tab:cyan', 3: 'tab:pink', 4: 'tab:brown'}
     
-    # Plot per-query-stone-averaged accuracy (solid lines)
     for overlap_count in range(1, hop):
-        if overlap_count in averaged_overlap_metrics:
-            mean = averaged_overlap_metrics[overlap_count]['per_prefix_reachable_accuracy']
-            # sem = averaged_overlap_metrics[overlap_count]['std_error_per_query_stone']
+        if overlap_count in averaged_incremental_metrics and averaged_incremental_metrics[overlap_count]['incremental_accuracy']:
+            mean = averaged_incremental_metrics[overlap_count]['incremental_accuracy']
+            sem = averaged_incremental_metrics[overlap_count]['std_error']
             
-            label = f'{overlap_count}-potion (per-stone avg)'
+            label = f'P(R_{overlap_count} | R_{overlap_count-1})'
             color = overlap_colors.get(overlap_count, 'black')
             
             ax2.plot(epochs[:len(mean)], mean, label=label, linewidth=2.5, color=color, 
@@ -1174,97 +1485,52 @@ if exp_typ == 'composition':
                             np.array(mean) - np.array(sem), 
                             np.array(mean) + np.array(sem), 
                             alpha=0.2, color=color)
-    
-    # Plot weighted accuracy (dashed lines) for comparison
-    for overlap_count in range(1, hop):
-        if overlap_count in averaged_overlap_metrics:
-            mean = averaged_overlap_metrics[overlap_count]['reachable_accuracy_weighted']
-            sem = averaged_overlap_metrics[overlap_count]['std_error_weighted']
-            
-            label = f'{overlap_count}-potion (weighted)'
-            color = overlap_colors.get(overlap_count, 'black')
-            
-            ax2.plot(epochs[:len(mean)], mean, label=label, linewidth=1.5, color=color, 
-                    linestyle='dashed', alpha=0.7)
-            ax2.fill_between(epochs[:len(mean)], 
-                            np.array(mean) - np.array(sem), 
-                            np.array(mean) + np.array(sem), 
-                            alpha=0.1, color=color)
+
+            # Add text annotations at specific epochs
+            annotate_epochs = [0, 25, 50, 75, 100, 150, 175, 200]
+            for anno_epoch in annotate_epochs:
+                if anno_epoch < len(mean):
+                    ax2.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
+                             fontsize=12, ha='center', va='bottom', color='black',
+                             bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.6))
+
     
     ax2.set_xlabel('Epoch', fontsize=18)
-    ax2.set_ylabel('Reachable Stone Accuracy', fontsize=18)
-    ax2.set_title(f'B. Compositional Reasoning: Accuracy vs Potion Overlap', fontsize=20, fontweight='bold', pad=20)
-    ax2.legend(fontsize=12, loc='lower right', ncol=2)
+    ax2.set_ylabel('Incremental Learning Accuracy', fontsize=18)
+    ax2.set_title(f'B. Incremental Potion Learning ({hop}-hop)', fontsize=20, fontweight='bold', pad=20)
+    ax2.legend(fontsize=14, loc='lower right')
     ax2.grid(True, alpha=0.3)
     ax2.set_ylim(0, 1)
     ax2.tick_params(labelsize=14)
     
-    # Add annotation explaining both metrics
+    # Add annotation explaining the metric
     ax2.text(0.02, 0.98, 
-             'Solid lines: Per-query-stone average (unweighted)\n'
-             'Dashed lines: Weighted average across all predictions\n'
-             'Higher overlap → more constrained outcomes',
+             'Metric: P(Prediction in R_k | Prediction in R_{k-1})\n'
+             'Given model respected (k-1)-potion constraint,\n'
+             'did it also respect the k-potion constraint?\n'
+             'C = R_0 = All candidate stones for the query.',
              transform=ax2.transAxes, fontsize=11, verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
-    
-    # Panel C: Detailed breakdown for specific epochs (bottom row)
-    # Show early, middle, and late training
-    analysis_epochs = [0, len(epochs)//2, len(epochs)-1]
-    epoch_labels = ['Early (Epoch 0)', f'Mid (Epoch {analysis_epochs[1]})', f'Late (Epoch {len(epochs)-1})']
-    
-    for idx, (epoch_idx, epoch_label) in enumerate(zip(analysis_epochs, epoch_labels)):
-        ax = fig.add_subplot(gs[2, idx if idx < 2 else 1])
-        
-        # Get data for this epoch from one seed (for visualization)
-        seed = list(seed_results.keys())[0]
-        overlap_data = seed_results[seed]['overlap_metrics_by_epoch']
-        epoch_keys = sorted(overlap_data.keys())
-        
-        if epoch_idx < len(epoch_keys):
-            epoch_key = epoch_keys[epoch_idx]
-            
-            # Create grouped bar chart showing both metrics
-            overlap_counts = list(range(1, hop))
-            x = np.arange(len(overlap_counts))
-            width = 0.35
-            
-            # Per-query-stone accuracies
-            reachable_accs_per_stone = [overlap_data[epoch_key].get(oc, {}).get('reachable_accuracy_per_query_stone', 0)
-                                        for oc in overlap_counts]
-            
-            # Weighted accuracies
-            reachable_accs_weighted = [overlap_data[epoch_key].get(oc, {}).get('reachable_accuracy_weighted', 0) 
-                                      for oc in overlap_counts]
-            
-            bars1 = ax.bar(x - width/2, reachable_accs_per_stone, width, 
-                          label='Per-stone avg',
-                          color=[overlap_colors.get(oc) for oc in overlap_counts],
-                          alpha=0.8)
-            
-            bars2 = ax.bar(x + width/2, reachable_accs_weighted, width,
-                          label='Weighted',
-                          color=[overlap_colors.get(oc) for oc in overlap_counts],
-                          alpha=0.4,
-                          hatch='//')
-            
-            # Add value labels on bars
-            for bars in [bars1, bars2]:
-                for bar in bars:
-                    height = bar.get_height()
-                    ax.text(bar.get_x() + bar.get_width()/2., height,
-                           f'{height:.2f}', ha='center', va='bottom', 
-                           fontsize=10, fontweight='bold')
-            
-            ax.set_xlabel('Potion Overlap Count', fontsize=14)
-            ax.set_ylabel('Reachable Accuracy', fontsize=14)
-            ax.set_title(f'C{idx+1}. {epoch_label}', fontsize=16, fontweight='bold')
-            ax.set_ylim(0, 1)
-            ax.set_xticks(x)
-            ax.set_xticklabels(overlap_counts)
-            ax.legend(fontsize=11)
-            ax.grid(True, alpha=0.3, axis='y')
-            ax.tick_params(labelsize=12)
-    
-    plt.savefig(f'composition_{hop}_hop_comprehensive_overlap_analysis.png', dpi=300, bbox_inches='tight')
-    plt.savefig(f'composition_{hop}_hop_comprehensive_overlap_analysis.pdf', bbox_inches='tight')
-    print(f"\nSaved comprehensive multi-panel figure for {hop}-hop composition analysis")
+
+    if custom_output_file is not None:
+        plt.savefig(f'{custom_output_file}_comprehensive_analysis.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{custom_output_file}_comprehensive_analysis.pdf', bbox_inches='tight')
+    else:
+        if args.get_output_file_from_input_path:
+            file_paths = composition_file_paths if exp_typ == 'composition' else decomposition_file_paths if exp_typ == 'decomposition' else None
+            assert len(file_paths[hop]) == 1, "Currently only supports single file path to get output file name."
+            input_path = file_paths[hop][0]
+            # Extract only the 'complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8.5e-05' and the seed value from the input path. Use regex.
+            match = re.search(r'complete_graph/(.+?)/seed_(\d+)', input_path)
+            if match:
+                # Make sure to replace '/' with '_' in the extracted part.
+                extracted_part = match.group(1).replace('/', '_')
+                seed_value = match.group(2)
+                output_file_name = f"composition_{hop}hop_{extracted_part}_seed_{seed_value}_comprehensive_analysis.png"
+                plt.savefig(output_file_name, dpi=300, bbox_inches='tight')
+                plt.savefig(output_file_name.replace('.png', '.pdf'), bbox_inches='tight')
+        else:
+            plt.savefig(f'composition_{hop}_hop_comprehensive_analysis.png', dpi=300, bbox_inches='tight')
+            plt.savefig(f'composition_{hop}_hop_comprehensive_analysis.pdf', bbox_inches='tight')
+
+        print(f"\nSaved comprehensive two-panel figure for {hop}-hop composition analysis")
