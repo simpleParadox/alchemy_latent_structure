@@ -488,7 +488,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         hop = 1
 
 
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
     
     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Organizing predictions by support and query"):
         for i, sample in enumerate(data):
@@ -555,29 +555,26 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         per_epoch_complete_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
         per_epoch_within_support_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
         per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+
+        per_epoch_total_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+        per_epoch_in_support_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+        per_epoch_in_support_correct_half_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+
+
         
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
             target_class_id = sample['target_class_id']
             predicted_class_id = predictions[i]
-            support = encoder_input_ids[:-(hop + 4)]  # Everything except last 5 tokens
+            support = encoder_input_ids[:-(hop + 4)]
             support_key = tuple(support)
             
-            # if exp_typ == 'composition':
-            #     # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
-            #     query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-            #     query_potion = query[-hop:]  # Last hop tokens
-                
-            #     # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
-            #     query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
-            #     query_potion = query_potion_str
-            # else:
-            query = encoder_input_ids[-5:]    # Last 5 tokens
+            query = encoder_input_ids[-5:]
             query_potion = query[-1]
 
-
-            # Get the reward value for the query stone to bin the accuracies later. Reward is the 4th feature in the stone state just before the potion.
+            # Get the reward value for binning
             query_start_stone_reward = feature_to_id_vocab[query[-2]]  # second last token in the query is the reward of the stone.
+            # import pdb; pdb.set_trace()
 
             # First we check if the predicted class ID is in any of the two half-chemistry sets for this support key.
             # import pdb; pdb.set_trace()
@@ -606,36 +603,38 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
             # First do the classification for 8 vs 108.
 
+            per_epoch_total_samples_per_reward_bin[query_start_stone_reward] += 1
+
+            # First classification: exact match out of 108
             if predicted_class_id == target_class_id:
                 predicted_exact_out_of_all_108_count += 1
-
                 per_epoch_complete_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
-
+            
+            # Second classification: in-support
             if predicted_class_id in combined_set:
                 predicted_in_context_count += 1
+                
+                # NEW: Increment in-support total for this reward bin
+                per_epoch_in_support_samples_per_reward_bin[query_start_stone_reward] += 1
 
                 if predicted_class_id == target_class_id:
                     predicted_correct_within_context_count += 1
                     per_epoch_within_support_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
                 
-
-                # Now if the predicted class ID is in the combined set, we can check if it is in the correct half-chemistry set.
-                # This is conditional probability p(y in correct_half | x) * p(predicted_y in context_ids).
+                # Third classification: correct half
                 if predicted_class_id in correct_half_chemistry:
                     correct_half_chemistry_count += 1
+                    
+                    # NEW: Increment correct-half total for this reward bin
+                    per_epoch_in_support_correct_half_samples_per_reward_bin[query_start_stone_reward] += 1
 
                     if predicted_class_id == target_class_id:
-                        # This is another conditional probability p(y = target | y in correct_half, x) * p(y in correct_half | x) * p(predicted_y in context_ids).
                         within_class_correct += 1
                         per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
-
+                
                 elif predicted_class_id in other_half_chemistry:
-                    # This is also conditional probability p(y in other_half | x) * p(predicted_y in context_ids).\
                     other_half_correct += 1
 
-            else:
-                # This means the predicted class ID is not in either half-chemistry set and is technically and incorrect prediction.
-                pass
             total += 1
 
         # Now calculate accuracies and store them.
@@ -667,23 +666,30 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
         # Add the per-epoch reward binned accuracies to the overall accumulators.
         for reward_bin in complete_query_stone_state_per_reward_binned_accuracy.keys():
-            if total > 0:
-                accuracy = per_epoch_complete_query_stone_state_per_reward_binned_counts[reward_bin] / total
+            # Accuracy out of all 108
+            total_for_bin = per_epoch_total_samples_per_reward_bin[reward_bin]
+            if total_for_bin > 0:
+                accuracy = per_epoch_complete_query_stone_state_per_reward_binned_counts[reward_bin] / total_for_bin
             else:
                 accuracy = 0
             complete_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy)
 
-            if predicted_in_context_count > 0:
-                accuracy = per_epoch_within_support_query_stone_state_per_reward_binned_counts[reward_bin] / predicted_in_context_count
+            # Accuracy within support (conditional on being in-support for this reward bin)
+            in_support_for_bin = per_epoch_in_support_samples_per_reward_bin[reward_bin]
+            if in_support_for_bin > 0:
+                accuracy = per_epoch_within_support_query_stone_state_per_reward_binned_counts[reward_bin] / in_support_for_bin
             else:
                 accuracy = 0
             within_support_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy)
 
-            if correct_half_chemistry_count > 0:
-                accuracy = per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[reward_bin] / correct_half_chemistry_count
+            # Accuracy within support and correct half
+            in_support_correct_half_for_bin = per_epoch_in_support_correct_half_samples_per_reward_bin[reward_bin]
+            if in_support_correct_half_for_bin > 0:
+                accuracy = per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[reward_bin] / in_support_correct_half_for_bin
             else:
                 accuracy = 0
             within_support_within_half_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy)
+    # import pdb; pdb.set_trace()
 
 
     return predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, \
@@ -879,6 +885,9 @@ parser.add_argument('--get_output_file_from_input_path', action='store_true',
 
 parser.add_argument('--plot_individual_seeds', action='store_true',
                     help="Flag to plot individual seed results", default=False)
+
+parser.add_argument('--reward_binning_analysis_only', action='store_true',
+                    help="Flag to only perform reward binning analysis for the 4 edge held out experiment.", default=False)
 args = parser.parse_args()
 # exp_typ = 'decomposition'  # 'held_out' or 'decomposition'
 exp_typ = args.exp_typ
@@ -926,24 +935,20 @@ if exp_typ == 'decomposition':
     seed_values_5_hop = [0,2,16] 
 elif exp_typ == 'held_out':
     # NOTE: Do not change this.
-    seed_values_2_hop = [2,3,4]
-    seed_values_3_hop = [2,3,4]
     seed_values_4_hop = [2,3,4]
-    seed_values_5_hop = [2,3,4]
 
     hop_to_epoch_values = {
         4: four_edge_held_out_epoch_values_text
     }
 
-if exp_typ == 'decomposition' or exp_typ == 'held_out':
+if exp_typ == 'decomposition':
     seed_values_hop_dict = {
-        1: seed_values_2_hop,  # Placeholder for 1-hop, can be adjusted if needed
         2: seed_values_2_hop,
         3: seed_values_3_hop,
         4: seed_values_4_hop,
         5: seed_values_5_hop
     }
-if exp_typ == 'composition':
+elif exp_typ == 'composition':
     hop_to_epoch_values = {
         2: [0, 200, 400, 600, 800, 999],
         3: [0, 200, 400, 600, 800, 999],
@@ -957,7 +962,11 @@ if exp_typ == 'composition':
         4: [0, 16, 29],
         5: [0, 16, 29]
     }
-    
+else:
+    seed_values_hop_dict = {
+        4: seed_values_4_hop,
+    }
+
 
 """
 for 2 hop, use seeds
@@ -1214,10 +1223,164 @@ individual_seed_results = {}
 if exp_typ == 'decomposition':
     metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108']
 elif exp_typ == 'held_out':
-    metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108', \
-        'complete_query_stone_state_per_reward_binned_accuracy', 'within_support_query_stone_state_per_reward_binned_accuracy', 'within_support_within_half_query_stone_state_per_reward_binned_accuracy']
+    metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108']
+    if args.reward_binning_analysis_only:
+        metrics = ['complete_query_stone_state_per_reward_binned_accuracy', 'within_support_query_stone_state_per_reward_binned_accuracy', 'within_support_within_half_query_stone_state_per_reward_binned_accuracy']
 else:
     metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_candidate_accuracies', 'correct_within_candidates']
+
+if args.reward_binning_analysis_only and exp_typ == 'held_out':
+    # Doing per reward averaging only for held-out experiments.
+    complete_query_stone_state_per_reward_binned_accuracy_all_seeds = {'-3': [], '-1': [], '1': [], '3': []}
+    within_support_query_stone_state_per_reward_binned_accuracy_all_seeds = {'-3': [], '-1': [], '1': [], '3': []}
+    within_support_within_half_query_stone_state_per_reward_binned_accuracy_all_seeds = {'-3': [], '-1': [], '1': [], '3': []}
+
+    for metric in metrics:
+        for seed in seed_results.keys():
+            if metric == 'complete_query_stone_state_per_reward_binned_accuracy':
+                for reward_bin in complete_query_stone_state_per_reward_binned_accuracy_all_seeds.keys():
+                    complete_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin].append(
+                        seed_results[seed][metric][reward_bin]
+                    )
+            elif metric == 'within_support_query_stone_state_per_reward_binned_accuracy':
+                for reward_bin in within_support_query_stone_state_per_reward_binned_accuracy_all_seeds.keys():
+                    within_support_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin].append(
+                        seed_results[seed][metric][reward_bin]
+                    )
+            elif metric == 'within_support_within_half_query_stone_state_per_reward_binned_accuracy':
+                for reward_bin in within_support_within_half_query_stone_state_per_reward_binned_accuracy_all_seeds.keys():
+                    within_support_within_half_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin].append(
+                        seed_results[seed][metric][reward_bin]
+                    )
+
+    # STEP 1: Find the maximum epoch length across all seeds and reward bins
+    max_epoch_length = 0
+    for reward_bin in complete_query_stone_state_per_reward_binned_accuracy_all_seeds.keys():
+        for seed_values in complete_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin]:
+            if len(seed_values) > max_epoch_length:
+                max_epoch_length = len(seed_values)
+        for seed_values in within_support_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin]:
+            if len(seed_values) > max_epoch_length:
+                max_epoch_length = len(seed_values)
+        for seed_values in within_support_within_half_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin]:
+            if len(seed_values) > max_epoch_length:
+                max_epoch_length = len(seed_values)
+
+    print(f"Maximum epoch length across all seeds and reward bins: {max_epoch_length}")
+    
+    # STEP 2: Pad all sequences to the maximum length
+    for reward_bin in complete_query_stone_state_per_reward_binned_accuracy_all_seeds.keys():
+        # Pad complete_query_stone_state_per_reward_binned_accuracy
+        padded_seed_values = []
+        for values in complete_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin]:
+            if len(values) < max_epoch_length:
+                padded_values = list(values)
+                for epoch_idx in range(len(values), max_epoch_length):
+                    # Get values from all seeds that have this epoch
+                    available_values = [seed_vals[epoch_idx] for seed_vals in complete_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin] if len(seed_vals) > epoch_idx]
+                    if available_values:
+                        imputed_value = np.mean(available_values)
+                    else:
+                        imputed_value = values[-1]
+                    padded_values.append(imputed_value)
+                padded_seed_values.append(padded_values)
+            else:
+                padded_seed_values.append(values)
+        complete_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin] = padded_seed_values
+
+        # Pad within_support_query_stone_state_per_reward_binned_accuracy
+        padded_seed_values = []
+        for values in within_support_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin]:
+            if len(values) < max_epoch_length:
+                padded_values = list(values)
+                for epoch_idx in range(len(values), max_epoch_length):
+                    available_values = [seed_vals[epoch_idx] for seed_vals in within_support_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin] if len(seed_vals) > epoch_idx]
+                    if available_values:
+                        imputed_value = np.mean(available_values)
+                    else:
+                        imputed_value = values[-1]
+                    padded_values.append(imputed_value)
+                padded_seed_values.append(padded_values)
+            else:
+                padded_seed_values.append(values)
+        within_support_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin] = padded_seed_values
+
+        # Pad within_support_within_half_query_stone_state_per_reward_binned_accuracy
+        padded_seed_values = []
+        for values in within_support_within_half_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin]:
+            if len(values) < max_epoch_length:
+                padded_values = list(values)
+                for epoch_idx in range(len(values), max_epoch_length):
+                    available_values = [seed_vals[epoch_idx] for seed_vals in within_support_within_half_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin] if len(seed_vals) > epoch_idx]
+                    if available_values:
+                        imputed_value = np.mean(available_values)
+                    else:
+                        imputed_value = values[-1]
+                    padded_values.append(imputed_value)
+                padded_seed_values.append(padded_values)
+            else:
+                padded_seed_values.append(values)
+        within_support_within_half_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin] = padded_seed_values
+
+    # STEP 3: NOW compute averages and std errors from the PADDED data
+    averaged_results = {}
+    std_errors = {}
+    for reward_bin in complete_query_stone_state_per_reward_binned_accuracy_all_seeds.keys():
+        all_seed_values = np.array(complete_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin])
+        averaged_results[f'complete_query_stone_state_per_reward_binned_accuracy_{reward_bin}'] = np.mean(all_seed_values, axis=0)
+        std_errors[f'complete_query_stone_state_per_reward_binned_accuracy_{reward_bin}'] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
+        
+        all_seed_values = np.array(within_support_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin])
+        averaged_results[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}'] = np.mean(all_seed_values, axis=0)
+        std_errors[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}'] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
+        
+        all_seed_values = np.array(within_support_within_half_query_stone_state_per_reward_binned_accuracy_all_seeds[reward_bin])
+        averaged_results[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}'] = np.mean(all_seed_values, axis=0)
+        std_errors[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}'] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
+        
+        print(f"Averaged {metric} over seeds for reward bin {reward_bin} (after padding)")
+
+
+
+
+    # Now, we will plot the within_support_query_stone_state_per_reward_binned_accuracy, and within_support_within_half_query_stone_state_per_reward_binned_accuracy only.
+    # For the within_support_query_stone_state_per_reward_binned_accuracy, there will be 4 lines (one for each reward bin) and the style will be solid.
+    # For the within_support_within_half_query_stone_state_per_reward_binned_accuracy, there will be 4 lines (one for each reward bin) and the style will be dashed.
+    # Make sure the colors for the solid and dashed lines for the same reward bin are the same.
+
+    fig = plt.figure(figsize=(14, 10))
+    ax = fig.add_subplot(1, 1, 1)
+    epochs = range(len(averaged_results['within_support_query_stone_state_per_reward_binned_accuracy_-3']))
+    reward_bin_colors = {'-3': 'tab:olive', '-1': 'tab:cyan', '1': 'tab:pink', '3': 'tab:brown'}
+
+    for reward_bin in ['-3', '-1', '1', '3']:
+        # Plot within_support_query_stone_state_per_reward_binned_accuracy
+        mean_values = averaged_results[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+        std_error_values = std_errors[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+        ax.plot(epochs, mean_values, label=f'Within Support Accuracy Reward Bin {reward_bin}', color=reward_bin_colors[reward_bin], linestyle='dashed')
+        ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
+
+        # Plot within_support_within_half_query_stone_state_per_reward_binned_accuracy
+        mean_values = averaged_results[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+        std_error_values = std_errors[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+        ax.plot(epochs, mean_values, label=f'Within Support Within Half Accuracy Reward Bin {reward_bin}', color=reward_bin_colors[reward_bin], linestyle='solid')
+        ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
+
+    ax.set_xlabel('Epochs')
+    ax.set_ylabel('Accuracy')
+    ax.legend()
+    
+    plt.savefig(f'reward_binned_accuracy_analysis_hop_{hop}_{exp_typ}.png')
+    plt.savefig(f'reward_binned_accuracy_analysis_hop_{hop}_{exp_typ}.pdf', bbox_inches='tight')
+
+    exit(0)
+
+
+    # -----------------------------------------------------------------------------------------------
+
+
+
+
 for metric in metrics:
     all_seed_values = [seed_results[seed][metric] for seed in seed_results.keys()]
 
@@ -1261,6 +1424,7 @@ metrics = [
     ('predicted_in_context_other_half_accuracies', '1 - P(B|A) (4 out of 8)'),
     ('predicted_in_context_correct_half_exact_accuracies', 'P(C|A ∩ B) (1 out of 4)'),
 ]
+
 if exp_typ == 'decomposition':
     # Only print the predicted_in_context_accuracies and the predicted_correct_within_context.
     metrics = [
@@ -1348,7 +1512,10 @@ if args.plot_individual_seeds:
 
 
 
-plt.figure(figsize=(14, 10))
+# plt.figure(figsize=(14, 10))
+# if exp_typ == 'held_out' and args.reward_binning_analysis_only:
+#     # NOTE: For the reward binning analysis, we need to plot the metricscurves for each reward group separately. Thus, the averaging will also be separate across seeds.
+
 
 for metric, label in metrics:
     mean = averaged_results[metric]
