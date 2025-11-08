@@ -532,7 +532,9 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
 
 
-    query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
+    complete_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
+    within_support_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
+    within_support_within_half_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
     
     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Analyzing epochs"):
         correct = 0
@@ -550,7 +552,9 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
         predicted_exact_out_of_all_108_count = 0
 
-        per_epoch_query_stone_state_per_reward_binned_counts = {'-3': [], '-1': [], '1': [], '3': []}
+        per_epoch_complete_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+        per_epoch_within_support_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+        per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
         
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
@@ -604,16 +608,15 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
             if predicted_class_id == target_class_id:
                 predicted_exact_out_of_all_108_count += 1
-                
 
-
-
+                per_epoch_complete_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
 
             if predicted_class_id in combined_set:
                 predicted_in_context_count += 1
 
                 if predicted_class_id == target_class_id:
                     predicted_correct_within_context_count += 1
+                    per_epoch_within_support_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
                 
 
                 # Now if the predicted class ID is in the combined set, we can check if it is in the correct half-chemistry set.
@@ -624,6 +627,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                     if predicted_class_id == target_class_id:
                         # This is another conditional probability p(y = target | y in correct_half, x) * p(y in correct_half | x) * p(predicted_y in context_ids).
                         within_class_correct += 1
+                        per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
 
                 elif predicted_class_id in other_half_chemistry:
                     # This is also conditional probability p(y in other_half | x) * p(predicted_y in context_ids).\
@@ -660,9 +664,32 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         predicted_exact_out_of_all_108.append(predicted_exact_out_of_all_108_accuracy)
 
 
+
+        # Add the per-epoch reward binned accuracies to the overall accumulators.
+        for reward_bin in complete_query_stone_state_per_reward_binned_accuracy.keys():
+            if total > 0:
+                accuracy = per_epoch_complete_query_stone_state_per_reward_binned_counts[reward_bin] / total
+            else:
+                accuracy = 0
+            complete_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy)
+
+            if predicted_in_context_count > 0:
+                accuracy = per_epoch_within_support_query_stone_state_per_reward_binned_counts[reward_bin] / predicted_in_context_count
+            else:
+                accuracy = 0
+            within_support_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy)
+
+            if correct_half_chemistry_count > 0:
+                accuracy = per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[reward_bin] / correct_half_chemistry_count
+            else:
+                accuracy = 0
+            within_support_within_half_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy)
+
+
     return predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, \
         predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, \
-        predicted_correct_within_context, predicted_exact_out_of_all_108
+        predicted_correct_within_context, predicted_exact_out_of_all_108, \
+        (complete_query_stone_state_per_reward_binned_accuracy, within_support_query_stone_state_per_reward_binned_accuracy, within_support_within_half_query_stone_state_per_reward_binned_accuracy)
 
 
 def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix='', file_paths = None, file_paths_non_subsampled = None):
@@ -1162,7 +1189,9 @@ for seed in predictions_by_epoch_by_seed.keys():
             'overlap_metrics_by_epoch': overlap_metrics_by_epoch
         }
     else:
-        predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, predicted_correct_within_context, predicted_exact_out_of_all_108 = half_chemistry_results
+        predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, predicted_correct_within_context, predicted_exact_out_of_all_108, query_start_stone_reward_binning_analysis = half_chemistry_results
+        complete_query_stone_state_per_reward_binned_accuracy, within_support_query_stone_state_per_reward_binned_accuracy, within_support_within_half_query_stone_state_per_reward_binned_accuracy = query_start_stone_reward_binning_analysis
+
         # Store results for this seed
         seed_results[seed] = {
             'predicted_in_context_accuracies': predicted_in_context_accuracies,
@@ -1170,7 +1199,10 @@ for seed in predictions_by_epoch_by_seed.keys():
             'predicted_in_context_other_half_accuracies': predicted_in_context_other_half_accuracies,
             'predicted_in_context_correct_half_exact_accuracies': predicted_in_context_correct_half_exact_accuracies,
             'predicted_correct_within_context': predicted_correct_within_context,
-            'predicted_exact_out_of_all_108': predicted_exact_out_of_all_108
+            'predicted_exact_out_of_all_108': predicted_exact_out_of_all_108, 
+            'complete_query_stone_state_per_reward_binned_accuracy': complete_query_stone_state_per_reward_binned_accuracy,
+            'within_support_query_stone_state_per_reward_binned_accuracy': within_support_query_stone_state_per_reward_binned_accuracy,
+            'within_support_within_half_query_stone_state_per_reward_binned_accuracy': within_support_within_half_query_stone_state_per_reward_binned_accuracy
         }
 
 # import pdb; pdb.set_trace()
@@ -1179,7 +1211,13 @@ for seed in predictions_by_epoch_by_seed.keys():
 averaged_results = {}
 std_errors = {}
 individual_seed_results = {}
-metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108'] if exp_typ != 'composition' else ['predicted_in_context_accuracies', 'predicted_in_context_correct_candidate_accuracies', 'correct_within_candidates']
+if exp_typ == 'decomposition':
+    metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108']
+elif exp_typ == 'held_out':
+    metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108', \
+        'complete_query_stone_state_per_reward_binned_accuracy', 'within_support_query_stone_state_per_reward_binned_accuracy', 'within_support_within_half_query_stone_state_per_reward_binned_accuracy']
+else:
+    metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_candidate_accuracies', 'correct_within_candidates']
 for metric in metrics:
     all_seed_values = [seed_results[seed][metric] for seed in seed_results.keys()]
 
