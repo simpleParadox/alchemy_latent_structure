@@ -35,7 +35,8 @@ def preprocess_and_save_dataset(
     chunk_size: int = 10000,
     input_format: str = None,
     output_format: str = None,
-    num_query_samples: int = None
+    num_query_samples: int = None,
+    use_same_reward_value: bool = False
 ):
     """
     Preprocess a dataset and save it to disk.
@@ -87,6 +88,7 @@ def preprocess_and_save_dataset(
         input_format=input_format,
         output_format=output_format,
         num_query_samples=num_query_samples,
+        use_same_reward_value=use_same_reward_value
     )
     
     # Generate output filenames based on input file and parameters
@@ -204,18 +206,20 @@ def main():
     
     parser = argparse.ArgumentParser(description="Preprocess Alchemy datasets")
     parser.add_argument("--train_json_file", type=str, required=False,
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/decomposition_shuffled_support_generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_.json",
-                        # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/subsampled_balanced_complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_3_seed_.json",
-                        # default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositionalchemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
-                        default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_5_seed_.json',
+                        default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        # default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2_seed_.json',
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/decomposition_shuffled_support_generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_.json",
-                        # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_5_qhop_1_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/subsampled_balanced_complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_3_seed_.json",
-                        # default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
-                        default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_5_seed_.json',
+                        default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        # default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_.json',
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
@@ -224,9 +228,11 @@ def main():
     # parser.add_argument("--output_dir", type=str, default="src/data/subsampled_balanced_complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes",
                         # help="Directory to save preprocessed files")
     parser.add_argument("--output_dir", type=str, 
-                        # default="src/data/shuffled_held_out_exps_preprocessed_separate_enhanced",
+                        default="src/data/same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced",
                         # default='src/data/decomposition_shuffled_support_preprocessed',
-                        default='src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed',
+                        # default='src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed',
+                        # default='src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes',
+                        # default='src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed',
                         help="Directory to save preprocessed files")
     parser.add_argument("--filter_query_from_support", action="store_true", default=True,
                         help="Filter query examples from support sets")
@@ -240,12 +246,12 @@ def main():
                         help="Output format: 'stone_states' for classification targets, 'features' for multi-hot vectors. Default inferred from task_type.")
     parser.add_argument("--num_query_samples", type=int, default=None,
                         help="Number of query samples to use (for debugging). Default is None (use all).")
+    parser.add_argument("--use_same_reward_value", action="store_true", default=False,
+                        help="Use the same reward value for all features when input_format or output_format is 'features'.")
     
     args = parser.parse_args()
     
-    print("="*60)
     print("PREPROCESSING TRAINING DATA")
-    print("="*60)
     
     # Do some assertions here.
     if args.output_format == 'features':
@@ -254,7 +260,10 @@ def main():
         assert args.task_type in ['classification', 'seq2seq_stone_state']
     
     # for seed in [0, 1, 2]:
-    for seed in [0,1,2,3,4]:
+    # seeds = [0, 16, 29]
+    # seeds = [0, 16, 29]
+    seeds = [2,3,4]
+    for seed in seeds:
         train_json_file = args.train_json_file.replace(f"seed_", f"seed_{seed}")
         val_json_file = args.val_json_file.replace(f"seed_", f"seed_{seed}")
         # Preprocess training data first (this will create the vocabulary)
@@ -270,7 +279,8 @@ def main():
             chunk_size=args.chunk_size,
             input_format=args.input_format,
             output_format=args.output_format,
-            num_query_samples=args.num_query_samples
+            num_query_samples=args.num_query_samples,
+            use_same_reward_value=args.use_same_reward_value
         )
         
         print("\n" + "="*60)

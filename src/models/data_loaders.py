@@ -390,7 +390,8 @@ class AlchemyDataset(Dataset):
                  input_format: Optional[str] = None,
                  output_format: Optional[str] = None,
                  model_architecture: str = "encoder", 
-                 num_query_samples: int = None):
+                 num_query_samples: int = None,
+                 use_same_reward_value: bool = False):
         
         self.task_type = task_type
         self.filter_query_from_support = filter_query_from_support
@@ -459,7 +460,7 @@ class AlchemyDataset(Dataset):
                 print("Using original preprocessing (preprocessed data disabled)...")
             
             self._initialize_from_scratch(json_file_path, vocab_word2idx, vocab_idx2word, stone_state_to_id,
-                                          num_query_samples=num_query_samples)
+                                          num_query_samples=num_query_samples, use_same_reward_value=use_same_reward_value)
 
         # Create train/val splits if requested
         self.train_set = None
@@ -582,7 +583,7 @@ class AlchemyDataset(Dataset):
 
     def _initialize_from_scratch(self, json_file_path: str, vocab_word2idx: Dict[str, int] = None, 
                                 vocab_idx2word: Dict[int, str] = None, stone_state_to_id: Dict[str, int] = None,
-                                num_query_samples: int = None):
+                                num_query_samples: int = None, use_same_reward_value: bool = False):
         """Initialize dataset from scratch with separate input/output vocabularies."""
         
         if vocab_word2idx and vocab_idx2word:
@@ -596,7 +597,7 @@ class AlchemyDataset(Dataset):
             self.idx2word = vocab_idx2word
         else:
             # Build separate input and output vocabularies
-            self._build_separate_vocabularies(json_file_path)
+            self._build_separate_vocabularies(json_file_path, use_same_reward_value=use_same_reward_value)
 
         # Set token IDs from input vocabulary (since these are used for processing)
         self.pad_token_id = self.input_word2idx[self.PAD_TOKEN_STR]
@@ -692,7 +693,7 @@ class AlchemyDataset(Dataset):
         
         return full_example_tokens, query_input_tokens, tokenized_output_feature_tokens, initial_state_str, output_state_str 
 
-    def _build_feature_potion_vocab(self, json_file_path: str) -> Tuple[Dict[str, int], Dict[int, str]]:
+    def _build_feature_potion_vocab(self, json_file_path: str, use_same_reward_value: bool) -> Tuple[Dict[str, int], Dict[int, str]]:
         # Renamed from _build_vocab to be specific
         all_words: Set[str] = set()
         with open(json_file_path, 'r') as f:
@@ -720,6 +721,18 @@ class AlchemyDataset(Dataset):
         
         sorted_words = sorted(list(all_words))
         word2idx = {word: i for i, word in enumerate(sorted_words + self.special_tokens)}
+        
+        if use_same_reward_value:
+            print("Using same index for reward features '-1', '-3', '1', '3' for debugging. Make sure this is intended!")
+            # Change '-1', '-3', '1', '3' to have the same 'values' in the word2idx - this is for debugging.
+            same_reward = word2idx['1']
+            word2idx['-3'] = same_reward
+            word2idx['-1'] = same_reward
+            word2idx['3'] = same_reward
+                
+                
+            
+            
         idx2word = {i: word for word, i in word2idx.items()}
         return word2idx, idx2word
 
@@ -831,14 +844,14 @@ class AlchemyDataset(Dataset):
         
         return word2idx, idx2word
 
-    def _build_separate_vocabularies(self, json_file_path: str):
+    def _build_separate_vocabularies(self, json_file_path: str, use_same_reward_value: bool = False):
         """Build separate input and output vocabularies based on formats."""
         
         # Build input vocabulary
         if self.input_format == "stone_states":
             self.input_word2idx, self.input_idx2word = self._build_stone_state_potion_vocab(json_file_path, for_input=True)
         elif self.input_format == "features":
-            self.input_word2idx, self.input_idx2word = self._build_feature_potion_vocab(json_file_path) # This adds the potions and the special tokens.
+            self.input_word2idx, self.input_idx2word = self._build_feature_potion_vocab(json_file_path, use_same_reward_value=use_same_reward_value) # This adds the potions and the special tokens.
         
         # Build output vocabulary  
         if self.output_format == "stone_states":

@@ -81,13 +81,12 @@ def main():
 
         # Composition combining.
 
-        input_files.append(f"/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_{hop}_seed_0.json")
-        input_files.append(f"/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_{hop}_seed_0.json")
+        input_files.append(f"/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_{hop}_seed_0.json")
+        input_files.append(f"/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_{hop}_seed_0.json")
     
         # Make the output file with the same directory and the same name as the first input file but with _combined.json suffix
         output_file = input_files[0].replace("seed_0.json", "combined.json")
         combine_episodes(input_files, output_file)
-    
     
     
 if __name__ == "__main__":

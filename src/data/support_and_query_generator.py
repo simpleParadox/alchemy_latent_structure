@@ -531,6 +531,9 @@ def generate_support_and_query_examples(
                 query_samples_info.append(q_info)
                 query_generated_samples.add(q_str)
                 count_for_this_node += 1
+                
+        # Print the total number of query samples generated for each start node
+        print("Total query samples generated:", len(query_samples)) # should be 24 for a single chemistry.
 
     all_samples_data = {
         "support": samples,
@@ -572,9 +575,9 @@ def main():
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=10000,
                         help="Number of samples to generate for each episode")
-    parser.add_argument("--support_steps", type=int, default=1,
+    parser.add_argument("--support_steps", type=int, default=2,
                         help="Minimum number of transformation steps in each sample")
-    parser.add_argument("--query_steps", type=int, default=2,
+    parser.add_argument("--query_steps", type=int, default=1,
                         help="Maximum number of transformation steps in each sample")
     
     parser.add_argument("--shuffle_support", action="store_true",
@@ -585,7 +588,8 @@ def main():
                         help="Create a validation set from the training set", default=True)
     parser.add_argument("--process_complete_graph_only", action="store_true",
                         help="Process the complete graphs only", default=True)
-    parser.add_argument("--output_dir", default="src/data/complete_graph_composition_cluster_shuffled_balanced_grouped_by_unique_end_state_generated_data",
+    parser.add_argument("--output_dir", type=str, default="src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes",
+        # "--output_dir", default="src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data",
                         help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced, generated_data_enhanced_qnodes_in_snodes_complete_graphs_only
     
     # Add a new argument for your experiment
@@ -594,7 +598,7 @@ def main():
     parser.add_argument("--num_held_out_edges", type=int, default=4,
                         help="Number of edges to hold out for the held-out color pair experiment. Default is 1. Ignored if --held_out_color_exp is not set.")
 
-    parser.add_argument("--max_queries_per_start_node", type=int, default=6,
+    parser.add_argument("--max_queries_per_start_node", type=int, default=10000,
                         help="Maximum number of query samples to generate per start node. Default is 6.")
 
     args = parser.parse_args()
@@ -609,13 +613,14 @@ def main():
     num_episodes = len(chemistry_graphs)
     print(f"Loaded data for {num_episodes} episodes")
     
-    seeds = [0, 1, 2, 3, 4]
+    # seeds = [0, 1, 2, 3, 4]
+    # seeds = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    # seeds = [21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+    seeds = [0, 16, 29]
     for seed in seeds:
         print("Using seed:", seed)
     
         random.seed(seed)
-        
-        
 
         # Split episodes into training and validation sets if requested
         if args.create_val_from_train:
