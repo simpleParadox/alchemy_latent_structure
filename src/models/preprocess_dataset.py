@@ -36,7 +36,6 @@ def preprocess_and_save_dataset(
     input_format: str = None,
     output_format: str = None,
     num_query_samples: int = None,
-    use_same_reward_value: bool = False
 ):
     """
     Preprocess a dataset and save it to disk.
@@ -88,7 +87,6 @@ def preprocess_and_save_dataset(
         input_format=input_format,
         output_format=output_format,
         num_query_samples=num_query_samples,
-        use_same_reward_value=use_same_reward_value
     )
     
     # Generate output filenames based on input file and parameters
@@ -210,7 +208,8 @@ def main():
                         # default="/home/rsaha/projects/dm_alchemy/src/data/decomposition_shuffled_support_generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/subsampled_balanced_complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_3_seed_.json",
-                        default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/same_reward_shuffled_held_out_exps_generated_data_enhanced/normalized_compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         # default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_2_seed_.json',
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
@@ -218,7 +217,8 @@ def main():
                         # default="/home/rsaha/projects/dm_alchemy/src/data/decomposition_shuffled_support_generated_data/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_2_qhop_1_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_val_shop_5_qhop_1_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/subsampled_balanced_complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_3_seed_.json",
-                        default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/same_reward_shuffled_held_out_exps_generated_data_enhanced/normalized_compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         # default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_.json',
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
@@ -246,8 +246,6 @@ def main():
                         help="Output format: 'stone_states' for classification targets, 'features' for multi-hot vectors. Default inferred from task_type.")
     parser.add_argument("--num_query_samples", type=int, default=None,
                         help="Number of query samples to use (for debugging). Default is None (use all).")
-    parser.add_argument("--use_same_reward_value", action="store_true", default=False,
-                        help="Use the same reward value for all features when input_format or output_format is 'features'.")
     
     args = parser.parse_args()
     
@@ -262,7 +260,7 @@ def main():
     # for seed in [0, 1, 2]:
     # seeds = [0, 16, 29]
     # seeds = [0, 16, 29]
-    seeds = [2,3,4]
+    seeds = [0,1,2,3,4]
     for seed in seeds:
         train_json_file = args.train_json_file.replace(f"seed_", f"seed_{seed}")
         val_json_file = args.val_json_file.replace(f"seed_", f"seed_{seed}")
@@ -280,7 +278,6 @@ def main():
             input_format=args.input_format,
             output_format=args.output_format,
             num_query_samples=args.num_query_samples,
-            use_same_reward_value=args.use_same_reward_value
         )
         
         print("\n" + "="*60)
