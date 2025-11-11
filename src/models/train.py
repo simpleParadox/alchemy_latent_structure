@@ -1347,7 +1347,10 @@ def main():
             held_out_edge_number = held_out_edge_match.group(1)
             print(f"Held-out color number extracted: {held_out_edge_number}")
         args.save_dir = os.path.join(args.save_dir, f"held_out_color_exp")
-        args.save_dir = os.path.join(args.save_dir, f"held_out_edges_{held_out_edge_number}")
+        if 'same_reward' in args.preprocessed_dir:
+            args.save_dir = os.path.join(args.save_dir, f"same_reward_held_out_color_{held_out_edge_number}")
+        else:
+            args.save_dir = os.path.join(args.save_dir, f"held_out_edges_{held_out_edge_number}")
     
     if ('subsampled_complete_graph' in args.train_data_path) or ('subsampled_complete_graph' in args.preprocessed_dir):
         args.save_dir = os.path.join(args.save_dir, f"subsampled_complete_graph")

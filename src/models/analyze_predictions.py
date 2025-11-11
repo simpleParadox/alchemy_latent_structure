@@ -1347,28 +1347,34 @@ if args.reward_binning_analysis_only and exp_typ == 'held_out':
     # For the within_support_query_stone_state_per_reward_binned_accuracy, there will be 4 lines (one for each reward bin) and the style will be solid.
     # For the within_support_within_half_query_stone_state_per_reward_binned_accuracy, there will be 4 lines (one for each reward bin) and the style will be dashed.
     # Make sure the colors for the solid and dashed lines for the same reward bin are the same.
-
     fig = plt.figure(figsize=(14, 10))
     ax = fig.add_subplot(1, 1, 1)
+    ax.grid(True, alpha=0.3)
     epochs = range(len(averaged_results['within_support_query_stone_state_per_reward_binned_accuracy_-3']))
     reward_bin_colors = {'-3': 'tab:olive', '-1': 'tab:cyan', '1': 'tab:pink', '3': 'tab:brown'}
 
     for reward_bin in ['-3', '-1', '1', '3']:
         # Plot within_support_query_stone_state_per_reward_binned_accuracy
-        mean_values = averaged_results[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-        std_error_values = std_errors[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-        ax.plot(epochs, mean_values, label=f'Within Support Accuracy Reward Bin {reward_bin}', color=reward_bin_colors[reward_bin], linestyle='dashed')
-        ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
+        # mean_values = averaged_results[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+        # std_error_values = std_errors[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+        # ax.plot(epochs, mean_values, label=f'Within Support Accuracy Reward Bin {reward_bin}', color=reward_bin_colors[reward_bin], linestyle='dashed')
+        # ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
 
         # Plot within_support_within_half_query_stone_state_per_reward_binned_accuracy
         mean_values = averaged_results[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
         std_error_values = std_errors[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-        ax.plot(epochs, mean_values, label=f'Within Support Within Half Accuracy Reward Bin {reward_bin}', color=reward_bin_colors[reward_bin], linestyle='solid')
+        ax.plot(epochs, mean_values, label=f'Query stone with reward feature = {reward_bin}', color=reward_bin_colors[reward_bin], linestyle='solid')
         ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
 
-    ax.set_xlabel('Epochs')
-    ax.set_ylabel('Accuracy')
-    ax.legend()
+    ax.set_xlabel('Epochs', fontsize=26)
+    ax.set_ylabel('Accuracy', fontsize=26)
+    
+    ax.legend(fontsize=18, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2, frameon=True)
+
+    # Set xticks size and yticks size
+    ax.tick_params(axis='x', labelsize=24)
+    ax.tick_params(axis='y', labelsize=24)
+    plt.ylim(0, 1.0)
     
     plt.savefig(f'reward_binned_accuracy_analysis_hop_{hop}_{exp_typ}.png')
     plt.savefig(f'reward_binned_accuracy_analysis_hop_{hop}_{exp_typ}.pdf', bbox_inches='tight')
