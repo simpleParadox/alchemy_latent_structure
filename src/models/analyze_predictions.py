@@ -20,6 +20,73 @@ def create_reverse_stone_mapping(stone_state_to_id):
     """Create reverse mapping from class ID to stone state string."""
     return {v: k for k, v in stone_state_to_id.items()}
 
+
+def extract_support_transitions(support_ids, input_vocab, stone_state_to_id):
+    """
+    Parse transitions from the support segment.
+
+    Pattern (in tokens):
+        input_4_feature_tokens  potion  <io>  output_4_feature_tokens  <item_sep> ...
+
+    Returns:
+        transitions: list of (input_class_id, output_class_id)
+        stone_ids_in_support: set of all stone class_ids that appear as input/output
+    """
+    idx2word = {v: k for k, v in input_vocab.items()}
+    io_tok = '<io>'
+    item_sep_tok = '<item_sep>'
+    io_id = input_vocab[io_tok]
+    item_sep_id = input_vocab[item_sep_tok]
+
+    tokens = [idx2word[t] for t in support_ids]
+    transitions = []
+    stone_ids_in_support = set()
+
+    i = 0
+    while i + 4 <= len(tokens):
+        # Need: input_4_feat, potion, <io>, output_4_feat
+        if i + 4 + 1 + 1 + 4 > len(tokens):
+            break
+
+        in_feat = tokens[i:i+4]
+        potion = tokens[i+4]
+        sep = tokens[i+5]
+
+        if sep != io_tok:
+            # Not matching the pattern, shift by 1 and continue
+            i += 1
+            raise ValueError(f"Expected <io> token but got {sep} at position {i+5}")
+
+        out_feat = tokens[i+6:i+10]
+
+        # Build stone state strings
+        in_color, in_size, in_round, in_reward = in_feat
+        out_color, out_size, out_round, out_reward = out_feat
+
+        in_state_str = f"{{color: {in_color}, size: {in_size}, roundness: {in_round}, reward: {in_reward}}}"
+        out_state_str = f"{{color: {out_color}, size: {out_size}, roundness: {out_round}, reward: {out_reward}}}"
+
+        in_id = stone_state_to_id.get(in_state_str)
+        out_id = stone_state_to_id.get(out_state_str)
+
+        if in_id is not None:
+            stone_ids_in_support.add(in_id)
+        if out_id is not None:
+            stone_ids_in_support.add(out_id)
+
+        if in_id is not None and out_id is not None:
+            transitions.append((in_id, out_id))
+
+        # Move i past this transition: 4 + 1 + 1 + 4 = 10 tokens
+        i += 10
+        # If there is an <item_sep>, skip it
+        if i < len(tokens) and tokens[i] == item_sep_tok:
+            i += 1
+
+    return transitions, stone_ids_in_support
+
+
+
 def parse_stone_states_from_input(encoder_input_ids, input_vocab, stone_state_to_id):
     """
     Parse stone states from encoder_input_ids based on the pattern:
@@ -73,6 +140,702 @@ def parse_stone_states_from_input(encoder_input_ids, input_vocab, stone_state_to
     
     return stone_states
 
+
+def analyze_non_support_transition_behavior(data, vocab, stone_state_to_id, predictions_by_epoch, exp_typ='held_out', hop=4):
+    """
+    Analyze non-support transition prediction behavior for the 4-edge held-out experiment.
+    
+    For each chemistry (support_key) and each query stone:
+      1. Find stones in the support for which NO transition from that query exists in the support set.
+      2. Measure model behavior when predictions fall among these non-support stones.
+    
+    We additionally group metrics by query reward ('3', '-3', '1', '-1').
+    """
+    assert exp_typ == 'held_out', "non-support transition analysis is designed for held_out exp."
+
+    reverse_stone_mapping = create_reverse_stone_mapping(stone_state_to_id)
+    input_vocab = vocab['input_word2idx']
+    feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+
+    # ----------------------------------------------------------
+    # 1) Precompute transitions and neighbor sets per chemistry
+    # ----------------------------------------------------------
+    # neighbors_per_chemistry[support_key][input_id] = set(output_ids)
+    neighbors_per_chemistry = {}
+    # support_stones_per_chemistry[support_key] = set(stone_ids in this support)
+    support_stones_per_chemistry = {}
+
+    for sample in data:
+        encoder_input_ids = sample['encoder_input_ids']
+        support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
+        support_key = tuple(support)
+
+        if support_key in neighbors_per_chemistry:
+            continue  # already processed this chemistry
+
+        transitions, stone_ids_in_support = extract_support_transitions(support, input_vocab, stone_state_to_id)
+
+        support_stones_per_chemistry[support_key] = stone_ids_in_support
+
+        neighbors = defaultdict(set)
+        for in_id, out_id in transitions:
+            neighbors[in_id].add(out_id)
+        neighbors_per_chemistry[support_key] = neighbors
+
+    # ----------------------------------------------------------
+    # 2) Initialize metrics structures
+    # ----------------------------------------------------------
+    non_support_metrics = {
+        epoch: {
+            reward: {
+                'total_non_support_preds': 0,
+                'correct_within_non_support': 0,
+                'total_queries': 0,  # denominator for P(pred in non-support | query reward)
+                'total_in_support_preds': 0  # denominator for P(pred in non-support | pred in support, query reward)
+            }
+            for reward in ['3', '-3', '1', '-1']
+        }
+        for epoch in predictions_by_epoch.keys()
+    }
+
+    # ----------------------------------------------------------
+    # 3) Iterate over epochs and samples
+    # ----------------------------------------------------------
+    for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Analyzing non-support transitions"):
+        for i, sample in enumerate(data):
+            encoder_input_ids = sample['encoder_input_ids']
+            target_class_id = sample['target_class_id']
+            predicted_class_id = predictions[i]
+
+            # Support / chemistry
+            support = encoder_input_ids[:-(hop + 4)]
+            support_key = tuple(support)
+
+            # Decode query stone (last 5 tokens = 4 features + potion)
+            query = encoder_input_ids[-5:]
+            query_feat_ids = query[:-1]
+            query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+            q_color, q_size, q_round, q_reward = query_features
+            query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+            query_stone_id = stone_state_to_id[query_state_str]
+            query_reward = q_reward  # e.g., '3', '-1', etc.
+
+            # Update query count for this reward
+            if query_reward in non_support_metrics[epoch]:
+                non_support_metrics[epoch][query_reward]['total_queries'] += 1
+
+            support_stones = support_stones_per_chemistry[support_key]
+            neighbors = neighbors_per_chemistry[support_key].get(query_stone_id, set())
+
+            # Non-support set for this query: stones in support with no q→* transition, excluding q itself
+            non_support_targets = support_stones - neighbors - {query_stone_id}
+
+
+            # Only consider queries for which we are tracking this reward
+            if query_reward in non_support_metrics[epoch]:
+               # First: did the model predict within the support set at all?
+               if predicted_class_id in support_stones:
+                   non_support_metrics[epoch][query_reward]['total_in_support_preds'] += 1
+
+                   # Within those, check if the prediction is in the non-support subset
+                   if predicted_class_id in non_support_targets:
+                       non_support_metrics[epoch][query_reward]['total_non_support_preds'] += 1
+                       if predicted_class_id == target_class_id:
+                           non_support_metrics[epoch][query_reward]['correct_within_non_support'] += 1
+
+    # ----------------------------------------------------------
+    # 4) Convert counts to per-epoch accuracies
+    # ----------------------------------------------------------
+    non_support_accuracies = {
+        reward: {
+            'p_pred_in_non_support': [],
+            'p_correct_given_non_support': []
+        }
+        for reward in ['3', '-3', '1', '-1']
+    }
+
+    for epoch in sorted(predictions_by_epoch.keys()):
+        for reward in ['3', '-3', '1', '-1']:
+            stats = non_support_metrics[epoch][reward]
+            total_q = stats['total_queries']
+            total_non = stats['total_non_support_preds']
+            correct_non = stats['correct_within_non_support']
+            total_in_support = stats['total_in_support_preds']
+
+            # P(pred in non-support | pred in support, query reward)
+            p_in_non = total_non / total_in_support if total_in_support > 0 else 0.0
+            # P(correct | pred in non-support)
+            p_correct = correct_non / total_non if total_non > 0 else 0.0
+
+            non_support_accuracies[reward]['p_pred_in_non_support'].append(p_in_non)
+            non_support_accuracies[reward]['p_correct_given_non_support'].append(p_correct)
+
+    return non_support_accuracies, non_support_metrics
+
+
+# def analyze_adjacency_behavior(data, vocab, stone_state_to_id, predictions_by_epoch, exp_typ='held_out', hop=4):
+#     """
+#     Analyze adjacency-based prediction behavior for the 4-edge held-out experiment.
+    
+#     For each query stone (grouped by reward feature), calculate:
+#     1. Within adjacent (reachable by reward) accuracy: P(pred in reachable_rewards | pred in support)
+#     2. Correct target within adjacent: P(exact target | pred in reachable_rewards)
+#     3. [NEW] Within connected neighbors accuracy: P(pred in connected_neighbors | pred in support)
+    
+#     Reachable stones definition:
+#     - Reachable by reward: Stones having the reward values expected for neighbors.
+#     - Connected neighbors: Stones actually linked to the query stone in the support graph.
+#     """
+    
+#     reverse_stone_mapping = create_reverse_stone_mapping(stone_state_to_id)
+#     input_vocab = vocab['input_word2idx']
+#     feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+    
+#     # Define reachable rewards for each query stone reward
+#     # This maps query reward -> list of reachable stone rewards
+#     reachable_reward_mapping = {
+#         '3': ['1', '1', '1'],      # 3 stones with +1
+#         '-3': ['-1', '-1', '-1'],      # 3 stones with -1
+#         '1': ['3', '-1', '-1', '-1'], # 1 with +3, 3 with -1
+#         '-1': ['-3', '1', '1', '1']  # 1 with -3, 3 with +1
+#     }
+    
+#     # Initialize tracking for each epoch and query reward
+#     adjacency_metrics = {
+#         epoch: {
+#             reward: {
+#                 'total_in_support': 0,
+#                 'in_support_and_reachable': 0, # Reachable by reward value
+#                 'total_reachable': 0,
+#                 'reachable_and_correct': 0,
+#                 'in_support_and_connected': 0, # Actually connected in graph
+#                 'in_support_and_true_adjacent': 0, # [NEW] Connected in support OR target
+#             } for reward in reachable_reward_mapping.keys()
+#         } for epoch in predictions_by_epoch.keys()
+#     }
+    
+#     # Pre-compute graph structure for each support set to find connected neighbors
+#     # We can reuse logic similar to analyze_non_support_transition_behavior
+#     neighbors_per_chemistry = defaultdict(lambda: defaultdict(set))
+    
+#     # We need to iterate data once to build graphs if we want to be efficient, 
+#     # or we can do it inside the loop if dataset is small enough. 
+#     # Given the structure, let's do it on the fly or pre-compute. 
+#     # Let's pre-compute for safety and clarity.
+#     print("Pre-computing chemistry graphs...")
+#     for sample in data:
+#         encoder_input_ids = sample['encoder_input_ids']
+#         support = encoder_input_ids[:-(hop + 4)]
+#         support_key = tuple(support)
+        
+#         if support_key not in neighbors_per_chemistry:
+#             # Extract transitions: (start_stone_id, end_stone_id)
+#             # extract_support_transitions returns (transitions_list, stone_ids_set)
+#             transitions_list, _ = extract_support_transitions(list(support), input_vocab, stone_state_to_id)
+#             for start_id, end_id in transitions_list:
+#                 if start_id is not None and end_id is not None:
+#                     neighbors_per_chemistry[support_key][start_id].add(end_id)
+
+
+#     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Analyzing adjacency behavior"):
+#         for i, sample in enumerate(data):
+#             encoder_input_ids = sample['encoder_input_ids']
+#             target_class_id = sample['target_class_id']
+#             predicted_class_id = predictions[i]
+            
+#             # Extract query stone reward (second-to-last token in query)
+#             query = encoder_input_ids[-5:]  # Last 5 tokens
+#             query_stone_reward = feature_to_id_vocab[query[-2]]
+            
+#             # Decode query stone ID to find its specific neighbors
+#             query_feat_ids = query[:-1]
+#             query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+#             q_color, q_size, q_round, q_reward = query_features
+#             query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+#             query_stone_id = stone_state_to_id.get(query_state_str)
+
+#             # Get support set (all 8 stones in the chemistry)
+#             support = encoder_input_ids[:-(hop + 4)]
+#             support_key = tuple(support)
+            
+#             stone_states_in_input = parse_stone_states_from_input(
+#                 encoder_input_ids, input_vocab, stone_state_to_id
+#             )
+#             support_stone_ids = set([
+#                 stone_id for _, stone_id in stone_states_in_input 
+#                 if stone_id is not None
+#             ])
+
+#             assert len(support_stone_ids) == 8, f"Expected 8 stones in support, got {len(support_stone_ids)}"
+            
+#             # Get predicted stone info
+#             if predicted_class_id not in reverse_stone_mapping:
+#                 continue
+                
+#             predicted_stone_state_str = reverse_stone_mapping[predicted_class_id]
+#             predicted_reward = re.search(r'reward: (\+?-?\d+)', predicted_stone_state_str).group(1)
+            
+#             # Determine reachable rewards for this query stone
+#             reachable_rewards = reachable_reward_mapping[query_stone_reward]
+            
+#             # Determine actual connected neighbors for this specific query stone
+#             connected_neighbors = neighbors_per_chemistry[support_key].get(query_stone_id, set())
+
+#             true_adjacent_set = connected_neighbors.union({target_class_id})
+#             import pdb; pdb.set_trace()
+
+#             # Metric 1: Check if prediction is in support
+#             if predicted_class_id in support_stone_ids:
+#                 adjacency_metrics[epoch][query_stone_reward]['total_in_support'] += 1
+                
+#                 # Metric 2: Check if prediction is reachable (adjacent or same reward in other half)
+#                 if predicted_reward in reachable_rewards:
+#                     adjacency_metrics[epoch][query_stone_reward]['in_support_and_reachable'] += 1
+#                     adjacency_metrics[epoch][query_stone_reward]['total_reachable'] += 1
+                    
+#                     # Metric 3: Check if it's the exact correct target
+#                     if predicted_class_id == target_class_id:
+#                         adjacency_metrics[epoch][query_stone_reward]['reachable_and_correct'] += 1
+                
+#                 # Metric 4: Check if prediction is an actual connected neighbor (support only)
+#                 if predicted_class_id in connected_neighbors:
+#                     adjacency_metrics[epoch][query_stone_reward]['in_support_and_connected'] += 1
+
+#                 # Metric 5: Check if prediction is in true_adjacent_set
+#                 if predicted_class_id in true_adjacent_set:
+#                     adjacency_metrics[epoch][query_stone_reward]['in_support_and_true_adjacent'] += 1
+    
+#     # Calculate accuracies over epochs
+#     adjacency_accuracies = {
+#         reward: {
+#             'within_reachable_acc': [],
+#             'correct_within_reachable_acc': [],
+#             'within_connected_acc': [],
+#             'within_true_adjacent_acc': [] # [NEW]
+#         } for reward in reachable_reward_mapping.keys()
+#     }
+    
+#     for epoch in sorted(adjacency_metrics.keys()):
+#         for reward in reachable_reward_mapping.keys():
+#             metrics = adjacency_metrics[epoch][reward]
+            
+#             # Accuracy 1: P(reachable | in-support)
+#             if metrics['total_in_support'] > 0:
+#                 reachable_acc = metrics['in_support_and_reachable'] / metrics['total_in_support']
+#                 connected_acc = metrics['in_support_and_connected'] / metrics['total_in_support']
+#                 true_adjacent_acc = metrics['in_support_and_true_adjacent'] / metrics['total_in_support'] # [NEW]
+#             else:
+#                 reachable_acc = 0
+#                 connected_acc = 0
+#                 true_adjacent_acc = 0
+#             adjacency_accuracies[reward]['within_reachable_acc'].append(reachable_acc)
+#             adjacency_accuracies[reward]['within_connected_acc'].append(connected_acc)
+#             adjacency_accuracies[reward]['within_true_adjacent_acc'].append(true_adjacent_acc) # [NEW]
+            
+            
+#             # Accuracy 2: P(exact target | reachable)
+#             if metrics['total_reachable'] > 0:
+#                 correct_acc = metrics['reachable_and_correct'] / metrics['total_reachable']
+#             else:
+#                 correct_acc = 0
+#             adjacency_accuracies[reward]['correct_within_reachable_acc'].append(correct_acc)
+    
+#     return adjacency_accuracies
+
+# def analyze_adjacency_behavior(data, vocab, stone_state_to_id, predictions_by_epoch):
+      ##  NOTE: This is a variant where the metrics are being calculated at the end.
+#     """
+#     Analyze adjacency-based prediction behavior for the 4-edge held-out experiment.
+#     """
+#     hop = 1
+    
+#     reverse_stone_mapping = create_reverse_stone_mapping(stone_state_to_id)
+#     input_vocab = vocab['input_word2idx']
+#     feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+    
+#     # Define reachable rewards for each query stone reward
+#     # This maps query reward -> set of reachable stone rewards
+#     # Using sets for O(1) lookup
+#     reachable_reward_mapping = {
+#         '3': {'1'},          # +15 connects to +1
+#         '-3': {'-1'},        # -3 connects to -1
+#         '1': {'3', '-1'},    # +1 connects to +15 and -1
+#         '-1': {'-3', '1'}    # -1 connects to -3 and +1
+#     }
+    
+#     # Initialize tracking for each epoch and query reward
+#     adjacency_metrics = {
+#         epoch: {
+#             reward: {
+#                 'total_in_support': 0,
+#                 'in_support_and_reachable': 0, # Reachable by reward value (Stone-based)
+#                 'total_reachable': 0,
+#                 'reachable_and_correct': 0,
+#                 'in_support_and_connected': 0, # Actually connected in graph
+#                 'in_support_and_true_adjacent': 0, # Connected in support OR target
+#             } for reward in reachable_reward_mapping.keys()
+#         } for epoch in predictions_by_epoch.keys()
+#     }
+    
+#     # Pre-compute graph structure
+#     neighbors_per_chemistry = defaultdict(lambda: defaultdict(set))
+    
+#     print("Pre-computing chemistry graphs...")
+#     for sample in data:
+#         encoder_input_ids = sample['encoder_input_ids']
+#         support = encoder_input_ids[:-5]
+#         support_key = tuple(support)
+        
+#         if support_key not in neighbors_per_chemistry:
+#             transitions_list, _ = extract_support_transitions(list(support), input_vocab, stone_state_to_id)
+#             for start_id, end_id in transitions_list:
+#                 if start_id is not None and end_id is not None:
+#                     neighbors_per_chemistry[support_key][start_id].add(end_id)
+#     # import pdb; pdb.set_trace()
+
+#     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Analyzing adjacency behavior"):
+#         for i, sample in enumerate(data):
+#             encoder_input_ids = sample['encoder_input_ids']
+#             target_class_id = sample['target_class_id']
+#             predicted_class_id = predictions[i]
+            
+#             # Extract query stone reward
+#             query = encoder_input_ids[-5:]
+#             query_stone_reward = feature_to_id_vocab[query[-2]]
+            
+#             # Decode query stone ID
+#             query_feat_ids = query[:-1]
+#             query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+#             q_color, q_size, q_round, q_reward = query_features
+#             query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+#             query_stone_id = stone_state_to_id.get(query_state_str)
+
+#             # Get support set
+#             support = encoder_input_ids[:-(hop + 4)]
+#             support_key = tuple(support)
+            
+#             # Parse all stones in the support to map IDs to Rewards
+#             stone_states_in_input = parse_stone_states_from_input(
+#                 encoder_input_ids, input_vocab, stone_state_to_id
+#             )
+            
+#             support_stone_ids = set()
+#             stone_id_to_reward = {}
+            
+#             for s_str, s_id in stone_states_in_input:
+#                 if s_id is not None:
+#                     support_stone_ids.add(s_id)
+#                     # Extract reward from the state string to identify "Reachable" candidates
+#                     # s_str format example: "{color: CYAN, ..., reward: 3}"
+#                     r_match = re.search(r'reward: (\+?-?\d+)', s_str)
+#                     if r_match:
+#                         # Normalize to integer, then back to string ("+1" and "1" both -> "1")
+#                         stone_id_to_reward[s_id] = str(int(r_match.group(1)))
+#             assert len(support_stone_ids) == 8, f"Expected 8 stones in support, got {len(support_stone_ids)}"
+
+#             # Determine reachable stones (Set of IDs)
+#             # A stone is reachable if it is in the support AND its reward is in the allowed set
+#             allowed_rewards = reachable_reward_mapping.get(query_stone_reward)
+#             # Normalize allowed rewards as well
+#             normalized_allowed_rewards = {str(int(r)) for r in allowed_rewards}
+
+#             reachable_stones_set = {
+#                 sid for sid in support_stone_ids 
+#                 if stone_id_to_reward.get(sid) in normalized_allowed_rewards
+#             }
+#             # Cheack if the reachable_stones_set is always a subset of support_stone_ids
+#             assert reachable_stones_set.issubset(support_stone_ids), "Reachable stones must be subset of support stones."
+
+#             # Determine actual connected neighbors
+#             connected_neighbors = neighbors_per_chemistry[support_key].get(query_stone_id, set())
+#             assert len(connected_neighbors) == 2, f"Expected 2 connected neighbors, got {len(connected_neighbors)}"
+#             true_adjacent_set = connected_neighbors.union({target_class_id})
+
+#             # Optional sanity checks
+#             if query_stone_reward in ['3', '-3']:
+#                 assert len(reachable_stones_set) == 3, (
+#                     f"Expected 3 reachable stones for reward {query_stone_reward}, "
+#                     f"got {len(reachable_stones_set)}"
+#                 )
+#                 assert len(true_adjacent_set) == 3, (
+#                     f"Expected 3 true-adjacent stones for reward {query_stone_reward}, "
+#                     f"got {len(true_adjacent_set)}"
+#                 )
+#             if query_stone_reward in ['1', '-1']:
+#                 assert len(reachable_stones_set) == 4, (
+#                     f"Expected 4 reachable stones for reward {query_stone_reward}, "
+#                     f"got {len(reachable_stones_set)}"
+#                 )
+#                 assert len(true_adjacent_set) == 3, (
+#                     f"Expected 4 true-adjacent stones for reward {query_stone_reward}, "
+#                     f"got {len(true_adjacent_set)}"
+#                 )
+#             # Do assertions for connected neighbors too.
+#             assert len(connected_neighbors) == len(true_adjacent_set) - 1, f"Connected neighbors should be one less than true adjacent set."
+
+
+                        
+#             # if epoch == '190':
+#             #     import pdb; pdb.set_trace()
+
+#             # Metric 1: Check if prediction is in support
+#             if predicted_class_id in support_stone_ids:
+#                 adjacency_metrics[epoch][query_stone_reward]['total_in_support'] += 1
+                
+#                 # Metric 2: Check if prediction is reachable (Stone-based check)
+#                 if predicted_class_id in reachable_stones_set:
+#                     adjacency_metrics[epoch][query_stone_reward]['in_support_and_reachable'] += 1
+#                     adjacency_metrics[epoch][query_stone_reward]['total_reachable'] += 1
+                    
+#                     # Metric 3: Check if it's the exact correct target
+#                     if predicted_class_id == target_class_id:
+#                         adjacency_metrics[epoch][query_stone_reward]['reachable_and_correct'] += 1
+                
+#                 # Metric 4: Check if prediction is an actual connected neighbor
+#                 if predicted_class_id in connected_neighbors:
+#                     assert len(connected_neighbors) == 2, f"Expected 2 connected neighbors, got {len(connected_neighbors)}"
+#                     adjacency_metrics[epoch][query_stone_reward]['in_support_and_connected'] += 1
+
+#                 # Metric 5: Check if prediction is in true_adjacent_set
+#                 if predicted_class_id in true_adjacent_set:
+#                     adjacency_metrics[epoch][query_stone_reward]['in_support_and_true_adjacent'] += 1
+    
+#     # Calculate accuracies over epochs
+#     adjacency_accuracies = {
+#         reward: {
+#             'within_reachable_acc': [],
+#             'correct_within_reachable_acc': [],
+#             'within_connected_acc': [],
+#             'within_true_adjacent_acc': [],
+#             'within_connected_in_reachable_acc': []
+#         } for reward in reachable_reward_mapping.keys()
+#     }
+
+#     # import pdb; pdb.set_trace()
+
+#     for epoch in sorted(adjacency_metrics.keys()):
+#         for reward in reachable_reward_mapping.keys():
+#             metrics = adjacency_metrics[epoch][reward]
+            
+#             if metrics['total_in_support'] > 0:
+#                 reachable_acc = metrics['in_support_and_reachable'] / metrics['total_in_support']
+#                 connected_acc = metrics['in_support_and_connected'] / metrics['total_in_support']
+#                 true_adjacent_acc = metrics['in_support_and_true_adjacent'] / metrics['total_in_support']
+#                 within_connected_in_reachable = metrics['in_support_and_connected'] / metrics['in_support_and_reachable'] if metrics['in_support_and_reachable'] > 0 else 0.0
+#             else:
+#                 reachable_acc = 0
+#                 connected_acc = 0
+#                 true_adjacent_acc = 0
+            
+#             adjacency_accuracies[reward]['within_reachable_acc'].append(reachable_acc)
+#             adjacency_accuracies[reward]['within_connected_acc'].append(connected_acc)
+#             adjacency_accuracies[reward]['within_true_adjacent_acc'].append(true_adjacent_acc)
+#             adjacency_accuracies[reward]['within_connected_in_reachable_acc'].append(within_connected_in_reachable)
+            
+#             if metrics['total_reachable'] > 0:
+#                 correct_acc = metrics['reachable_and_correct'] / metrics['total_reachable']
+#             else:
+#                 correct_acc = 0
+#             adjacency_accuracies[reward]['correct_within_reachable_acc'].append(correct_acc)
+    
+#     return adjacency_accuracies
+
+def analyze_adjacency_behavior(data, vocab, stone_state_to_id, predictions_by_epoch):
+    """
+    Analyze adjacency-based prediction behavior for the 4-edge held-out experiment.
+    """
+    hop = 1
+    
+    reverse_stone_mapping = create_reverse_stone_mapping(stone_state_to_id)
+    input_vocab = vocab['input_word2idx']
+    feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+    
+    # Define reachable rewards for each query stone reward
+    # This maps query reward -> set of reachable stone rewards
+    # Using sets for O(1) lookup
+    reachable_reward_mapping = {
+        '3': {'1'},          # +15 connects to +1
+        '-3': {'-1'},        # -3 connects to -1
+        '1': {'3', '-1'},    # +1 connects to +15 and -1
+        '-1': {'-3', '1'}    # -1 connects to -3 and +1
+    }
+    
+    # Initialize result containers (lists)
+    adjacency_accuracies = {
+        reward: {
+            'within_reachable_acc': [],
+            'correct_within_reachable_acc': [],
+            'within_connected_acc': [],
+            'within_true_adjacent_acc': [],
+            'within_connected_in_reachable_acc': []
+        } for reward in reachable_reward_mapping.keys()
+    }
+    
+    # Pre-compute graph structure
+    neighbors_per_chemistry = defaultdict(lambda: defaultdict(set))
+    
+    print("Pre-computing chemistry graphs...")
+    for sample in data:
+        encoder_input_ids = sample['encoder_input_ids']
+        support = encoder_input_ids[:-5]
+        support_key = tuple(support)
+        
+        if support_key not in neighbors_per_chemistry:
+            transitions_list, _ = extract_support_transitions(list(support), input_vocab, stone_state_to_id)
+            for start_id, end_id in transitions_list:
+                if start_id is not None and end_id is not None:
+                    neighbors_per_chemistry[support_key][start_id].add(end_id)
+    
+    # Sort epochs to ensure metrics are appended in correct order
+    sorted_epochs = sorted(predictions_by_epoch.keys())
+
+    for epoch in tqdm(sorted_epochs, desc="Analyzing adjacency behavior"):
+        predictions = predictions_by_epoch[epoch]
+        
+        # Initialize counters for this specific epoch
+        epoch_metrics = {
+            reward: {
+                'total_count': 0,
+                'total_in_support': 0,
+                'in_support_and_reachable': 0, # Reachable by reward value (Stone-based)
+                'total_reachable': 0,
+                'reachable_and_correct': 0,
+                'in_support_and_connected': 0, # Actually connected in graph
+                'in_support_and_true_adjacent': 0, # Connected in support OR target
+            } for reward in reachable_reward_mapping.keys()
+        }
+
+        for i, sample in enumerate(data):
+            encoder_input_ids = sample['encoder_input_ids']
+            target_class_id = sample['target_class_id']
+            predicted_class_id = predictions[i]
+            
+            # Extract query stone reward
+            query = encoder_input_ids[-5:]
+            query_stone_reward = feature_to_id_vocab[query[-2]]
+            
+            # Decode query stone ID
+            query_feat_ids = query[:-1]
+            query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+            q_color, q_size, q_round, q_reward = query_features
+            query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+            query_stone_id = stone_state_to_id.get(query_state_str)
+
+            # Get support set
+            support = encoder_input_ids[:-(hop + 4)]
+            support_key = tuple(support)
+            
+            # Parse all stones in the support to map IDs to Rewards
+            stone_states_in_input = parse_stone_states_from_input(
+                encoder_input_ids, input_vocab, stone_state_to_id
+            )
+            
+            support_stone_ids = set()
+            stone_id_to_reward = {}
+            
+            for s_str, s_id in stone_states_in_input:
+                if s_id is not None:
+                    support_stone_ids.add(s_id)
+                    # Extract reward from the state string to identify "Reachable" candidates
+                    # s_str format example: "{color: CYAN, ..., reward: 3}"
+                    r_match = re.search(r'reward: (\+?-?\d+)', s_str)
+                    if r_match:
+                        # Normalize to integer, then back to string ("+1" and "1" both -> "1")
+                        stone_id_to_reward[s_id] = str(int(r_match.group(1)))
+            assert len(support_stone_ids) == 8, f"Expected 8 stones in support, got {len(support_stone_ids)}"
+
+            # Determine reachable stones (Set of IDs)
+            # A stone is reachable if it is in the support AND its reward is in the allowed set
+            allowed_rewards = reachable_reward_mapping.get(query_stone_reward)
+            # Normalize allowed rewards as well
+            normalized_allowed_rewards = {str(int(r)) for r in allowed_rewards}
+
+            reachable_stones_set = {
+                sid for sid in support_stone_ids 
+                if stone_id_to_reward.get(sid) in normalized_allowed_rewards
+            }
+            # Cheack if the reachable_stones_set is always a subset of support_stone_ids
+            assert reachable_stones_set.issubset(support_stone_ids), "Reachable stones must be subset of support stones."
+
+            # Determine actual connected neighbors
+            connected_neighbors = neighbors_per_chemistry[support_key].get(query_stone_id, set())
+            assert len(connected_neighbors) == 2, f"Expected 2 connected neighbors, got {len(connected_neighbors)}"
+            true_adjacent_set = connected_neighbors.union({target_class_id})
+
+            # Optional sanity checks
+            if query_stone_reward in ['3', '-3']:
+                assert len(reachable_stones_set) == 3, (
+                    f"Expected 3 reachable stones for reward {query_stone_reward}, "
+                    f"got {len(reachable_stones_set)}"
+                )
+                assert len(true_adjacent_set) == 3, (
+                    f"Expected 3 true-adjacent stones for reward {query_stone_reward}, "
+                    f"got {len(true_adjacent_set)}"
+                )
+            if query_stone_reward in ['1', '-1']:
+                assert len(reachable_stones_set) == 4, (
+                    f"Expected 4 reachable stones for reward {query_stone_reward}, "
+                    f"got {len(reachable_stones_set)}"
+                )
+                assert len(true_adjacent_set) == 3, (
+                    f"Expected 4 true-adjacent stones for reward {query_stone_reward}, "
+                    f"got {len(true_adjacent_set)}"
+                )
+            # Do assertions for connected neighbors too.
+            assert len(connected_neighbors) == len(true_adjacent_set) - 1, f"Connected neighbors should be one less than true adjacent set."
+
+            epoch_metrics[query_stone_reward]['total_count'] += 1
+
+            # Metric 1: Check if prediction is in support
+            if predicted_class_id in support_stone_ids:
+                epoch_metrics[query_stone_reward]['total_in_support'] += 1
+                
+                # Metric 2: Check if prediction is reachable (Stone-based check)
+                if predicted_class_id in reachable_stones_set:
+                    epoch_metrics[query_stone_reward]['in_support_and_reachable'] += 1
+                    epoch_metrics[query_stone_reward]['total_reachable'] += 1
+                    
+                    # Metric 3: Check if it's the exact correct target
+                    if predicted_class_id == target_class_id:
+                        epoch_metrics[query_stone_reward]['reachable_and_correct'] += 1
+                
+                # Metric 4: Check if prediction is an actual connected neighbor
+                if predicted_class_id in connected_neighbors:
+                    assert len(connected_neighbors) == 2, f"Expected 2 connected neighbors, got {len(connected_neighbors)}"
+                    epoch_metrics[query_stone_reward]['in_support_and_connected'] += 1
+
+                # Metric 5: Check if prediction is in true_adjacent_set
+                if predicted_class_id in true_adjacent_set:
+                    epoch_metrics[query_stone_reward]['in_support_and_true_adjacent'] += 1
+        
+        # Calculate accuracies for this epoch immediately
+        for reward in reachable_reward_mapping.keys():
+            metrics = epoch_metrics[reward]
+            # import pdb; pdb.set_trace()
+            
+            if metrics['total_in_support'] > 0:
+                reachable_acc = metrics['in_support_and_reachable'] / metrics['total_in_support']
+                connected_acc = metrics['in_support_and_connected'] / metrics['total_in_support']
+                true_adjacent_acc = metrics['in_support_and_true_adjacent'] / metrics['total_in_support']
+                within_connected_in_reachable = metrics['in_support_and_connected'] / metrics['in_support_and_reachable'] if metrics['in_support_and_reachable'] > 0 else 0.0
+            else:
+                reachable_acc = 0
+                connected_acc = 0
+                true_adjacent_acc = 0
+                within_connected_in_reachable = 0
+            
+            adjacency_accuracies[reward]['within_reachable_acc'].append(reachable_acc)
+            adjacency_accuracies[reward]['within_connected_acc'].append(connected_acc)
+            adjacency_accuracies[reward]['within_true_adjacent_acc'].append(true_adjacent_acc)
+            adjacency_accuracies[reward]['within_connected_in_reachable_acc'].append(within_connected_in_reachable)
+            
+            if metrics['total_reachable'] > 0:
+                correct_acc = metrics['reachable_and_correct'] / metrics['total_reachable']
+            else:
+                correct_acc = 0
+            adjacency_accuracies[reward]['correct_within_reachable_acc'].append(correct_acc)
+    
+    return adjacency_accuracies
 
 
 def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions_by_epoch, exp_typ='held_out', hop=2,
@@ -177,12 +940,6 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
             support_key = tuple(support_key)
 
-            # import pdb; pdb.set_trace()
-
-
-
-            
-
             
             # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
             query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
@@ -244,7 +1001,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
 
 
-        # NEW: Create the mapping for all possible outcomes for each query stone, organized by support_key
+        # Create the mapping for all possible outcomes for each query stone, organized by support_key
         per_query_reachable_stone_mapping = {}
         for support_key, query_stones_map in composition_full_target_per_query_support_to_query_mappings.items():
             per_query_reachable_stone_mapping[support_key] = defaultdict(set)
@@ -486,6 +1243,51 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     print("Decomposition / Held-out experiment.")
     if exp_typ in ['decomposition', 'held_out']:
         hop = 1
+        # For decomposition, precompute per-query adjacency from targets:
+        # per_query_adjacent_mapping[support_key][query_stone_id][potion_str] = set(target_class_ids)
+        per_query_adjacent_mapping = {}
+        if exp_typ == 'decomposition':
+            input_vocab = vocab['input_word2idx']
+            feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+
+            for sample in data:
+                encoder_input_ids = sample['encoder_input_ids']
+                target_class_id = sample['target_class_id']
+
+                # support and support_key
+                support = encoder_input_ids[:-(hop + 4)]  # hop forced to 1 for decomposition/held_out above
+                support_key = tuple(support)
+
+                # decode query (last 5 tokens = 4 features + potion)
+                query = encoder_input_ids[-5:]
+                query_feat_ids = query[:-1]
+                query_potion_id = query[-1]
+
+                query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+                q_color, q_size, q_round, q_reward = query_features
+                query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+                query_stone_id = stone_state_to_id[query_state_str]
+
+                query_potion_str = feature_to_id_vocab[query_potion_id]
+
+                if support_key not in per_query_adjacent_mapping:
+                    per_query_adjacent_mapping[support_key] = {}
+                if query_stone_id not in per_query_adjacent_mapping[support_key]:
+                    per_query_adjacent_mapping[support_key][query_stone_id] = {}
+                if query_potion_str not in per_query_adjacent_mapping[support_key][query_stone_id]:
+                    per_query_adjacent_mapping[support_key][query_stone_id][query_potion_str] = set()
+
+                per_query_adjacent_mapping[support_key][query_stone_id][query_potion_str].add(target_class_id)
+            
+            # Now for each support_key and query_stone_id, compute the union of all target_class_ids across potions and store it as the 'per_support_per_query_adjacent_all_potions_mapping'
+            per_support_per_query_adjacent_all_potions_mapping = {}
+            for support_key, query_stone_map in per_query_adjacent_mapping.items():
+                per_support_per_query_adjacent_all_potions_mapping[support_key] = {}
+                for query_stone_id, potion_map in query_stone_map.items():
+                    all_target_ids = set()
+                    for potion_str, target_ids in potion_map.items():
+                        all_target_ids.update(target_ids)
+                    per_support_per_query_adjacent_all_potions_mapping[support_key][query_stone_id] = all_target_ids
 
 
     # import pdb; pdb.set_trace()
@@ -530,6 +1332,9 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
     predicted_exact_out_of_all_108 = []
 
+    predicted_in_adjacent_and_correct_half_accuracies = []
+    predicted_correct_half_within_adjacent_and_correct_half_accuracies = []
+
 
 
     complete_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
@@ -551,6 +1356,9 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         predicted_correct_within_context_count = 0
 
         predicted_exact_out_of_all_108_count = 0
+
+        predicted_in_adjacent_and_correct_half_count = 0
+        predicted_correct_half_within_adjacent_and_correct_half_count = 0
 
         per_epoch_complete_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
         per_epoch_within_support_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
@@ -599,6 +1407,35 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             else:
                 combined_set = set(correct_half_chemistry + other_half_chemistry)
                 assert len(combined_set) <= 8, f"Expected 8 unique stones for support {support_key}, got {len(combined_set)}"
+            
+            if exp_typ == 'decomposition':
+                # Decode query start stone id (same logic as in non-support analysis)
+                query_feat_ids = query[:-1]  # 4 feature token IDs
+                query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+                q_color, q_size, q_round, q_reward = query_features
+                query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+                query_stone_id = stone_state_to_id[query_state_str]
+
+                query_potion_str = feature_to_id_vocab[query_potion]
+
+                # Get adjacent stones for this (support_key, query_stone_id, potion)
+                adjacent_stones = per_support_per_query_adjacent_all_potions_mapping[support_key].get(query_stone_id, set())
+                adjacent_stones = set(adjacent_stones)
+
+                # Combine with correct half for this potion
+                adjacent_and_correct_half = set(correct_half_chemistry).union(adjacent_stones)
+
+                # Sanity: adjacency is fully connected; expect 6 unique stones 
+                # (4 in correct half, 3 adjacent, with 1 overlap)
+                if len(adjacent_and_correct_half) != 6:
+                    # You can relax this assert if you're worried about data edge cases
+                    raise AssertionError(
+                        f"Expected 6 stones in adjacent_and_correct_half, "
+                        f"got {len(adjacent_and_correct_half)} for support {support_key}"
+                    )
+            else:
+                adjacent_stones = set()
+                adjacent_and_correct_half = set()
 
 
             # First do the classification for 8 vs 108.
@@ -631,9 +1468,15 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                     if predicted_class_id == target_class_id:
                         within_class_correct += 1
                         per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
+
                 
                 elif predicted_class_id in other_half_chemistry:
                     other_half_correct += 1
+                
+                if exp_typ == 'decomposition' and predicted_class_id in adjacent_and_correct_half:
+                    predicted_in_adjacent_and_correct_half_count += 1
+                    if predicted_class_id in correct_half_chemistry:
+                        predicted_correct_half_within_adjacent_and_correct_half_count += 1
 
             total += 1
 
@@ -662,40 +1505,90 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         predicted_exact_out_of_all_108_accuracy = predicted_exact_out_of_all_108_count / total if total > 0 else 0 # The chance is 1/108 here.
         predicted_exact_out_of_all_108.append(predicted_exact_out_of_all_108_accuracy)
 
+        if exp_typ == 'decomposition':
+            p_in_adjacent_and_correct_half = (
+                predicted_in_adjacent_and_correct_half_count / predicted_in_context_count
+                if predicted_in_context_count > 0 else 0.0
+            )
+            p_correct_half_given_adjacent_and_correct_half = (
+                predicted_correct_half_within_adjacent_and_correct_half_count / predicted_in_adjacent_and_correct_half_count
+                if predicted_in_adjacent_and_correct_half_count > 0 else 0.0
+            )
+        else:
+            p_in_adjacent_and_correct_half = 0.0
+            p_correct_half_given_adjacent_and_correct_half = 0.0
 
 
+        predicted_in_adjacent_and_correct_half_accuracies.append(p_in_adjacent_and_correct_half)
+        predicted_correct_half_within_adjacent_and_correct_half_accuracies.append(p_correct_half_given_adjacent_and_correct_half)
+
+
+        # Assert that correct_half_chemistry_count is equal to the sum of per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts
+        assert correct_half_chemistry_count == sum(per_epoch_in_support_correct_half_samples_per_reward_bin.values()), "Mismatch in correct half chemistry count."
+
+        # import pdb; pdb.set_trace()
+
+
+
+        # NOTE: The following is for the held_out experiments reward-binned analysis.
+        # Add the per-epoch reward binned accuracies to the overall accumulators.
         # Add the per-epoch reward binned accuracies to the overall accumulators.
         for reward_bin in complete_query_stone_state_per_reward_binned_accuracy.keys():
             # Accuracy out of all 108
             total_for_bin = per_epoch_total_samples_per_reward_bin[reward_bin]
             if total_for_bin > 0:
-                accuracy = per_epoch_complete_query_stone_state_per_reward_binned_counts[reward_bin] / total_for_bin
+                accuracy1 = per_epoch_complete_query_stone_state_per_reward_binned_counts[reward_bin] / total_for_bin
             else:
-                accuracy = 0
-            complete_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy)
+                accuracy1 = 0
+            complete_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy1)
 
-            # Accuracy within support (conditional on being in-support for this reward bin)
             in_support_for_bin = per_epoch_in_support_samples_per_reward_bin[reward_bin]
             if in_support_for_bin > 0:
-                accuracy = per_epoch_within_support_query_stone_state_per_reward_binned_counts[reward_bin] / in_support_for_bin
-            else:
-                accuracy = 0
-            within_support_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy)
+                # accuracy2 = in_support_for_bin / total_for_bin
 
-            # Accuracy within support and correct half
+                # This is exactly the within-support accuracy.
+
+                accuracy2 = per_epoch_within_support_query_stone_state_per_reward_binned_counts[reward_bin] / in_support_for_bin
+            else:
+                accuracy2 = 0
+            within_support_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy2)
+
+            # Accuracy within support and correct half (per reward bin)
             in_support_correct_half_for_bin = per_epoch_in_support_correct_half_samples_per_reward_bin[reward_bin]
             if in_support_correct_half_for_bin > 0:
-                accuracy = per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[reward_bin] / in_support_correct_half_for_bin
+                accuracy3 = per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[reward_bin] / in_support_correct_half_for_bin
             else:
-                accuracy = 0
-            within_support_within_half_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy)
-    # import pdb; pdb.set_trace()
+                accuracy3 = 0
+            within_support_within_half_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy3)
+
+        # Compute weighted average across all bins (for validation only)
+        # total_correct_in_bins = sum(per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts.values())
+        # total_samples_in_bins = sum(per_epoch_in_support_correct_half_samples_per_reward_bin.values())
+
+        # if total_samples_in_bins > 0:
+        #     avg_within_support_within_half_accuracy = total_correct_in_bins / total_samples_in_bins
+        # else:
+        #     avg_within_support_within_half_accuracy = 0
+
+        # assert abs(avg_within_support_within_half_accuracy - predicted_in_context_correct_half_exact_accuracy) < 1e-8, "Mismatch in weighted average accuracy calculation."
+            
 
 
-    return predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, \
-        predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, \
-        predicted_correct_within_context, predicted_exact_out_of_all_108, \
-        (complete_query_stone_state_per_reward_binned_accuracy, within_support_query_stone_state_per_reward_binned_accuracy, within_support_within_half_query_stone_state_per_reward_binned_accuracy)
+    return (
+        predicted_in_context_accuracies,
+        predicted_in_context_correct_half_accuracies,
+        predicted_in_context_other_half_accuracies,
+        predicted_in_context_correct_half_exact_accuracies,
+        predicted_correct_within_context,
+        predicted_exact_out_of_all_108,
+        predicted_in_adjacent_and_correct_half_accuracies,
+        predicted_correct_half_within_adjacent_and_correct_half_accuracies,
+        (
+            complete_query_stone_state_per_reward_binned_accuracy,
+            within_support_query_stone_state_per_reward_binned_accuracy,
+            within_support_within_half_query_stone_state_per_reward_binned_accuracy,
+        ),
+    )
 
 
 def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix='', file_paths = None, file_paths_non_subsampled = None):
@@ -796,7 +1689,6 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
             #     ]
             
             inputs_by_seed[seed] = data_with_targets
-        # import pdb; pdb.set_trace()
         
         if file_paths_non_subsampled is not None:
             return predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_targets_by_seed
@@ -807,67 +1699,67 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
 
 
 
-    print("Seeds to load: ", seeds)
+    # print("Seeds to load: ", seeds)
 
-    for seed in tqdm(seeds):
-        predictions_by_epoch = {}
+    # for seed in tqdm(seeds):
+    #     predictions_by_epoch = {}
         
-        for epoch in range(epoch_start, epoch_end + 1):
-            # Reformat the epoch_number because the files are saved with epoch numbers like 001, 002, ..., 1000
-            epoch_number = str(epoch).zfill(3)
+    #     for epoch in range(epoch_start, epoch_end + 1):
+    #         # Reformat the epoch_number because the files are saved with epoch numbers like 001, 002, ..., 1000
+    #         epoch_number = str(epoch).zfill(3)
             
-            # for hop in hops:
-            base_file_path = ''
+    #         # for hop in hops:
+    #         base_file_path = ''
             
-            if exp_typ == 'held_out':
-                base_file_path = f'/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_{hop}/all_graphs/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_1_qhop_1/seed_{seed}/predictions'
-                # import pdb; pdb.set_trace()
+    #         if exp_typ == 'held_out':
+    #             base_file_path = f'/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_{hop}/all_graphs/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_1_qhop_1/seed_{seed}/predictions'
+    #             # import pdb; pdb.set_trace()
                     
-            elif exp_typ == 'decomposition':
-                base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_{hop}_qhop_1/seed_{seed}/predictions" 
-            elif exp_typ == 'composition':
-                base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/fully_shuffled/{scheduler_prefix}xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_{hop}/seed_{seed}/predictions"
+    #         elif exp_typ == 'decomposition':
+    #             base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/xsmall/decoder/classification/{scheduler_prefix}input_features/output_stone_states/shop_{hop}_qhop_1/seed_{seed}/predictions" 
+    #         elif exp_typ == 'composition':
+    #             base_file_path = f"/home/rsaha/projects/{infix}dm_alchemy/src/saved_models/complete_graph/fully_shuffled/{scheduler_prefix}xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_{hop}/seed_{seed}/predictions"
             
                 
                     
-            predictions_raw_file_path = f'{base_file_path}/predictions_classification_epoch_{epoch_number}.npz'
+    #         predictions_raw_file_path = f'{base_file_path}/predictions_classification_epoch_{epoch_number}.npz'
             
-            try:
-                # if exp_typ == 'decomposition':
-                #     if epoch_number == '035':
-                #         continue
+    #         try:
+    #             # if exp_typ == 'decomposition':
+    #             #     if epoch_number == '035':
+    #             #         continue
 
-                print(f"epoch number, ", epoch_number)
-                if epoch_number == '828' and exp_typ == 'held_out':
-                    continue
+    #             print(f"epoch number, ", epoch_number)
+    #             if epoch_number == '828' and exp_typ == 'held_out':
+    #                 continue
 
-                predictions_raw = np.load(predictions_raw_file_path, allow_pickle=True)['predictions']
-                # Store predictions for this epoch
-                predictions_by_epoch[epoch_number] = predictions_raw.tolist()
+    #             predictions_raw = np.load(predictions_raw_file_path, allow_pickle=True)['predictions']
+    #             # Store predictions for this epoch
+    #             predictions_by_epoch[epoch_number] = predictions_raw.tolist()
                 
-                # print(f"Loaded epoch {epoch_number}: {len(predictions_raw)} predictions")
+    #             # print(f"Loaded epoch {epoch_number}: {len(predictions_raw)} predictions")
                 
-            except FileNotFoundError:
-                print(f"Warning: Files for epoch {epoch_number} not found, skipping...")
-                continue
+    #         except FileNotFoundError:
+    #             print(f"Warning: Files for epoch {epoch_number} not found, skipping...")
+    #             continue
 
-        try:
+    #     try:
 
-            predictions_by_epoch_by_seed[seed] = predictions_by_epoch 
-            inputs_raw_file_path = f'{base_file_path}/inputs_classification_epoch_001.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs.
-            targets_raw_file_path = f'{base_file_path}/targets_classification_epoch_001.npz' # Use the last epoch number loaded.
-            inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
-            targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
+    #         predictions_by_epoch_by_seed[seed] = predictions_by_epoch 
+    #         inputs_raw_file_path = f'{base_file_path}/inputs_classification_epoch_001.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs.
+    #         targets_raw_file_path = f'{base_file_path}/targets_classification_epoch_001.npz' # Use the last epoch number loaded.
+    #         inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
+    #         targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
             
-            stacked_inputs = np.vstack(inputs_raw) # Flatten inputs from (39, 32, 181) to (1240, 181) 
-            data_with_targets = [{'encoder_input_ids': stacked_inputs[i].tolist(), 'target_class_id': int(targets_raw[i])} for i in range(len(targets_raw))]
+    #         stacked_inputs = np.vstack(inputs_raw) # Flatten inputs from (39, 32, 181) to (1240, 181) 
+    #         data_with_targets = [{'encoder_input_ids': stacked_inputs[i].tolist(), 'target_class_id': int(targets_raw[i])} for i in range(len(targets_raw))]
             
-            inputs_by_seed[seed] = data_with_targets
-        except FileNotFoundError:
-            print(f"Warning: Input/target files for seed {seed} not found, skipping...")
-            continue
+    #         inputs_by_seed[seed] = data_with_targets
+    #     except FileNotFoundError:
+    #         print(f"Warning: Input/target files for seed {seed} not found, skipping...")
+    #         continue
         
-    return predictions_by_epoch_by_seed, inputs_by_seed, None
+    # return predictions_by_epoch_by_seed, inputs_by_seed, None
         
    
 import argparse
@@ -888,6 +1780,26 @@ parser.add_argument('--plot_individual_seeds', action='store_true',
 
 parser.add_argument('--reward_binning_analysis_only', action='store_true',
                     help="Flag to only perform reward binning analysis for the 4 edge held out experiment.", default=False)
+
+
+parser.add_argument('--normalized_reward', action='store_true',
+                    help="Flag to indicate if normalized reward should be used for the held_out exp type.", default=False)
+
+parser.add_argument('--annotated_epochs', action='store_true',
+                    help="Flag to indicate if annotated epochs should be used for plotting.", default=False)
+
+
+parser.add_argument('--get_adjacency_analysis_only', action='store_true',
+                    help="Flag to indicate if only the adjacency analysis should be performed.", default=False)
+
+parser.add_argument('--get_non_support_analysis_only', action='store_true',
+                    help="Only perform non-support transition analysis (held_out).", default=False)
+
+parser.add_argument('--custom_linestyle', type=str, default=None, 
+                    help="Custom linestyle file for plotting.")
+
+
+
 args = parser.parse_args()
 # exp_typ = 'decomposition'  # 'held_out' or 'decomposition'
 exp_typ = args.exp_typ
@@ -987,9 +1899,14 @@ for 5 hop, use seed 1,2,3
 
 decomposition_file_paths_non_subsampled = {
     2: [
-        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
-        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
-        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+
+        # For anomaly runs of seed 29:
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
         ],
 
     3: [
@@ -999,21 +1916,27 @@ decomposition_file_paths_non_subsampled = {
         # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_4_classification_filter_True_input_features_output_stone_states_data.pkl'
 
         # Good runs from wandb.
-        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
-        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
-        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+
+        # Anomalous runs to show the effect of bad hyperparameters.
+
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
     ],
     4: [
-        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_4_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl', 
-        # 'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_4_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
-        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_4_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_4_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl', 
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_4_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_4_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
     ],
 
 
     5: [
-        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
-        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_2_classification_filter_True_input_features_output_stone_states_data.pkl',
-        'home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl'
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_16_classification_filter_True_input_features_output_stone_states_data.pkl',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_29_classification_filter_True_input_features_output_stone_states_data.pkl'
         ]
 }
 
@@ -1021,9 +1944,15 @@ decomposition_file_paths_non_subsampled = {
 
 decomposition_file_paths = {
     2: [
-        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_0/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_0/predictions/',
         '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_16/predictions/',
-        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/',
+
+
+        # Anomalous runs to show the effect of bad hyperparameters.
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/'
         ],
 
         # NOTE: Why are there so many files for 3-hop decomposition? It's because we wanted to see if different hyperparameter settings made a difference in when the final phase was being learned and if there was overlap with other stages.
@@ -1038,25 +1967,33 @@ decomposition_file_paths = {
         # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_29/predictions/',
         # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_4/predictions'
 
+        # 3-hop anomalous runs to show the effect of bad hyperparameters.
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_29/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_29/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_29/predictions/'
+
+
         # Control runs:
         # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/predictions/'
 
         # Good runs from wandb.
-        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/predictions/',
-        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_16/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_16/predictions/',
         '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_29/predictions/',
 
         ],
 
     4: [
-        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_0/predictions/',
-        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_16/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_0/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_16/predictions/',
         '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_29/predictions/'],
 
     5: [
         '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/predictions/',
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_2/predictions/',
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_16/predictions'
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_2/predictions/',
+        # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_16/predictions',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_16/predictions/',
+        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_29/predictions/'
         
         
         
@@ -1105,7 +2042,19 @@ composition_file_paths = {
         '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_29/predictions']
 }
 
-
+held_out_file_paths = {
+    # Normalized reward paths.
+    # 4: [
+    #     "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/same_reward_held_out_color_4/all_graphs/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_9e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/predictions/",
+    #     "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/same_reward_held_out_color_4/all_graphs/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_3/predictions/",
+    #     # ""
+    # ]
+    4: [
+        "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/predictions/",
+        "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_2/predictions/",
+        "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/no_scheduler/wd_0.01_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_3/predictions/"
+    ]
+}
 
 
 
@@ -1115,18 +2064,23 @@ predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_composition_data  =
     epoch_range = (hop_to_epoch_values[hop][0], hop_to_epoch_values[hop][-1]),
     seeds = seed_values_hop_dict[hop],
     scheduler_prefix = scheduler_prefix,
-    file_paths = composition_file_paths[hop] if exp_typ == 'composition' else decomposition_file_paths[hop] if exp_typ == 'decomposition' else None,
-    file_paths_non_subsampled = composition_file_paths_non_subsampled if exp_typ == 'composition' else None
+    file_paths = composition_file_paths[hop] if exp_typ == 'composition' else decomposition_file_paths[hop] if exp_typ == 'decomposition' else held_out_file_paths[hop] if exp_typ == 'held_out' else None,
+    file_paths_non_subsampled = composition_file_paths_non_subsampled if exp_typ == 'composition' else decomposition_file_paths_non_subsampled if exp_typ == 'decomposition' else None,
 )
 # import pdb; pdb.set_trace()
 seed_data_files = {}
 for seed in predictions_by_epoch_by_seed.keys():
     if exp_typ == 'held_out':
-        data_files = {
-            "data": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_data.pkl",
-            "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
-            "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
-        }
+        if not args.normalized_reward:
+            data_files = {
+                "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
+                "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
+            }
+        else:
+            data_files = {
+                "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced/normalized_compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
+                "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced/normalized_compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
+            }
 
         vocab = pickle.load(open(data_files["vocab"], "rb"))
         with open(data_files["metadata"], "r") as f:
@@ -1158,6 +2112,294 @@ for seed in predictions_by_epoch_by_seed.keys():
         vocab = pickle.load(open(data_files["vocab"], "rb"))
 
         seed_data_files[seed] = {'vocab': vocab, 'metadata': metadata}
+
+
+
+if args.get_adjacency_analysis_only:
+    # Run only adjacency analysis and then append results to a list for each seed, and then average across seeds.
+    adjacency_results_by_seed = {}
+    for seed in predictions_by_epoch_by_seed.keys():
+        print(f"\n\nAnalyzing seed {seed} for adjacency analysis...")
+        predictions_by_epoch = predictions_by_epoch_by_seed[seed]
+        data_with_predictions = inputs_by_seed[seed]
+        
+        # Load the correct vocab for this seed
+        vocab = seed_data_files[seed]['vocab']
+        
+        # Run the analysis
+        assert exp_typ == 'held_out', "Adjacency analysis is only implemented for held-out experiments."
+        print("Running adjacency behavior analysis")
+        adjacency_results = analyze_adjacency_behavior(
+            data_with_predictions, 
+            vocab, 
+            vocab['stone_state_to_id'], 
+            predictions_by_epoch,
+        )
+
+        adjacency_results_by_seed[seed] = adjacency_results
+
+    # Now average the adjacency results for each metric across seeds.
+    averaged_adjacency_results = {}
+    std_errors_adjacency = {}
+    adjacency_metrics = ['within_reachable_acc', 'correct_within_reachable_acc', 'within_true_adjacent_acc', 'within_connected_acc', 'within_connected_in_reachable_acc']
+
+    """
+    for epoch in sorted(adjacency_metrics.keys()):
+        for reward in reachable_reward_mapping.keys():
+            metrics = adjacency_metrics[epoch][reward]
+            
+            # Accuracy 1: P(reachable | in-support)
+            if metrics['total_in_support'] > 0:
+                reachable_acc = metrics['in_support_and_reachable'] / metrics['total_in_support']
+            else:
+                reachable_acc = 0
+            adjacency_accuracies[reward]['within_reachable_acc'].append(reachable_acc)
+            
+            # Accuracy 2: P(exact target | reachable)
+            if metrics['total_reachable'] > 0:
+                correct_acc = metrics['reachable_and_correct'] / metrics['total_reachable']
+            else:
+                correct_acc = 0
+            adjacency_accuracies[reward]['correct_within_reachable_acc'].append(correct_acc)
+    
+    return adjacency_accuracies
+    
+    """
+
+    # for each reward in the adjacency metrics, average across seeds for that reward across epochs and all seeds.
+    for metric in adjacency_metrics:
+        averaged_adjacency_results[metric] = {}
+        std_errors_adjacency[metric] = {}
+        # import pdb; pdb.set_trace()
+        for reward in adjacency_results_by_seed[list(adjacency_results_by_seed.keys())[0]].keys():
+            # Collect all accuracies for this reward across seeds
+            all_accuracies = []
+            for seed in adjacency_results_by_seed.keys():
+                all_accuracies.append(adjacency_results_by_seed[seed][reward][metric])
+            # Compute average and std error
+            averaged_adjacency_results[metric][reward] = np.mean(all_accuracies, axis=0)
+            std_errors_adjacency[metric][reward] = np.std(all_accuracies, axis=0) / np.sqrt(len(all_accuracies))
+    
+    # Now plot for each reward_bin, the respective accuracies with error bars.
+    # there will be four subplots, one for each reward bin and each subplot will have two lines, one for within_reachable_acc and one for correct_within_reachable_acc.
+
+    import matplotlib.pyplot as plt
+    rewards = ['-3', '-1', '1', '3']
+    reward_title_mapping = {
+        '-3': '-3',
+        '-1': '-1',
+        '1': '1',
+        '3': '+15',
+    }
+
+    fig, axs = plt.subplots(1, len(rewards), figsize=(20, 5))
+    for i, reward in enumerate(rewards):
+        mean_within = averaged_adjacency_results['within_reachable_acc'][reward]
+        std_within = std_errors_adjacency['within_reachable_acc'][reward]
+        epochs_range = range(len(mean_within))
+        
+        axs[i].plot(epochs_range, mean_within, label='Within Reward Adjacent', color='blue')
+        axs[i].fill_between(epochs_range, 
+                   np.array(mean_within) - np.array(std_within),
+                   np.array(mean_within) + np.array(std_within),
+                   alpha=0.2, color='blue')
+        
+        # [NEW] Plot True Adjacent Accuracy
+        mean_true = averaged_adjacency_results['within_true_adjacent_acc'][reward]
+        std_true = std_errors_adjacency['within_true_adjacent_acc'][reward]
+        
+        axs[i].plot(epochs_range, mean_true, label='Within True Adjacent (Graph)', color='orange')
+        axs[i].fill_between(epochs_range,
+                   np.array(mean_true) - np.array(std_true),
+                   np.array(mean_true) + np.array(std_true),
+                   alpha=0.2, color='orange')
+
+        mean_correct = averaged_adjacency_results['correct_within_reachable_acc'][reward]
+        std_correct = std_errors_adjacency['correct_within_reachable_acc'][reward]
+        
+        axs[i].plot(epochs_range, mean_correct, label='Correct in Reward Adjacent', linestyle='--', color='skyblue')
+        axs[i].fill_between(epochs_range,
+                   np.array(mean_correct) - np.array(std_correct),
+                   np.array(mean_correct) + np.array(std_correct),
+                   alpha=0.2, color='skyblue')
+
+
+        # Plot the connected accuracy
+        mean_connected = averaged_adjacency_results['within_connected_acc'][reward]
+        std_connected = std_errors_adjacency['within_connected_acc'][reward]
+        axs[i].plot(epochs_range, mean_connected, label='Within Adjacent in-support', color='red') 
+        axs[i].fill_between(epochs_range,
+                   np.array(mean_connected) - np.array(std_connected),
+                   np.array(mean_connected) + np.array(std_connected),
+                   alpha=0.2, color='red')
+
+        # Plot the connected in reachable accuracy
+        # mean_connected_in_reachable = averaged_adjacency_results['within_connected_in_reachable_acc'][reward]
+        # std_connected_in_reachable = std_errors_adjacency['within_connected_in_reachable_acc'][reward]
+        # axs[i].plot(epochs_range, mean_connected_in_reachable, label='Within Connected in Reachable', linestyle='--', color='black')
+        # axs[i].fill_between(epochs_range,
+        #            np.array(mean_connected_in_reachable) - np.array(std_connected_in_reachable),
+        #            np.array(mean_connected_in_reachable) + np.array(std_connected_in_reachable),
+        #            alpha=0.2, color='black')
+
+
+
+        axs[i].set_title(f'Reward: {reward_title_mapping[reward]}')
+        axs[i].set_xlabel('Epochs')
+        axs[i].set_ylabel('Accuracy')
+        axs[i].legend(fontsize=9, loc='center right')
+        axs[i].set_ylim(0, 1)
+        # Add gridlines.
+        axs[i].grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f'nov_21_adjacency_analysis_hop_{hop}_exp_{exp_typ}_adjacent_true_adjacent_connected_within.png')
+    plt.savefig(f'nov_21_adjacency_analysis_hop_{hop}_exp_{exp_typ}_adjacent_true_adjacent_connected_within.pdf', bbox_inches='tight')
+    plt.close()
+
+
+    exit(0)
+
+
+
+
+
+if args.get_non_support_analysis_only:
+    non_support_accuracies_by_seed = {}
+    non_support_metrics_by_seed = {}
+
+    for seed in predictions_by_epoch_by_seed.keys():
+        print(f"\n\nAnalyzing seed {seed} for non-support transitions...")
+        predictions_by_epoch = predictions_by_epoch_by_seed[seed]
+        data_with_predictions = inputs_by_seed[seed]
+        vocab = seed_data_files[seed]['vocab']
+
+        non_support_accuracies, non_support_metrics = analyze_non_support_transition_behavior(
+            data_with_predictions,
+            vocab,
+            vocab['stone_state_to_id'],
+            predictions_by_epoch,
+            exp_typ=exp_typ,
+            hop=hop
+        )
+        non_support_accuracies_by_seed[seed] = non_support_accuracies
+        non_support_metrics_by_seed[seed] = non_support_metrics  # kept in case you still need counts
+
+    # ------------------------------------------------------
+    # Average accuracies across seeds for each epoch & reward
+    # ------------------------------------------------------
+    rewards = ['-3', '-1', '1', '3']
+
+    # infer number of epochs from one seed
+    example_seed = next(iter(non_support_accuracies_by_seed.keys()))
+    num_epochs = len(next(iter(non_support_accuracies_by_seed[example_seed].values()))['p_pred_in_non_support'])
+    epochs_range = range(num_epochs)
+
+    # structure: averaged_non_support[reward]['p_pred_in_non_support'] -> [mean per epoch]
+    averaged_non_support = {
+        reward: {
+            'p_pred_in_non_support': [],
+            'p_pred_in_non_support_std': [],
+            'p_correct_given_non_support': [],
+            'p_correct_given_non_support_std': [],
+        }
+        for reward in rewards
+    }
+
+    
+
+    for reward in rewards:
+        # collect per-seed arrays for this reward
+        pred_in_non_support_seed = []
+        correct_given_non_support_seed = []
+
+        for seed, accs_per_reward in non_support_accuracies_by_seed.items():
+            pred_in_non_support_seed.append(
+                np.array(accs_per_reward[reward]['p_pred_in_non_support'], dtype=float)
+            )
+            correct_given_non_support_seed.append(
+                np.array(accs_per_reward[reward]['p_correct_given_non_support'], dtype=float)
+            )
+
+        pred_in_non_support_seed = np.stack(pred_in_non_support_seed, axis=0)      # (n_seeds, n_epochs)
+        correct_given_non_support_seed = np.stack(correct_given_non_support_seed, axis=0)
+
+        mean_pred_in_non = pred_in_non_support_seed.mean(axis=0)
+        std_pred_in_non = pred_in_non_support_seed.std(axis=0) / np.sqrt(pred_in_non_support_seed.shape[0])
+
+        mean_correct_non = correct_given_non_support_seed.mean(axis=0)
+        std_correct_non = correct_given_non_support_seed.std(axis=0) / np.sqrt(correct_given_non_support_seed.shape[0])
+
+
+
+
+        averaged_non_support[reward]['p_pred_in_non_support'] = mean_pred_in_non
+        averaged_non_support[reward]['p_pred_in_non_support_std'] = std_pred_in_non
+        averaged_non_support[reward]['p_correct_given_non_support'] = mean_correct_non
+        averaged_non_support[reward]['p_correct_given_non_support_std'] = std_correct_non
+
+    # ------------------------------------------------------
+    # Plot: one subplot per reward, two accuracy curves per subplot
+    # ------------------------------------------------------
+    fig, axs = plt.subplots(1, len(rewards), figsize=(20, 5))
+    if len(rewards) == 1:
+        axs = [axs]
+
+    reward_title_mapping = {
+        '-3': '-3',
+        '-1': '-1',
+        '1': '1',
+        '3': '+15',
+    }
+
+    for i, reward in enumerate(rewards):
+        ax = axs[i]
+        mean_p_non = averaged_non_support[reward]['p_pred_in_non_support']
+        std_p_non = averaged_non_support[reward]['p_pred_in_non_support_std']
+
+        mean_p_correct = averaged_non_support[reward]['p_correct_given_non_support']
+        std_p_correct = averaged_non_support[reward]['p_correct_given_non_support_std']
+
+        ax.plot(epochs_range, mean_p_non, label='P(pred in non-support transitions)', color='tab:blue')
+        ax.fill_between(
+            epochs_range,
+            mean_p_non - std_p_non,
+            mean_p_non + std_p_non,
+            color='tab:blue',
+            alpha=0.2
+        )
+
+        ax.plot(epochs_range, mean_p_correct, label='P(correct | non-support transitions)', color='tab:orange')
+        ax.fill_between(
+            epochs_range,
+            mean_p_correct - std_p_correct,
+            mean_p_correct + std_p_correct,
+            color='tab:orange',
+            alpha=0.2
+        )
+
+        ax.set_title(f'Reward: {reward_title_mapping[reward]}')
+        ax.set_xlabel('Epoch')
+        ax.grid(True, alpha=0.3)
+        if i == 0:
+            ax.set_ylabel('Accuracy')
+
+        ax.legend(loc='lower right')
+        # Set y-axis limits to [0, 1]
+        ax.set_ylim(0, 1)
+
+
+    plt.tight_layout()
+    plt.savefig(f'non_support_accuracy_hop_{hop}_exp_{exp_typ}.png')
+    plt.savefig(f'non_support_accuracy_hop_{hop}_exp_{exp_typ}.pdf', bbox_inches='tight')
+    plt.close()
+
+    exit(0)
+
+
+
+
+
+
 
 
 # Whether it predicts the correct half, if within the correct half, whether it predicts the correct stone, and whether the model predicts that
@@ -1198,7 +2440,18 @@ for seed in predictions_by_epoch_by_seed.keys():
             'overlap_metrics_by_epoch': overlap_metrics_by_epoch
         }
     else:
-        predicted_in_context_accuracies, predicted_in_context_correct_half_accuracies, predicted_in_context_other_half_accuracies, predicted_in_context_correct_half_exact_accuracies, predicted_correct_within_context, predicted_exact_out_of_all_108, query_start_stone_reward_binning_analysis = half_chemistry_results
+        (
+            predicted_in_context_accuracies,
+            predicted_in_context_correct_half_accuracies,
+            predicted_in_context_other_half_accuracies,
+            predicted_in_context_correct_half_exact_accuracies,
+            predicted_correct_within_context,
+            predicted_exact_out_of_all_108,
+            predicted_in_adjacent_and_correct_half_accuracies,
+            predicted_correct_half_within_adjacent_and_correct_half_accuracies,
+            query_start_stone_reward_binning_analysis,
+        ) = half_chemistry_results
+
         complete_query_stone_state_per_reward_binned_accuracy, within_support_query_stone_state_per_reward_binned_accuracy, within_support_within_half_query_stone_state_per_reward_binned_accuracy = query_start_stone_reward_binning_analysis
 
         # Store results for this seed
@@ -1208,20 +2461,27 @@ for seed in predictions_by_epoch_by_seed.keys():
             'predicted_in_context_other_half_accuracies': predicted_in_context_other_half_accuracies,
             'predicted_in_context_correct_half_exact_accuracies': predicted_in_context_correct_half_exact_accuracies,
             'predicted_correct_within_context': predicted_correct_within_context,
-            'predicted_exact_out_of_all_108': predicted_exact_out_of_all_108, 
+            'predicted_exact_out_of_all_108': predicted_exact_out_of_all_108,
+            'predicted_in_adjacent_and_correct_half_accuracies': predicted_in_adjacent_and_correct_half_accuracies,
+            'predicted_correct_half_within_adjacent_and_correct_half_accuracies': predicted_correct_half_within_adjacent_and_correct_half_accuracies,
             'complete_query_stone_state_per_reward_binned_accuracy': complete_query_stone_state_per_reward_binned_accuracy,
             'within_support_query_stone_state_per_reward_binned_accuracy': within_support_query_stone_state_per_reward_binned_accuracy,
             'within_support_within_half_query_stone_state_per_reward_binned_accuracy': within_support_within_half_query_stone_state_per_reward_binned_accuracy
         }
 
-# import pdb; pdb.set_trace()
+
+
+
+
+
 # Now the plotting begins. First we need to average the result for each metric across seeds.
 # Average results across seeds
 averaged_results = {}
 std_errors = {}
 individual_seed_results = {}
 if exp_typ == 'decomposition':
-    metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108']
+    metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108',
+    'predicted_in_adjacent_and_correct_half_accuracies', 'predicted_correct_half_within_adjacent_and_correct_half_accuracies']
 elif exp_typ == 'held_out':
     metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108']
     if args.reward_binning_analysis_only:
@@ -1353,31 +2613,45 @@ if args.reward_binning_analysis_only and exp_typ == 'held_out':
     epochs = range(len(averaged_results['within_support_query_stone_state_per_reward_binned_accuracy_-3']))
     reward_bin_colors = {'-3': 'tab:olive', '-1': 'tab:cyan', '1': 'tab:pink', '3': 'tab:brown'}
 
+    reward_bin_mapping = {
+        '-3': '-3',
+        '-1': '-1',
+        '1': '1',
+        '3': '+15',
+    }
+
     for reward_bin in ['-3', '-1', '1', '3']:
         # Plot within_support_query_stone_state_per_reward_binned_accuracy
-        # mean_values = averaged_results[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-        # std_error_values = std_errors[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-        # ax.plot(epochs, mean_values, label=f'Within Support Accuracy Reward Bin {reward_bin}', color=reward_bin_colors[reward_bin], linestyle='dashed')
-        # ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
-
-        # Plot within_support_within_half_query_stone_state_per_reward_binned_accuracy
-        mean_values = averaged_results[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-        std_error_values = std_errors[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-        ax.plot(epochs, mean_values, label=f'Query stone with reward feature = {reward_bin}', color=reward_bin_colors[reward_bin], linestyle='solid')
+        mean_values = averaged_results[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+        std_error_values = std_errors[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+        ax.plot(epochs, mean_values, label=f'Query with reward feature {reward_bin_mapping[reward_bin]}', color=reward_bin_colors[reward_bin], linestyle='dashed')
         ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
+
+        # # Plot within_support_within_half_query_stone_state_per_reward_binned_accuracy
+        # mean_values = averaged_results[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+        # std_error_values = std_errors[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+        # ax.plot(epochs, mean_values, label=f'Query with reward feature = {reward_bin_mapping[reward_bin]}', color=reward_bin_colors[reward_bin], linestyle='solid')
+        # ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
 
     ax.set_xlabel('Epochs', fontsize=26)
     ax.set_ylabel('Accuracy', fontsize=26)
     
-    ax.legend(fontsize=18, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2, frameon=True)
+    ax.legend(fontsize=18, loc='lower right', ncol=1)
 
     # Set xticks size and yticks size
     ax.tick_params(axis='x', labelsize=24)
     ax.tick_params(axis='y', labelsize=24)
     plt.ylim(0, 1.0)
     
-    plt.savefig(f'reward_binned_accuracy_analysis_hop_{hop}_{exp_typ}.png')
-    plt.savefig(f'reward_binned_accuracy_analysis_hop_{hop}_{exp_typ}.pdf', bbox_inches='tight')
+    # plt.savefig(f'reward_binned_accuracy_analysis_in_support_gating_hop_{hop}_{exp_typ}.png')
+    # plt.savefig(f'reward_binned_accuracy_analysis_in_support_gating_hop_{hop}_{exp_typ}.pdf', bbox_inches='tight')
+
+
+    # plt.savefig(f'reward_binned_accuracy_exact_match_within_correct_half_hop_{hop}_{exp_typ}.png')
+    # plt.savefig(f'reward_binned_accuracy_exact_match_within_correct_half_hop_{hop}_{exp_typ}.pdf', bbox_inches='tight')
+
+    plt.savefig(f'reward_binned_accuracy_analysis_hop_{hop}_{exp_typ}_within_support_denom.png')
+    plt.savefig(f'reward_binned_accuracy_analysis_hop_{hop}_{exp_typ}_within_support_denom.pdf', bbox_inches='tight')
 
     exit(0)
 
@@ -1386,13 +2660,13 @@ if args.reward_binning_analysis_only and exp_typ == 'held_out':
 
 
 
-
+# If not doing reward binning analysis only, do the normal averaging.
 for metric in metrics:
     all_seed_values = [seed_results[seed][metric] for seed in seed_results.keys()]
 
     # Find the maximum length across all seeds
     max_length = max(len(values) for values in all_seed_values)
-    
+    # import pdb; pdb.set_trace()
     # Pad shorter sequences with imputed values
     padded_seed_values = []
     for values in all_seed_values:
@@ -1424,36 +2698,43 @@ for metric in metrics:
 # Plot the averaged results with error bars using fill_between
 epochs = range(len(averaged_results['predicted_in_context_accuracies']))
 
-metrics = [
-    ('predicted_in_context_accuracies', 'P(A) (8 out of 108)'),
-    ('predicted_in_context_correct_half_accuracies', 'P(B | A) (4 out of 8)'),
-    ('predicted_in_context_other_half_accuracies', '1 - P(B|A) (4 out of 8)'),
-    ('predicted_in_context_correct_half_exact_accuracies', 'P(C|A ∩ B) (1 out of 4)'),
-]
+
 
 if exp_typ == 'decomposition':
     # Only print the predicted_in_context_accuracies and the predicted_correct_within_context.
     metrics = [
-        ('predicted_in_context_accuracies', 'P(A) (8 out of 108)'),
-        ('predicted_in_context_correct_half_accuracies', 'P(B | A) (4 out of 8)'),
-        ('predicted_in_context_correct_half_exact_accuracies', 'P(C | A ∩ B) (1 out of 4)'),
+        ('predicted_in_context_accuracies', 'P(A)'),
+        ('predicted_in_context_correct_half_accuracies', 'P(B | A)'),
+        ('predicted_in_context_correct_half_exact_accuracies', 'P(C | A ∩ B)'),
+        # ('predicted_in_adjacent_and_correct_half_accuracies', 'P(EN | A)'),
+        # ('predicted_correct_half_within_adjacent_and_correct_half_accuracies', 'P(NR | EN)'), 
         # ('predicted_correct_within_context', 'Exact Accuracy (1 out of 8)'),
-        ('predicted_exact_out_of_all_108', 'P(C) = P(A) . P(B | A) . P(C | A ∩ B) (1 out of 108)'),
+        # ('predicted_exact_out_of_all_108', 'P(C) = P(A) . P(B | A) . P(C | A ∩ B) (1 out of 108)'),
     ]
 elif exp_typ == 'composition':
     metrics = [
-        ('predicted_in_context_accuracies', 'P(A) (8 out of 108)'),
-        ('predicted_in_context_correct_candidate_accuracies', 'P(B | A) (reachable out of 8)'),
-        ('correct_within_candidates', 'P(C | A ∩ B) (1 out of reachable)'),
+        ('predicted_in_context_accuracies', 'P(A)'),
+        ('predicted_in_context_correct_candidate_accuracies', 'P(B | A)'),
+        ('correct_within_candidates', 'P(C | A ∩ B)'),
     ]
+elif exp_typ == 'held_out':
+    metrics = [
+        ('predicted_in_context_accuracies', 'P(A) (8 out of 108)'),
+        ('predicted_in_context_correct_half_accuracies', 'P(B | A) (4 out of 8)'),
+        ('predicted_in_context_other_half_accuracies', '1 - P(B|A) (4 out of 8)'),
+        ('predicted_in_context_correct_half_exact_accuracies', 'P(C|A ∩ B) (1 out of 4)'),
+    ]
+
 linestyles = {'predicted_in_context_accuracies': 'solid', 'predicted_correct_within_context': 'solid'}
 exact_match_cycle_colors = ['tab:blue', 'tab:green', 'tab:gray', 'tab:red']
 exact_match_out_of_108_color = exact_match_cycle_colors[hop - 2]
+
+
 colors = {
-    2: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:blue', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color},
-    3: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:green', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color},
-    4: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:gray', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color},
-    5: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_correct_within_context': 'tab:red', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color},
+    2: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_in_context_correct_half_exact_accuracies': 'tab:blue', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color, 'predicted_correct_half_within_adjacent_and_correct_half_accuracies': 'tab:pink', 'predicted_in_adjacent_and_correct_half_accuracies': 'tab:cyan'},
+    3: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_in_context_correct_half_exact_accuracies': 'tab:green', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color, 'predicted_correct_half_within_adjacent_and_correct_half_accuracies': 'tab:pink', 'predicted_in_adjacent_and_correct_half_accuracies': 'tab:cyan'},
+    4: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_in_context_correct_half_exact_accuracies': 'tab:gray', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color, 'predicted_correct_half_within_adjacent_and_correct_half_accuracies': 'tab:pink', 'predicted_in_adjacent_and_correct_half_accuracies': 'tab:cyan'},
+    5: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_half_accuracies': 'tab:purple', 'predicted_in_context_correct_half_exact_accuracies': 'tab:red', 'predicted_exact_out_of_all_108': exact_match_out_of_108_color, 'predicted_correct_half_within_adjacent_and_correct_half_accuracies': 'tab:pink', 'predicted_in_adjacent_and_correct_half_accuracies': 'tab:cyan'},
 }
 colors_composition = {
     2: {'predicted_in_context_accuracies': 'orange', 'predicted_in_context_correct_candidate_accuracies': 'purple', 'correct_within_candidates': 'tab:blue'},
@@ -1465,8 +2746,8 @@ colors_composition = {
 held_out_colors = {
     'predicted_in_context_accuracies': 'tab:blue',
     'predicted_in_context_correct_half_accuracies': 'tab:orange',
-    'predicted_in_context_other_half_accuracies': 'tab:green',
-    'predicted_in_context_correct_half_exact_accuracies': 'tab:red',
+    'predicted_in_context_other_half_accuracies': 'tab:red',
+    'predicted_in_context_correct_half_exact_accuracies': 'tab:green',
     # 'predicted_correct_within_context': 'tab:red',
 }
 if args.plot_individual_seeds:
@@ -1481,7 +2762,7 @@ if args.plot_individual_seeds:
             # Do not plot the exact out of 108 for individual seeds
             if metric == 'predicted_exact_out_of_all_108':
                 continue
-            ax.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(hop, {}).get(metric, 'black'))
+            ax.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(hop, {}).get(metric, 'gold'))
         ax.set_title(f'Seed {seed}', fontsize=16)
         ax.set_xlabel('Epoch', fontsize=14)
         ax.set_ylabel('Accuracy', fontsize=14)
@@ -1490,8 +2771,12 @@ if args.plot_individual_seeds:
         ax.set_ylim(0, 1)
     # plt.suptitle(f'Phasic learning of latent structure learning ({hop}-hop) - Individual Seeds', fontsize=20, y=1.02)
     plt.tight_layout()
-    plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds.png')
-    plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds.pdf', bbox_inches='tight')
+    if args.normalized_reward:
+        plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds_normalized_reward.png')
+        plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds_normalized_reward.pdf', bbox_inches='tight')
+    else:
+        plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds.png')
+        plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds.pdf', bbox_inches='tight')
 
     # Also plot the final exact 1 out of 108 accuracy across seeds
     # Now for each of the seeds, plot the exact out of 108 accuracy in the same plot.
@@ -1508,21 +2793,18 @@ if args.plot_individual_seeds:
     plt.grid(True, alpha=0.3)
     plt.ylim(0, 1)
     plt.tight_layout()
-    plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds.png')
-    plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds.pdf', bbox_inches='tight')
+    if args.normalized_reward:
+        plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds_normalized_reward.png')
+        plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds_normalized_reward.pdf', bbox_inches='tight')
+    else:
+        plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds.png')
+        plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds.pdf', bbox_inches='tight')
 
     # Exit after plotting individual seeds
     exit()
 
-
-
-
-
-# plt.figure(figsize=(14, 10))
-# if exp_typ == 'held_out' and args.reward_binning_analysis_only:
-#     # NOTE: For the reward binning analysis, we need to plot the metricscurves for each reward group separately. Thus, the averaging will also be separate across seeds.
-
-
+fig = plt.figure(figsize=(12, 8))
+# import pdb; pdb.set_trace()
 for metric, label in metrics:
     mean = averaged_results[metric]
     sem = std_errors[metric]
@@ -1534,21 +2816,27 @@ for metric, label in metrics:
     else:
         colors = colors
     if exp_typ == 'held_out':
-        plt.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(metric, 'black'))
+        plt.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(metric, 'gold'))
+        plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(metric, 'gold'))
     else:
-        plt.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(hop, {}).get(metric, 'black'))
-    plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(hop, {}).get(metric, 'black'))
-    
+        # if metric == 'predicted_in_context_correct_half_exact_accuracies':
+        #     # For P(C | A ∩ B), use dashed line
+        #     plt.plot(epochs, mean, label=label, linewidth=2, linestyle='dashed', color=colors.get(hop, {}).get(metric, 'gold'))
+        #     plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(hop, {}).get(metric, 'gold'))
+        # else:
+        plt.plot(epochs, mean, label=label, linewidth=2, color=colors.get(hop, {}).get(metric, 'gold'), linestyle=args.custom_linestyle if args.custom_linestyle else linestyles.get(metric, 'solid'))
+        plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(hop, {}).get(metric, 'gold'))
     # Add text annotations at specific epochs
-    annotate_epochs = hop_to_epoch_values[hop]
-    for anno_epoch in annotate_epochs:
-        if anno_epoch < len(mean):
-            try:
-                plt.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
-                        fontsize=20, ha='center', va='bottom',
-                        color='black')
-            except:
-                print(f"Could not annotate epoch {anno_epoch} for metric {metric}")
+    if args.annotated_epochs:
+        annotate_epochs = hop_to_epoch_values[hop]
+        for anno_epoch in annotate_epochs:
+            if anno_epoch < len(mean):
+                try:
+                    plt.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
+                            fontsize=20, ha='center', va='bottom',
+                            color='black')
+                except:
+                    print(f"Could not annotate epoch {anno_epoch} for metric {metric}")
 
 plt.xlabel('Epoch', fontsize=26)
 plt.ylabel('Accuracy', fontsize=26)
@@ -1558,7 +2846,7 @@ plt.yticks(fontsize=24)
 #     plt.title(f'Phasic learning of intermediate stone inference ({hop}-hop)', fontsize=24, pad=60)
 # else:
 #     plt.title(f'Phasic learning of latent structure learning', fontsize=24, pad=60)
-plt.legend(fontsize=18, loc='upper center', bbox_to_anchor=(0.5, 1.16), ncol=2, frameon=True)
+plt.legend(fontsize=18, loc='center right', ncol=1, frameon=True)
 plt.grid(True, alpha=0.3)
 plt.ylim(0, 1)
 # plt.tight_layout()
@@ -1581,8 +2869,8 @@ else:
             plt.savefig(output_file_name)
             plt.savefig(output_file_name.replace('.png', '.pdf'), bbox_inches='tight')
     else:
-        plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.png')
-        plt.savefig(f'{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inches='tight')
+        plt.savefig(f'Nov_14_{exp_typ}_{hop}_phasic_learning_of_latent_structure.png')
+        plt.savefig(f'Nov_14_{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inches='tight')
 
 
 
