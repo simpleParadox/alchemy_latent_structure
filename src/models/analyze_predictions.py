@@ -1862,10 +1862,15 @@ if exp_typ == 'decomposition':
     }
 elif exp_typ == 'composition':
     hop_to_epoch_values = {
-        2: [0, 200, 400, 600, 800, 999],
-        3: [0, 200, 400, 600, 800, 999],
-        4: [0, 200, 400, 600, 800, 999],
-        5: [0, 200, 400, 600, 800, 999]
+        # 2: [0, 200, 400, 600, 800, 999],
+        # 3: [0, 200, 400, 600, 800, 999],
+        # 4: [0, 200, 400, 600, 800, 999],
+        # 5: [0, 200, 400, 600, 800, 999]
+        # Till 500 only.
+        2: [0, 200, 400, 500],
+        3: [0, 200, 400, 500],
+        4: [0, 200, 400, 500],
+        5: [0, 200, 400, 500]
     }
     
     seed_values_hop_dict = {
@@ -2885,151 +2890,151 @@ else:
 
 
 
-# Create multi-panel figure for 3-hop case
-# ==============================================================================
-if exp_typ == 'composition':
+# # Create multi-panel figure for 3-hop case
+# # ==============================================================================
+# if exp_typ == 'composition':
     
-    fig = plt.figure(figsize=(12, 16))
-    gs = fig.add_gridspec(2, 1, hspace=0.4)
+#     fig = plt.figure(figsize=(12, 16))
+#     gs = fig.add_gridspec(2, 1, hspace=0.4)
     
-    # Panel A: Standard composition metrics (left panel)
-    ax1 = fig.add_subplot(gs[0, 0])
-    epochs = range(len(averaged_results['predicted_in_context_accuracies']))
+#     # Panel A: Standard composition metrics (left panel)
+#     ax1 = fig.add_subplot(gs[0, 0])
+#     epochs = range(len(averaged_results['predicted_in_context_accuracies']))
     
-    composition_metrics = [
-        ('predicted_in_context_accuracies', 'In-support gating (8/108)', 'tab:blue'),
-        ('predicted_in_context_correct_candidate_accuracies', 'Correct candidate', 'tab:orange'),
-        ('correct_within_candidates', 'Exact match', 'tab:green'),
-    ]
+#     composition_metrics = [
+#         ('predicted_in_context_accuracies', 'In-support gating (8/108)', 'tab:blue'),
+#         ('predicted_in_context_correct_candidate_accuracies', 'Correct candidate', 'tab:orange'),
+#         ('correct_within_candidates', 'Exact match', 'tab:green'),
+#     ]
     
-    for metric, label, color in composition_metrics:
-        mean = averaged_results[metric]
-        sem = std_errors[metric]
-        ax1.plot(epochs, mean, label=label, linewidth=2, color=color)
-        ax1.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=color)
-         # Add text annotations at specific epochs
-        annotate_epochs = [0, 25, 50, 75, 100, 150, 175, 200]
-        for anno_epoch in annotate_epochs:
-            if anno_epoch < len(mean):
-                ax1.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
-                         fontsize=12, ha='center', va='bottom', color='black',
-                         bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.6))
+#     for metric, label, color in composition_metrics:
+#         mean = averaged_results[metric]
+#         sem = std_errors[metric]
+#         ax1.plot(epochs, mean, label=label, linewidth=2, color=color)
+#         ax1.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=color)
+#          # Add text annotations at specific epochs
+#         annotate_epochs = [0, 25, 50, 75, 100, 150, 175, 200]
+#         for anno_epoch in annotate_epochs:
+#             if anno_epoch < len(mean):
+#                 ax1.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
+#                          fontsize=12, ha='center', va='bottom', color='black',
+#                          bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.6))
     
-    ax1.set_xlabel('Epoch', fontsize=18)
-    ax1.set_ylabel('Accuracy', fontsize=18)
-    ax1.set_title(f'A. Standard Composition Metrics ({hop}-hop)', fontsize=20, fontweight='bold', pad=20)
-    ax1.legend(fontsize=14, loc='lower right')
-    ax1.grid(True, alpha=0.3)
-    ax1.set_ylim(0, 1)
-    ax1.tick_params(labelsize=14)
+#     ax1.set_xlabel('Epoch', fontsize=18)
+#     ax1.set_ylabel('Accuracy', fontsize=18)
+#     ax1.set_title(f'A. Standard Composition Metrics ({hop}-hop)', fontsize=20, fontweight='bold', pad=20)
+#     ax1.legend(fontsize=14, loc='lower right')
+#     ax1.grid(True, alpha=0.3)
+#     ax1.set_ylim(0, 1)
+#     ax1.tick_params(labelsize=14)
     
-    # Panel B: Potion overlap metrics (right panel)
-    # Panel B: Incremental Learning Metrics (right panel)
-    ax2 = fig.add_subplot(gs[1, 0])
+#     # Panel B: Potion overlap metrics (right panel)
+#     # Panel B: Incremental Learning Metrics (right panel)
+#     ax2 = fig.add_subplot(gs[1, 0])
     
-    # Extract the incremental learning metrics from seed_results
-    max_epochs = max(len(seed_results[seed]['predicted_in_context_accuracies']) for seed in seed_results.keys())
-    averaged_incremental_metrics = {}
+#     # Extract the incremental learning metrics from seed_results
+#     max_epochs = max(len(seed_results[seed]['predicted_in_context_accuracies']) for seed in seed_results.keys())
+#     averaged_incremental_metrics = {}
     
-    for overlap_count in range(1, hop):
-        averaged_incremental_metrics[overlap_count] = {
-            'incremental_accuracy': [],
-            'std_error': []
-        }
+#     for overlap_count in range(1, hop):
+#         averaged_incremental_metrics[overlap_count] = {
+#             'incremental_accuracy': [],
+#             'std_error': []
+#         }
         
-        for epoch_idx in range(max_epochs):
-            epoch_accuracies = []
+#         for epoch_idx in range(max_epochs):
+#             epoch_accuracies = []
             
-            for seed in seed_results.keys():
-                overlap_data = seed_results[seed]['overlap_metrics_by_epoch']
-                epoch_keys = sorted(overlap_data.keys())
+#             for seed in seed_results.keys():
+#                 overlap_data = seed_results[seed]['overlap_metrics_by_epoch']
+#                 epoch_keys = sorted(overlap_data.keys())
                 
-                if epoch_idx < len(epoch_keys):
-                    epoch_key = epoch_keys[epoch_idx]
-                    if 'epoch_overlap_metrics' in overlap_data[epoch_key]:
-                        if overlap_count in overlap_data[epoch_key]['epoch_overlap_metrics']:
-                            # Get per-support metrics and average them
-                            per_support_metrics = overlap_data[epoch_key]['epoch_overlap_metrics'][overlap_count]['per_support_metrics']
+#                 if epoch_idx < len(epoch_keys):
+#                     epoch_key = epoch_keys[epoch_idx]
+#                     if 'epoch_overlap_metrics' in overlap_data[epoch_key]:
+#                         if overlap_count in overlap_data[epoch_key]['epoch_overlap_metrics']:
+#                             # Get per-support metrics and average them
+#                             per_support_metrics = overlap_data[epoch_key]['epoch_overlap_metrics'][overlap_count]['per_support_metrics']
                             
-                            # Extract the aggregated metric for each support
-                            support_accuracies = []
-                            for support_key, metrics in per_support_metrics.items():
-                                if 'incremental_learning_accuracy' in metrics:
-                                    support_accuracies.append(metrics['incremental_learning_accuracy'])
+#                             # Extract the aggregated metric for each support
+#                             support_accuracies = []
+#                             for support_key, metrics in per_support_metrics.items():
+#                                 if 'incremental_learning_accuracy' in metrics:
+#                                     support_accuracies.append(metrics['incremental_learning_accuracy'])
                             
-                            if support_accuracies:
-                                # Average across all supports for this seed
-                                epoch_accuracies.append(np.mean(support_accuracies))
+#                             if support_accuracies:
+#                                 # Average across all supports for this seed
+#                                 epoch_accuracies.append(np.mean(support_accuracies))
             
-            if epoch_accuracies:
-                averaged_incremental_metrics[overlap_count]['incremental_accuracy'].append(np.mean(epoch_accuracies))
-                averaged_incremental_metrics[overlap_count]['std_error'].append(
-                    np.std(epoch_accuracies) / np.sqrt(len(epoch_accuracies))
-                )
+#             if epoch_accuracies:
+#                 averaged_incremental_metrics[overlap_count]['incremental_accuracy'].append(np.mean(epoch_accuracies))
+#                 averaged_incremental_metrics[overlap_count]['std_error'].append(
+#                     np.std(epoch_accuracies) / np.sqrt(len(epoch_accuracies))
+#                 )
     
-    # Plot overlap metrics
-    overlap_colors = {1: 'tab:purple', 2: 'tab:cyan', 3: 'tab:pink', 4: 'tab:brown'}
+#     # Plot overlap metrics
+#     overlap_colors = {1: 'tab:purple', 2: 'tab:cyan', 3: 'tab:pink', 4: 'tab:brown'}
     
-    for overlap_count in range(1, hop):
-        if overlap_count in averaged_incremental_metrics and averaged_incremental_metrics[overlap_count]['incremental_accuracy']:
-            mean = averaged_incremental_metrics[overlap_count]['incremental_accuracy']
-            sem = averaged_incremental_metrics[overlap_count]['std_error']
+#     for overlap_count in range(1, hop):
+#         if overlap_count in averaged_incremental_metrics and averaged_incremental_metrics[overlap_count]['incremental_accuracy']:
+#             mean = averaged_incremental_metrics[overlap_count]['incremental_accuracy']
+#             sem = averaged_incremental_metrics[overlap_count]['std_error']
             
-            label = f'P(R_{overlap_count} | R_{overlap_count-1})'
-            color = overlap_colors.get(overlap_count, 'black')
+#             label = f'P(R_{overlap_count} | R_{overlap_count-1})'
+#             color = overlap_colors.get(overlap_count, 'black')
             
-            ax2.plot(epochs[:len(mean)], mean, label=label, linewidth=2.5, color=color, 
-                    linestyle='solid', marker='o', markersize=5)
-            ax2.fill_between(epochs[:len(mean)], 
-                            np.array(mean) - np.array(sem), 
-                            np.array(mean) + np.array(sem), 
-                            alpha=0.2, color=color)
+#             ax2.plot(epochs[:len(mean)], mean, label=label, linewidth=2.5, color=color, 
+#                     linestyle='solid', marker='o', markersize=5)
+#             ax2.fill_between(epochs[:len(mean)], 
+#                             np.array(mean) - np.array(sem), 
+#                             np.array(mean) + np.array(sem), 
+#                             alpha=0.2, color=color)
 
-            # Add text annotations at specific epochs
-            annotate_epochs = [0, 25, 50, 75, 100, 150, 175, 200]
-            for anno_epoch in annotate_epochs:
-                if anno_epoch < len(mean):
-                    ax2.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
-                             fontsize=12, ha='center', va='bottom', color='black',
-                             bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.6))
+#             # Add text annotations at specific epochs
+#             annotate_epochs = [0, 25, 50, 75, 100, 150, 175, 200]
+#             for anno_epoch in annotate_epochs:
+#                 if anno_epoch < len(mean):
+#                     ax2.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
+#                              fontsize=12, ha='center', va='bottom', color='black',
+#                              bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.6))
 
     
-    ax2.set_xlabel('Epoch', fontsize=18)
-    ax2.set_ylabel('Incremental Learning Accuracy', fontsize=18)
-    ax2.set_title(f'B. Incremental Potion Learning ({hop}-hop)', fontsize=20, fontweight='bold', pad=20)
-    ax2.legend(fontsize=14, loc='lower right')
-    ax2.grid(True, alpha=0.3)
-    ax2.set_ylim(0, 1)
-    ax2.tick_params(labelsize=14)
+#     ax2.set_xlabel('Epoch', fontsize=18)
+#     ax2.set_ylabel('Incremental Learning Accuracy', fontsize=18)
+#     ax2.set_title(f'B. Incremental Potion Learning ({hop}-hop)', fontsize=20, fontweight='bold', pad=20)
+#     ax2.legend(fontsize=14, loc='lower right')
+#     ax2.grid(True, alpha=0.3)
+#     ax2.set_ylim(0, 1)
+#     ax2.tick_params(labelsize=14)
     
-    # Add annotation explaining the metric
-    ax2.text(0.02, 0.98, 
-             'Metric: P(Prediction in R_k | Prediction in R_{k-1})\n'
-             'Given model respected (k-1)-potion constraint,\n'
-             'did it also respect the k-potion constraint?\n'
-             'C = R_0 = All candidate stones for the query.',
-             transform=ax2.transAxes, fontsize=11, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+#     # Add annotation explaining the metric
+#     ax2.text(0.02, 0.98, 
+#              'Metric: P(Prediction in R_k | Prediction in R_{k-1})\n'
+#              'Given model respected (k-1)-potion constraint,\n'
+#              'did it also respect the k-potion constraint?\n'
+#              'C = R_0 = All candidate stones for the query.',
+#              transform=ax2.transAxes, fontsize=11, verticalalignment='top',
+#              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
 
-    if custom_output_file is not None:
-        plt.savefig(f'{custom_output_file}_comprehensive_analysis.png', dpi=300, bbox_inches='tight')
-        plt.savefig(f'{custom_output_file}_comprehensive_analysis.pdf', bbox_inches='tight')
-    else:
-        if args.get_output_file_from_input_path:
-            file_paths = composition_file_paths if exp_typ == 'composition' else decomposition_file_paths if exp_typ == 'decomposition' else None
-            assert len(file_paths[hop]) == 1, "Currently only supports single file path to get output file name."
-            input_path = file_paths[hop][0]
-            # Extract only the 'complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8.5e-05' and the seed value from the input path. Use regex.
-            match = re.search(r'complete_graph/(.+?)/seed_(\d+)', input_path)
-            if match:
-                # Make sure to replace '/' with '_' in the extracted part.
-                extracted_part = match.group(1).replace('/', '_')
-                seed_value = match.group(2)
-                output_file_name = f"composition_{hop}hop_{extracted_part}_seed_{seed_value}_comprehensive_analysis.png"
-                plt.savefig(output_file_name, dpi=300, bbox_inches='tight')
-                plt.savefig(output_file_name.replace('.png', '.pdf'), bbox_inches='tight')
-        else:
-            plt.savefig(f'composition_{hop}_hop_comprehensive_analysis.png', dpi=300, bbox_inches='tight')
-            plt.savefig(f'composition_{hop}_hop_comprehensive_analysis.pdf', bbox_inches='tight')
+#     if custom_output_file is not None:
+#         plt.savefig(f'{custom_output_file}_comprehensive_analysis.png', dpi=300, bbox_inches='tight')
+#         plt.savefig(f'{custom_output_file}_comprehensive_analysis.pdf', bbox_inches='tight')
+#     else:
+#         if args.get_output_file_from_input_path:
+#             file_paths = composition_file_paths if exp_typ == 'composition' else decomposition_file_paths if exp_typ == 'decomposition' else None
+#             assert len(file_paths[hop]) == 1, "Currently only supports single file path to get output file name."
+#             input_path = file_paths[hop][0]
+#             # Extract only the 'complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8.5e-05' and the seed value from the input path. Use regex.
+#             match = re.search(r'complete_graph/(.+?)/seed_(\d+)', input_path)
+#             if match:
+#                 # Make sure to replace '/' with '_' in the extracted part.
+#                 extracted_part = match.group(1).replace('/', '_')
+#                 seed_value = match.group(2)
+#                 output_file_name = f"composition_{hop}hop_{extracted_part}_seed_{seed_value}_comprehensive_analysis.png"
+#                 plt.savefig(output_file_name, dpi=300, bbox_inches='tight')
+#                 plt.savefig(output_file_name.replace('.png', '.pdf'), bbox_inches='tight')
+#         else:
+#             plt.savefig(f'composition_{hop}_hop_comprehensive_analysis.png', dpi=300, bbox_inches='tight')
+#             plt.savefig(f'composition_{hop}_hop_comprehensive_analysis.pdf', bbox_inches='tight')
 
-        print(f"\nSaved comprehensive two-panel figure for {hop}-hop composition analysis")
+#         print(f"\nSaved comprehensive two-panel figure for {hop}-hop composition analysis")

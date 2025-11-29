@@ -342,7 +342,8 @@ class StoneStateDecoderClassifier(nn.Module):
     def __init__(self, num_decoder_layers: int, emb_size: int, nhead: int,
                  src_vocab_size: int, num_classes: int,
                  dim_feedforward: int = 512, dropout: float = 0.1,
-                max_len: int = 5000, prediction_type=None, padding_side: str = "right"):
+                max_len: int = 5000, prediction_type=None, padding_side: str = "right", use_flash_attention: bool = False,
+                batch_size: int = 32): 
         super(StoneStateDecoderClassifier, self).__init__()
         self.emb_size = emb_size
         self.architecture = "decoder"  # Add architecture attribute
@@ -359,6 +360,10 @@ class StoneStateDecoderClassifier(nn.Module):
 
         self.classification_head = nn.Linear(emb_size, num_classes)
         self.max_len = max_len
+
+        self.use_flash_attention = use_flash_attention
+        self.batch_size = batch_size
+        print(f"Using flash attention: {self.use_flash_attention}")
 
     def _generate_causal_mask(self, sz: int, device: torch.device) -> torch.Tensor:
         """Generates a square causal mask for the sequence."""
@@ -655,7 +660,8 @@ def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: 
     
     return model
 
-def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048, prediction_type=None, padding_side: str = "left"):
+def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048, 
+                                    prediction_type=None, padding_side: str = "left", use_flash_attention: bool = False, batch_size: int = 32):
     """
     Creates a StoneStateDecoderClassifier model based on a configuration name.
     
@@ -673,7 +679,7 @@ def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_c
             "num_decoder_layers": 2, "emb_size": 128, "nhead": 4, 
             "dim_feedforward": 256, "dropout": 0.1
         },
-        "xsmall": { 
+        "xsmall": {  # 2.14M params.
             "num_decoder_layers": 4, "emb_size": 256, "nhead": 4, 
             "dim_feedforward": 512, "dropout": 0.1
         },
@@ -681,13 +687,17 @@ def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_c
             "num_decoder_layers": 6, "emb_size": 256, "nhead": 4, 
             "dim_feedforward": 512, "dropout": 0.1
         },
-        "small": { 
-            "num_decoder_layers": 4, "emb_size": 256, "nhead": 4, 
+        "xsmall_wide": {
+            "num_decoder_layers": 4, "emb_size": 512, "nhead": 4, 
             "dim_feedforward": 1024, "dropout": 0.1
         },
+        "small": { 
+            "num_decoder_layers": 5, "emb_size": 256, "nhead": 4, 
+            "dim_feedforward": 512, "dropout": 0.1
+        },
         "medium": { 
-            "num_decoder_layers": 6, "emb_size": 512, "nhead": 8, 
-            "dim_feedforward": 1024, "dropout": 0.1
+            "num_decoder_layers": 6, "emb_size": 256, "nhead": 4, 
+            "dim_feedforward": 512, "dropout": 0.1
         },
         "large": { 
             "num_decoder_layers": 6, "emb_size": 512, "nhead": 8, 
@@ -709,7 +719,9 @@ def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_c
         dropout=config["dropout"],
         max_len=max_len,
         prediction_type=prediction_type,
-        padding_side=padding_side
+        padding_side=padding_side,
+        use_flash_attention=use_flash_attention,
+        batch_size=batch_size
     )
     
     model.to(device)

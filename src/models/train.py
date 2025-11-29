@@ -59,7 +59,7 @@ def parse_args():
     parser.add_argument("--data_split_seed", type=int, default=0,
                         help="Seed value that gets appended to the data path to load the approapriate training / validation.")
 
-    parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "xsmall_modified", "xsmall_deep", "small", "medium", "large"],
+    parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "xsmall_modified", "xsmall_wide", "xsmall_deep", "small", "medium", "large"],
                         help="Size of the transformer model.")
     parser.add_argument("--model_architecture", type=str, default="encoder", choices=["encoder", "decoder"],
                         help="Model architecture: 'encoder' for encoder-only classifier, 'decoder' for decoder-only classifier.")
@@ -164,6 +164,9 @@ def parse_args():
                         help="wandb run ID to resume. If provided, will continue the same wandb run.")
     parser.add_argument("--allow_data_path_mismatch", type=str, default="False", choices=["True", "False"],
                         help="Allow resuming even if data paths don't match checkpoint.")
+
+    parser.add_argument("--use_flash_attention", type=str, default="False", choices=["True", "False"], 
+                        help="Whether to use flash attention in transformer layers (if supported). Default is False.")
     
     return parser.parse_args()
 
@@ -1017,6 +1020,10 @@ def main():
             model_architecture=args.model_architecture
         )
 
+    # Convert flash_attention flag to boolean
+    args.use_flash_attention = str(args.use_flash_attention) == 'True'
+    print("Use flash attention:", args.use_flash_attention)
+
     # Get train and validation sets
     train_dataset = full_dataset.get_train_set()
     val_dataset = None
@@ -1147,7 +1154,9 @@ def main():
                 device=accelerator.device,
                 max_len=args.max_seq_len,
                 prediction_type=args.prediction_type,
-                padding_side=args.padding_side
+                padding_side=args.padding_side,
+                use_flash_attention=args.use_flash_attention,
+                batch_size=args.batch_size
             )
         else:  # encoder architecture
             model = create_classifier_model(
@@ -1229,10 +1238,10 @@ def main():
             # NOTE: The way you define the num_training_steps, it changes whether you have cyclic behaviour or not - but also depends on where you call scheduler.step().
             if args.scheduler_call_location == "after_batch":
                 num_training_steps = args.epochs * len(train_dataloader)
-                print(f"Using CosineAnnealingLR with T_max={num_training_steps} (called per batch)")
+                print(f"Using Cosine with T_max={num_training_steps} (called per batch)")
             elif args.scheduler_call_location == "after_epoch":
                 num_training_steps = args.epochs
-                print(f"Using CosineAnnealingLR with T_max={num_training_steps} (called per epoch)")
+                print(f"Using Cosine with T_max={num_training_steps} (called per epoch)")
             scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_training_steps, eta_min=args.eta_min)
             print(f"Using CosineAnnealingLR with T_max={num_training_steps}")
         elif args.scheduler_type == 'cosine_restarts':
