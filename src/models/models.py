@@ -395,18 +395,35 @@ class StoneStateDecoderClassifier(nn.Module):
         # The padding mask will handle masking out padding tokens separately.
         # PyTorch's attention mechanism combines both masks correctly.
         seq_len = src.size(1)
-        causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(seq_len).to(src.device)
+        causal_mask = None
+        if not self.use_flash_attention:
+            causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(seq_len).to(src.device)
 
         # Pass through the transformer encoder layers with causal mask
         # The combination of causal_mask and src_padding_mask ensures:
         # 1. No attention to future positions (causal_mask)
         # 2. No attention to padding tokens (src_padding_mask)
-        decoder_output = self.transformer_encoder(
-            src=src_emb, 
-            mask=causal_mask, 
-            src_key_padding_mask=src_padding_mask,
-            is_causal=True
-        )
+        if self.use_flash_attention:
+            # Create a boolean causal mask for Flash Attention
+            # Using a boolean mask allows PyTorch to use the optimized SDPA kernel
+            causal_mask = torch.triu(
+                torch.ones(seq_len, seq_len, device=src.device, dtype=torch.bool), 
+                diagonal=1
+            )
+            decoder_output = self.transformer_encoder(
+                src=src_emb, 
+                mask=causal_mask,           # Boolean causal mask
+                src_key_padding_mask=None,  # No padding mask - fastest path
+                is_causal=True              # Hint for optimized kernel
+            )
+        else:
+            causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(seq_len).to(src.device)
+            decoder_output = self.transformer_encoder(
+                src=src_emb, 
+                mask=causal_mask, 
+                src_key_padding_mask=src_padding_mask,
+                is_causal=True
+            )
         
         # For classification, we need the representation of the last valid token
         if src_padding_mask is not None:
@@ -415,6 +432,7 @@ class StoneStateDecoderClassifier(nn.Module):
                 # For left-padding, the last token (rightmost) is always the last token
                 # since padding is on the left side
                 last_token_output = decoder_output[:, -1, :]
+                assert False, "Left padding with decoder model is not fully supported yet."
             else:
                 # For right-padding, find the last valid (non-padding) token for each sequence
                 sequence_lengths = (~src_padding_mask).sum(dim=1) - 1  # -1 for 0-based indexing
