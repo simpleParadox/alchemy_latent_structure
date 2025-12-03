@@ -396,9 +396,7 @@ class StoneStateDecoderClassifier(nn.Module):
         # PyTorch's attention mechanism combines both masks correctly.
         seq_len = src.size(1)
         causal_mask = None
-        if not self.use_flash_attention:
-            causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(seq_len).to(src.device)
-
+        
         # Pass through the transformer encoder layers with causal mask
         # The combination of causal_mask and src_padding_mask ensures:
         # 1. No attention to future positions (causal_mask)
@@ -412,11 +410,12 @@ class StoneStateDecoderClassifier(nn.Module):
             )
             decoder_output = self.transformer_encoder(
                 src=src_emb, 
-                mask=causal_mask,           # Boolean causal mask
+                mask=causal_mask,           # Boolean causal mask NOTE: Because we are using right padding, we do not need to provide src_key_padding_mask.
                 src_key_padding_mask=None,  # No padding mask - fastest path
                 is_causal=True              # Hint for optimized kernel
             )
         else:
+            print("Using standard attention with additive causal mask.")
             causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(seq_len).to(src.device)
             decoder_output = self.transformer_encoder(
                 src=src_emb, 
@@ -694,8 +693,8 @@ def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_c
     """
     configs = {
         "tiny": { 
-            "num_decoder_layers": 2, "emb_size": 128, "nhead": 4, 
-            "dim_feedforward": 256, "dropout": 0.1
+            "num_decoder_layers": 2, "emb_size": 256, "nhead": 4, 
+            "dim_feedforward": 512, "dropout": 0.1
         },
         "xsmall": {  # 2.14M params.
             "num_decoder_layers": 4, "emb_size": 256, "nhead": 4, 

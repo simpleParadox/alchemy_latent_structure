@@ -165,7 +165,7 @@ def parse_args():
     parser.add_argument("--allow_data_path_mismatch", type=str, default="False", choices=["True", "False"],
                         help="Allow resuming even if data paths don't match checkpoint.")
 
-    parser.add_argument("--use_flash_attention", type=str, default="False", choices=["True", "False"], 
+    parser.add_argument("--use_flash_attention", type=str, default="True", choices=["True", "False"], 
                         help="Whether to use flash attention in transformer layers (if supported). Default is False.")
     
     return parser.parse_args()
@@ -519,24 +519,34 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
 
 def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_token_id, args):
     if dataloader is None:
-        return None, None, None if args.task_type == "seq2seq" else None # Adjusted for classification return
+        return None, None, None if args.task_type == "seq2seq" else None
 
     model.eval()
     total_loss = 0
     total_correct_preds = 0
     total_considered_items = 0
-    all_accs = [] if args.task_type == "seq2seq" else None 
-    sos_token_id = dataloader.dataset.sos_token_id if hasattr(dataloader.dataset, 'sos_token_id') else None
+    all_accs = [] if args.task_type == "seq2seq" else None
     
-    # Initialize storage for predictions and targets if requested
-    all_predictions = []
-    all_targets = []
-    all_encoder_inputs = [] if args.store_predictions else None  # Optional: store inputs for analysis
+    # Cache these lookups outside the loop
+    dataset = dataloader.dataset
+    sos_token_id = dataset.sos_token_id if hasattr(dataset, 'sos_token_id') else None
+    eos_token_id = dataset.eos_token_id if hasattr(dataset, 'eos_token_id') else None
+    
+    # Only initialize prediction storage if needed
+    store_predictions = args.store_predictions
+    all_predictions = [] if store_predictions else None
+    all_targets = [] if store_predictions else None
+    all_encoder_inputs = [] if store_predictions else None
     
     if args.task_type in ["seq2seq", "seq2seq_stone_state"]:
         assert sos_token_id is not None, "SOS token ID must be defined for seq2seq tasks."
-        eos_token_id = dataloader.dataset.eos_token_id if hasattr(dataloader.dataset, 'eos_token_id') else None
         assert eos_token_id is not None, "EOS token ID must be defined for seq2seq tasks."
+    
+    # Get unwrapped model once outside the loop
+    unwrapped_model = accelerator.unwrap_model(model)
+    
+    # Pre-define feature groups for multi-label (avoid recreating each batch)
+    feature_groups = [(0, 3), (3, 6), (6, 9), (9, 13)] if args.task_type == "classification_multi_label" else None
     
     with torch.no_grad():
         pbar = tqdm(dataloader, disable=not accelerator.is_local_main_process)
@@ -546,235 +556,209 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             encoder_input_ids = batch["encoder_input_ids"]
             
             if args.task_type == "seq2seq":
-                decoder_input_ids = batch["decoder_input_ids"]
-                decoder_target_ids = batch["decoder_target_ids"]
-
-                # Get the unwrapped model to access the generate method
-                unwrapped_model = accelerator.unwrap_model(model)
-
-                # Use autoregressive generation instead of teacher forcing
-                max_target_len = decoder_target_ids.size(1) + 4  # Allow some extra length
+                decoder_target_ids = batch["decoder_target_ids"].to(accelerator.device)
                 
+                # Use autoregressive generation
+                max_target_len = decoder_target_ids.size(1) + 4
                 generated_ids = unwrapped_model.generate(
                     src=encoder_input_ids,
-                    start_symbol_id=sos_token_id,  
-                    end_symbol_id=eos_token_id,    
+                    start_symbol_id=sos_token_id,
+                    end_symbol_id=eos_token_id,
                     max_len=max_target_len,
-                    device=encoder_input_ids.device,
+                    device=accelerator.device,
                     pad_token_id=pad_token_id
                 )
                 
                 # Remove the SOS token from the generated sequences
                 generated_ids = generated_ids[:, 1:]
-
-                # Store predictions and targets if requested
-                if args.store_predictions:
-                    all_predictions.append(generated_ids)
-                    all_targets.append(decoder_target_ids)
-                    if all_encoder_inputs is not None:
-                        all_encoder_inputs.append(encoder_input_ids)
-
-                # Calculate loss and accuracy (existing logic)
+                
+                # Store predictions immediately to CPU if needed
+                if store_predictions:
+                    all_predictions.append(generated_ids.cpu())
+                    all_targets.append(decoder_target_ids.cpu())
+                    all_encoder_inputs.append(encoder_input_ids.cpu())
+                
+                # Calculate loss and accuracy
                 batch_size = decoder_target_ids.size(0)
-                max_len = max(generated_ids.size(1), decoder_target_ids.size(1))
-
-                # Pad both to the same length
-                if generated_ids.size(1) < max_len:
-                    padding = torch.full((batch_size, max_len - generated_ids.size(1)), pad_token_id, 
-                                       dtype=generated_ids.dtype, device=generated_ids.device)
-                    generated_padded = torch.cat([generated_ids, padding], dim=1)
+                gen_len, tgt_len = generated_ids.size(1), decoder_target_ids.size(1)
+                max_len = max(gen_len, tgt_len)
+                
+                # Pad sequences efficiently using F.pad
+                if gen_len < max_len:
+                    generated_padded = torch.nn.functional.pad(
+                        generated_ids, (0, max_len - gen_len), value=pad_token_id
+                    )
                 else:
                     generated_padded = generated_ids
-
-                if decoder_target_ids.size(1) < max_len:
-                    padding = torch.full((batch_size, max_len - decoder_target_ids.size(1)), pad_token_id, 
-                                       dtype=decoder_target_ids.dtype, device=decoder_target_ids.device)
-                    target_padded = torch.cat([decoder_target_ids, padding], dim=1)
+                
+                if tgt_len < max_len:
+                    target_padded = torch.nn.functional.pad(
+                        decoder_target_ids, (0, max_len - tgt_len), value=pad_token_id
+                    )
                 else:
                     target_padded = decoder_target_ids
-
-                # Calculate error rate on all non-padding tokens (INCLUDING EOS)
+                
+                # Calculate error rate on all non-padding tokens
                 valid_mask = (target_padded != pad_token_id)
                 mismatches = (generated_padded != target_padded) & valid_mask
                 total_valid_tokens = valid_mask.sum().float()
-
+                
                 if total_valid_tokens > 0:
                     token_error_rate = mismatches.sum().float() / total_valid_tokens
                 else:
-                    token_error_rate = torch.tensor(0.0, device=encoder_input_ids.device)
-
-                epsilon = 1e-8
-                loss = -torch.log(1.0 - token_error_rate + epsilon)
-
-                acc, correct, considered = calculate_accuracy_generated_seq2seq(generated_ids, decoder_target_ids, pad_token_id)
-                if all_accs is not None: all_accs.append(acc)
+                    token_error_rate = torch.tensor(0.0, device=accelerator.device)
+                
+                loss = -torch.log(1.0 - token_error_rate + 1e-8)
+                acc, correct, considered = calculate_accuracy_generated_seq2seq(
+                    generated_ids, decoder_target_ids, pad_token_id
+                )
+                if all_accs is not None:
+                    all_accs.append(acc)
+                
+                # Clean up intermediate tensors
+                del generated_padded, target_padded, valid_mask, mismatches
                 
             elif args.task_type == "classification":
-                # if accelerator.is_local_main_process:
-                #     import pdb; pdb.set_trace()
                 target_class_ids = batch["target_class_id"]
                 src_padding_mask = (encoder_input_ids == pad_token_id)
-                output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
+                
+                output_logits = unwrapped_model(encoder_input_ids, src_padding_mask=src_padding_mask)
                 loss = criterion(output_logits, target_class_ids)
                 acc, correct, considered = calculate_accuracy_classification(output_logits, target_class_ids)
                 
-                # Store predictions and targets if requested
-                if args.store_predictions:
-                    predicted_classes = output_logits.argmax(dim=-1)  # Get predicted class IDs
-                    all_predictions.append(predicted_classes)
-                    all_targets.append(target_class_ids)
-                    if all_encoder_inputs is not None:
-                        all_encoder_inputs.append(encoder_input_ids)
+                # Store predictions immediately to CPU if needed
+                if store_predictions:
+                    all_predictions.append(output_logits.argmax(dim=-1).cpu())
+                    all_targets.append(target_class_ids.cpu())
+                    all_encoder_inputs.append(encoder_input_ids.cpu())
+                
+                # Clean up
+                del output_logits, src_padding_mask
                 
             elif args.task_type == "classification_multi_label":
-                target_feature_vector = batch["target_feature_vector"]
+                target_feature_vector = batch["target_feature_vector"].to(accelerator.device)
                 src_padding_mask = (encoder_input_ids == pad_token_id)
                 output_logits = model(encoder_input_ids, src_padding_mask=src_padding_mask)
                 
+                output_logits = unwrapped_model(encoder_input_ids, src_padding_mask=src_padding_mask)
                 
-                feature_groups = [(0, 3), (3, 6), (6, 9), (9, 13)]
-                
-                # Initialize CrossEntropyLoss with ignore_index for group level multi-class classification.
+                # Use pre-defined loss criterion
                 loss_criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id)
                 
-                total_loss = 0.0
-                num_losses = 0
+                total_group_loss = 0.0
+                all_groups_correct = torch.ones(
+                    target_feature_vector.size(0), dtype=torch.bool, device=accelerator.device
+                )
                 
-                all_groups_correct = torch.ones(target_feature_vector.size(0), dtype=torch.bool, device=target_feature_vector.device)  # Start with all samples considered correct, and then set 0 where they are not correct.
                 for start_idx, end_idx in feature_groups:
                     logits_group = output_logits[:, start_idx:end_idx]
-                    target_group_one_hot = target_feature_vector[:, start_idx:end_idx]  # Get corresponding target features for that group.
+                    target_group_indices = target_feature_vector[:, start_idx:end_idx].argmax(dim=-1)
                     
-                    # Convert one-hot to class indices
-                    target_group_indices = target_group_one_hot.argmax(dim=-1)
-                    # Calculate loss for this group
-                    group_loss = loss_criterion(logits_group, target_group_indices)
-                    total_loss += group_loss
-                    num_losses += 1
-                    
-                    # --- Accuracy Calculation ---
-                    # Get predicted class index for this group
-                    predicted_indices_group = logits_group.argmax(dim=-1)
-                    # Check which samples are correct for this group
-                    correct_in_group = (predicted_indices_group == target_group_indices)
-                    # Update the overall correctness. A sample is only correct if it has been
-                    # correct for all previous groups AND is correct for the current one.
-                    all_groups_correct &= correct_in_group
-                    
-                # Average the loss across all groups
-                loss = total_loss / num_losses
+                    total_group_loss += loss_criterion(logits_group, target_group_indices)
+                    all_groups_correct &= (logits_group.argmax(dim=-1) == target_group_indices)
                 
-                # Calculate accuracy based on the overall correctness across all groups
+                loss = total_group_loss / len(feature_groups)
                 correct = all_groups_correct.sum().item()
                 considered = target_feature_vector.size(0)
                 acc = correct / considered if considered > 0 else 0.0
                 
-                
-                # Store predictions and targets if requested
-                if args.store_predictions:
-                    # To store predictions, we need to convert the group-wise logits back to a single multi-hot vector
+                # Store predictions immediately to CPU if needed
+                if store_predictions:
                     predicted_multi_hot = torch.zeros_like(target_feature_vector)
                     for start_idx, end_idx in feature_groups:
-                        logits_group = output_logits[:, start_idx:end_idx]
-                        predicted_indices_group = logits_group.argmax(dim=-1)
-                        # Place a '1' at the predicted index for each sample in the group
-                        predicted_multi_hot.scatter_(1, (start_idx + predicted_indices_group).unsqueeze(1), 1)
-
-                    all_predictions.append(predicted_multi_hot)
-                    all_targets.append(target_feature_vector)
-                    if all_encoder_inputs is not None:
-                        all_encoder_inputs.append(encoder_input_ids)
+                        predicted_indices = output_logits[:, start_idx:end_idx].argmax(dim=-1)
+                        predicted_multi_hot.scatter_(1, (start_idx + predicted_indices).unsqueeze(1), 1)
+                    all_predictions.append(predicted_multi_hot.cpu())
+                    all_targets.append(target_feature_vector.cpu())
+                    all_encoder_inputs.append(encoder_input_ids.cpu())
+                
+                # Clean up
+                del output_logits, src_padding_mask, all_groups_correct
                 
             elif args.task_type == "seq2seq_stone_state":
-                decoder_input_ids = batch["decoder_input_ids"]
-                decoder_target_ids = batch["decoder_target_ids"]
+                decoder_input_ids = batch["decoder_input_ids"].to(accelerator.device, non_blocking=True)
+                decoder_target_ids = batch["decoder_target_ids"].to(accelerator.device, non_blocking=True)
                 
-                output_logits = model(encoder_input_ids, decoder_input_ids)
-                loss = criterion(output_logits.view(-1, output_logits.shape[-1]), decoder_target_ids.view(-1))
-                acc, correct, considered = calculate_accuracy_seq2seq(output_logits, decoder_target_ids, pad_token_id, eos_token_id=None)
+                output_logits = unwrapped_model(encoder_input_ids, decoder_input_ids)
+                loss = criterion(
+                    output_logits.view(-1, output_logits.shape[-1]),
+                    decoder_target_ids.view(-1)
+                )
+                acc, correct, considered = calculate_accuracy_seq2seq(
+                    output_logits, decoder_target_ids, pad_token_id, eos_token_id=None
+                )
                 
-                # Store predictions and targets if requested
-                if args.store_predictions:
-                    predicted_tokens = output_logits.argmax(dim=-1)  # Get predicted token IDs
-                    all_predictions.append(predicted_tokens)
-                    all_targets.append(decoder_target_ids)
-                    if all_encoder_inputs is not None:
-                        all_encoder_inputs.append(encoder_input_ids)
-                        
+                # Store predictions immediately to CPU if needed
+                if store_predictions:
+                    all_predictions.append(output_logits.argmax(dim=-1).cpu())
+                    all_targets.append(decoder_target_ids.cpu())
+                    all_encoder_inputs.append(encoder_input_ids.cpu())
+                
+                # Clean up
+                del output_logits
+                
             else:
                 raise ValueError(f"Unknown task_type: {args.task_type}")
-
+            
             total_loss += loss.item()
             total_correct_preds += correct
             total_considered_items += considered
-
-    # Convert predictions and targets to numpy arrays for single GPU validation
-    if args.store_predictions:
-        # Convert tensor lists to numpy arrays directly
-        all_predictions = [item.cpu().numpy() for item in all_predictions]
-        all_targets = [item.cpu().numpy() for item in all_targets]
-
-        if all_encoder_inputs is not None:
-            all_encoder_inputs = [item.cpu().numpy() for item in all_encoder_inputs]
-
-    # Save predictions and targets if requested and we're on the main process
-    if args.store_predictions and accelerator.is_local_main_process:
-        predictions_dir = os.path.join(args.save_dir, "predictions")
-        if not os.path.exists(predictions_dir):
-            os.makedirs(predictions_dir)
-        
-        # Create filenames with epoch and task type
-        epoch_str = f"epoch_{epoch_num+1:03d}"
-        pred_filename = f"predictions_{args.task_type}_{epoch_str}.npz"
-        target_filename = f"targets_{args.task_type}_{epoch_str}.npz"
-        input_filename = f"inputs_{args.task_type}_{epoch_str}.npz"
-        
-        pred_path = os.path.join(predictions_dir, pred_filename)
-        target_path = os.path.join(predictions_dir, target_filename)
-        input_path = os.path.join(predictions_dir, input_filename)
-        # Convert lists to numpy arrays
-        # predictions_array = np.array(all_predictions, dtype=object) if args.task_type == "seq2seq" else np.array(all_predictions)
-        # targets_array = np.array(all_targets, dtype=object) if args.task_type in ["seq2seq", "seq2seq_stone_state"] else np.array(all_targets)
-        
-        predictions_array = np.concatenate(all_predictions, axis=0) if all_predictions else np.array([])
-        targets_array = np.concatenate(all_targets, axis=0) if all_targets else np.array([])
-        # if all_encoder_inputs is not None:
-        #     all_encoder_inputs = np.concatenate(all_encoder_inputs, axis=0) if all_encoder_inputs else np.array([])
-        
-        print("Shape of predictions array:", predictions_array.shape)
-        print("Shape of targets array:", targets_array.shape)
-        
-        # Save using numpy compressed format
-        np.savez_compressed(pred_path, predictions=predictions_array)
-        np.savez_compressed(target_path, targets=targets_array)
-    
-        if all_encoder_inputs is not None:
-            # if accelerator.is_local_main_process:
-            #     print("Shape of inputs array:", len(all_encoder_inputs), all_encoder_inputs[0].shape if len(all_encoder_inputs) > 0 else "N/A")
-            #     import pdb; pdb.set_trace()
-            inputs_array = np.array(all_encoder_inputs, dtype=object)
-            np.savez_compressed(input_path, inputs=inputs_array)
-        
-        print(f"Saved predictions to: {pred_path}")
-        print(f"Saved targets to: {target_path}")
-        if all_encoder_inputs is not None:
-            print(f"Saved inputs to: {input_path}")
-        
-        # Log file paths to wandb for easy access
-        # wandb.log({
-        #     f"predictions_file_epoch_{epoch_num+1}": pred_path,
-        #     f"targets_file_epoch_{epoch_num+1}": target_path,
-        # })
-        # if all_encoder_inputs is not None:
-        #     wandb.log({f"inputs_file_epoch_{epoch_num+1}": input_path})
             
+            # Clean up batch tensors
+            del encoder_input_ids, loss
+    
+    # Clear CUDA cache after validation loop
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    # Save predictions and targets if requested and on main process
+    if store_predictions and accelerator.is_local_main_process:
+        _save_validation_predictions(
+            all_predictions, all_targets, all_encoder_inputs,
+            args, epoch_num
+        )
+    
     avg_epoch_loss = total_loss / len(dataloader)
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
     
     if args.task_type == "seq2seq":
-        return avg_epoch_loss, avg_epoch_accuracy, all_accs # all_accs is specific to seq2seq here
-    else: # classification or classification_multi_label
-        return avg_epoch_loss, avg_epoch_accuracy
+        return avg_epoch_loss, avg_epoch_accuracy, all_accs
+    return avg_epoch_loss, avg_epoch_accuracy
+
+
+def _save_validation_predictions(all_predictions, all_targets, all_encoder_inputs, args, epoch_num):
+    """Helper function to save predictions to disk."""
+    predictions_dir = os.path.join(args.save_dir, "predictions")
+    if not os.path.exists(predictions_dir):
+        os.makedirs(predictions_dir)
+    
+    epoch_str = f"epoch_{epoch_num+1:03d}"
+    pred_filename = f"predictions_{args.task_type}_{epoch_str}.npz"
+    target_filename = f"targets_{args.task_type}_{epoch_str}.npz"
+    input_filename = f"inputs_{args.task_type}_{epoch_str}.npz"
+    
+    pred_path = os.path.join(predictions_dir, pred_filename)
+    target_path = os.path.join(predictions_dir, target_filename)
+    input_path = os.path.join(predictions_dir, input_filename)
+    
+    # Convert lists to numpy arrays
+    predictions_array = np.concatenate([p.numpy() for p in all_predictions], axis=0) if all_predictions else np.array([])
+    targets_array = np.concatenate([t.numpy() for t in all_targets], axis=0) if all_targets else np.array([])
+    
+    print(f"Shape of predictions array: {predictions_array.shape}")
+    print(f"Shape of targets array: {targets_array.shape}")
+    
+    # Save using numpy compressed format
+    np.savez_compressed(pred_path, predictions=predictions_array)
+    np.savez_compressed(target_path, targets=targets_array)
+    
+    if all_encoder_inputs:
+        inputs_array = np.concatenate([i.numpy() for i in all_encoder_inputs], axis=0)
+        np.savez_compressed(input_path, inputs=inputs_array)
+        print(f"Saved inputs to: {input_path}")
+    
+    print(f"Saved predictions to: {pred_path}")
+    print(f"Saved targets to: {target_path}")
 
 def load_checkpoint(checkpoint_path, model, optimizer, scheduler, accelerator):
     """Load checkpoint and return starting epoch and best validation loss."""
@@ -1131,7 +1115,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             collate_fn=custom_collate_val,
-            num_workers=args.num_workers,
+            num_workers=1, #args.num_workers,
             worker_init_fn=worker_init_fn,
             generator=torch.Generator().manual_seed(args.seed)  # Determinism.
         )
@@ -1423,12 +1407,13 @@ def main():
         epoch_log = {"epoch": epoch + 1, "train_epoch_loss": train_loss, "train_epoch_accuracy": train_acc}
 
         if val_dataloader:
-            if args.task_type == "seq2seq":
-                val_loss, val_acc, val_batch_accs_list = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args)
-                if accelerator.is_local_main_process and val_batch_accs_list:
-                     print(f"Validation Acc (Seq2Seq) mean over batches: {np.mean(val_batch_accs_list):.4f}, std: {np.std(val_batch_accs_list):.4f}")
-            else:
-                val_loss, val_acc = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args)
+            if accelerator.is_local_main_process:
+                if args.task_type == "seq2seq":
+                    val_loss, val_acc, val_batch_accs_list = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args)
+                    if accelerator.is_local_main_process and val_batch_accs_list:
+                        print(f"Validation Acc (Seq2Seq) mean over batches: {np.mean(val_batch_accs_list):.4f}, std: {np.std(val_batch_accs_list):.4f}")
+                else:
+                    val_loss, val_acc = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args)
             
             # step if using ReduceLROnPlateau
             if scheduler and args.scheduler_type == 'reduce_on_plateau':
@@ -1456,6 +1441,14 @@ def main():
                 print(f"Epoch {epoch+1} Validation Summary: Avg Loss: {val_loss:.4f}, Avg Acc: {val_acc:.4f}")
                 epoch_log["val_epoch_loss"] = val_loss
                 epoch_log["val_epoch_accuracy"] = val_acc
+
+                # After validation completes, try to release cached memory
+            if torch.cuda.is_available():
+                print(f"GPU memory allocated before empty_cache: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+                print(f"GPU memory reserved before empty_cache: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+                torch.cuda.empty_cache()
+                print(f"GPU memory allocated after empty_cache: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+                print(f"GPU memory reserved after empty_cache: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
 
             if accelerator.is_local_main_process and val_loss < best_val_loss:
                 best_val_loss = val_loss
