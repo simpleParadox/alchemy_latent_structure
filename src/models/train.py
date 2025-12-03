@@ -1444,11 +1444,7 @@ def main():
 
                 # After validation completes, try to release cached memory
             if torch.cuda.is_available():
-                print(f"GPU memory allocated before empty_cache: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
-                print(f"GPU memory reserved before empty_cache: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
                 torch.cuda.empty_cache()
-                print(f"GPU memory allocated after empty_cache: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
-                print(f"GPU memory reserved after empty_cache: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
 
             if accelerator.is_local_main_process and val_loss < best_val_loss:
                 best_val_loss = val_loss
