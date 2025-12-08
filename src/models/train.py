@@ -1,4 +1,5 @@
 import argparse
+import gc
 import os
 import math
 import random
@@ -19,7 +20,7 @@ from accelerate import Accelerator
 # Assuming train.py is in src/models/, so data_loaders and models are siblings
 from data_loaders import AlchemyDataset, collate_fn
 import re
-from models import create_transformer_model, create_classifier_model, create_decoder_classifier_model
+from models import create_transformer_model, create_classifier_model, create_decoder_classifier_model, create_linear_model
 
 def set_seed(seed_value):
     random.seed(seed_value)
@@ -61,7 +62,7 @@ def parse_args():
 
     parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "xsmall_modified", "xsmall_wide", "xsmall_deep", "small", "medium", "large"],
                         help="Size of the transformer model.")
-    parser.add_argument("--model_architecture", type=str, default="encoder", choices=["encoder", "decoder"],
+    parser.add_argument("--model_architecture", type=str, default="encoder", choices=["encoder", "decoder", "linear"],
                         help="Model architecture: 'encoder' for encoder-only classifier, 'decoder' for decoder-only classifier.")
     parser.add_argument("--max_seq_len", type=int, default=2048, # Max length for support + query + separators
                         help="Maximum sequence length for the model.")
@@ -167,6 +168,8 @@ def parse_args():
 
     parser.add_argument("--use_flash_attention", type=str, default="True", choices=["True", "False"], 
                         help="Whether to use flash attention in transformer layers (if supported). Default is False.")
+    
+    parser.add_argument("--custom_checkpoint_dir", type=str, default=None)
     
     return parser.parse_args()
 
@@ -296,7 +299,7 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
         # No need to move to device explicitly - Accelerate handles this
         encoder_input_ids = batch["encoder_input_ids"]
         
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         
         if args.task_type == "seq2seq":
             decoder_input_ids = batch["decoder_input_ids"]
@@ -542,7 +545,6 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
         assert sos_token_id is not None, "SOS token ID must be defined for seq2seq tasks."
         assert eos_token_id is not None, "EOS token ID must be defined for seq2seq tasks."
     
-    # Get unwrapped model once outside the loop
     unwrapped_model = accelerator.unwrap_model(model)
     
     # Pre-define feature groups for multi-label (avoid recreating each batch)
@@ -551,6 +553,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     with torch.no_grad():
         pbar = tqdm(dataloader, disable=not accelerator.is_local_main_process)
         for _, batch in enumerate(pbar):
+
             # Move batch to device manually since dataloader is not prepared with accelerator
             batch = {k: v.to(accelerator.device) if torch.is_tensor(v) else v for k, v in batch.items()}
             encoder_input_ids = batch["encoder_input_ids"]
@@ -616,7 +619,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                     all_accs.append(acc)
                 
                 # Clean up intermediate tensors
-                del generated_padded, target_padded, valid_mask, mismatches
+                # del generated_padded, target_padded, valid_mask, mismatches
                 
             elif args.task_type == "classification":
                 target_class_ids = batch["target_class_id"]
@@ -633,7 +636,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                     all_encoder_inputs.append(encoder_input_ids.cpu())
                 
                 # Clean up
-                del output_logits, src_padding_mask
+                # del output_logits, src_padding_mask
                 
             elif args.task_type == "classification_multi_label":
                 target_feature_vector = batch["target_feature_vector"].to(accelerator.device)
@@ -673,7 +676,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                     all_encoder_inputs.append(encoder_input_ids.cpu())
                 
                 # Clean up
-                del output_logits, src_padding_mask, all_groups_correct
+                # del output_logits, src_padding_mask, all_groups_correct
                 
             elif args.task_type == "seq2seq_stone_state":
                 decoder_input_ids = batch["decoder_input_ids"].to(accelerator.device, non_blocking=True)
@@ -695,7 +698,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                     all_encoder_inputs.append(encoder_input_ids.cpu())
                 
                 # Clean up
-                del output_logits
+                # del output_logits
                 
             else:
                 raise ValueError(f"Unknown task_type: {args.task_type}")
@@ -705,11 +708,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             total_considered_items += considered
             
             # Clean up batch tensors
-            del encoder_input_ids, loss
-    
-    # Clear CUDA cache after validation loop
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+            # del encoder_input_ids, loss
     
     # Save predictions and targets if requested and on main process
     if store_predictions and accelerator.is_local_main_process:
@@ -717,6 +716,14 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             all_predictions, all_targets, all_encoder_inputs,
             args, epoch_num
         )
+    
+    # if store_predictions:
+    #     del all_predictions, all_targets, all_encoder_inputs
+    
+    # if torch.cuda.is_available():
+    #     torch.cuda.empty_cache()
+    
+    # gc.collect()
     
     avg_epoch_loss = total_loss / len(dataloader)
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
@@ -1144,6 +1151,21 @@ def main():
                 use_flash_attention=args.use_flash_attention,
                 batch_size=args.batch_size
             )
+        elif args.model_architecture == 'linear':
+            print("Using linear classifier architecture for classification task.")
+            model = create_linear_model(
+                config_name=args.model_size,
+                input_size=src_vocab_size,
+                num_classes=num_classes,
+                device=accelerator.device,
+                max_len=args.max_seq_len,
+                io_sep_token_id=full_dataset.io_sep_token_id if hasattr(full_dataset, 'io_sep_token_id') else None,
+                item_sep_token_id=full_dataset.item_sep_token_id if hasattr(full_dataset, 'item_sep_token_id') else None,
+                pooling_strategy=args.pooling_strategy,
+                batch_size=args.batch_size,
+                use_flash_attention=args.use_flash_attention,
+                padding_side=args.padding_side
+            )
         else:  # encoder architecture
             model = create_classifier_model(
                 config_name=args.model_size,
@@ -1184,8 +1206,9 @@ def main():
     else:
         raise ValueError(f"Unknown task_type: {args.task_type}")
     
-    if accelerator.is_local_main_process:
-        wandb.watch(model, log="all", log_freq=100)
+    # if accelerator.is_local_main_process:
+    #     # FIX #5: Reduce wandb memory usage - log only gradients, less frequently
+    #     wandb.watch(model, log="gradients", log_freq=500)  # or remove entirely
 
     # --- Optimizer and Scheduler ---
     print(f"Base learning rate: {args.learning_rate }, Weight decay: {args.weight_decay}")
@@ -1443,11 +1466,19 @@ def main():
                 epoch_log["val_epoch_accuracy"] = val_acc
 
                 # After validation completes, try to release cached memory
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            # if torch.cuda.is_available():
+            #     torch.cuda.empty_cache()
 
-            if accelerator.is_local_main_process and val_loss < best_val_loss:
-                best_val_loss = val_loss
+            if accelerator.is_local_main_process:
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                if args.custom_checkpoint_dir is not None:
+                    # Replace 'def-afyshe-ab' with 'aip-afyshe' in the custom checkpoint dir if needed
+                    args.save_dir = args.save_dir.replace('def-afyshe-ab', 'aip-afyshe')
+                    # Check if updated args.save_dir exists, if not create it
+                    if not os.path.exists(args.save_dir):
+                        os.makedirs(args.save_dir)
+                        print(f"Created custom checkpoint directory: {args.save_dir}")
                 model_save_path = os.path.join(args.save_dir, f"best_model_epoch_{epoch+1}_{args.task_type}_{args.model_size}.pt")
                 
                 # Get unwrapped model for saving
@@ -1478,10 +1509,11 @@ def main():
                     checkpoint['scheduler_state_dict'] = scheduler.state_dict()
                     
                 if args.save_checkpoints:
-                    # Save if epoch % 10 == 0:
-                    if (epoch + 1) % 10 == 0:
-                        torch.save(checkpoint, model_save_path)
+                    torch.save(checkpoint, model_save_path)
                 print(f"New best validation loss: {best_val_loss:.4f}. Model saved to {model_save_path}")
+                # del checkpoint  # Free up memory
+                # torch.cuda.empty_cache()
+                # gc.collect()
         else: 
             if accelerator.is_local_main_process:
                 model_save_path = os.path.join(args.save_dir, f"model_epoch_{epoch+1}_{args.task_type}_{args.model_size}.pt")
@@ -1510,10 +1542,18 @@ def main():
                         torch.save(checkpoint, model_save_path)
                 print(f"Model saved to {model_save_path} (no validation)")
         
+
         if accelerator.is_local_main_process:
             current_lr_end_epoch = scheduler.get_last_lr()[0] if scheduler else optimizer.param_groups[0]['lr']
             epoch_log["learning_rate_end_epoch"] = current_lr_end_epoch
             wandb.log(epoch_log)
+
+        if accelerator.is_local_main_process and torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / 1024**3
+            reserved = torch.cuda.memory_reserved() / 1024**3
+            print(f"Epoch {epoch}: CUDA Memory - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB")
+            torch.cuda.empty_cache()
+            gc.collect()
 
     if accelerator.is_local_main_process:
         print("Training complete.")

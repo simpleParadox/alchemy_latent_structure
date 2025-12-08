@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+import gc
 
 class PositionalEncoding(nn.Module):
     """Injects positional information into the input embeddings."""
@@ -404,10 +405,9 @@ class StoneStateDecoderClassifier(nn.Module):
         if self.use_flash_attention:
             # Create a boolean causal mask for Flash Attention
             # Using a boolean mask allows PyTorch to use the optimized SDPA kernel
-            causal_mask = torch.triu(
-                torch.ones(seq_len, seq_len, device=src.device, dtype=torch.bool), 
-                diagonal=1
-            )
+
+            causal_mask = torch.triu(torch.ones((seq_len, seq_len), device=src.device), diagonal=1).bool()
+
             decoder_output = self.transformer_encoder(
                 src=src_emb, 
                 mask=causal_mask,           # Boolean causal mask NOTE: Because we are using right padding, we do not need to provide src_key_padding_mask.
@@ -415,7 +415,7 @@ class StoneStateDecoderClassifier(nn.Module):
                 is_causal=True              # Hint for optimized kernel
             )
         else:
-            print("Using standard attention with additive causal mask.")
+            # print("Using standard attention with additive causal mask.")
             causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(seq_len).to(src.device)
             decoder_output = self.transformer_encoder(
                 src=src_emb, 
@@ -423,6 +423,9 @@ class StoneStateDecoderClassifier(nn.Module):
                 src_key_padding_mask=src_padding_mask,
                 is_causal=True
             )
+
+        # free up memory
+        # del src_emb, src_emb_permuted, src_emb_pe, causal_mask
         
         # For classification, we need the representation of the last valid token
         if src_padding_mask is not None:
@@ -447,6 +450,9 @@ class StoneStateDecoderClassifier(nn.Module):
         if self.prediction_type == 'autoregressive':
             # Return full sequence output for autoregressive tasks
             return self.classification_head(decoder_output)
+
+        # torch.cuda.empty_cache()
+        # gc.collect()
         
         # Return classification logits based on the last valid token
         next_token_logits = self.classification_head(last_token_output)
@@ -533,7 +539,113 @@ class StoneStateDecoderClassifier(nn.Module):
            
         return tgt
 
+
+
+
+class LinearBaseline(nn.Module):
+    def __init__(self, vocab_size: int, input_size: int, hidden_size: int, output_size: int, 
+                 dropout: float = 0.1, use_flash_attention: bool = True,
+                 max_len: int = 1024, num_layers: int = 4):
+        super(LinearBaseline, self).__init__()
         
+        self.embedding = nn.Embedding(vocab_size, input_size)
+        self.max_len = max_len
+        
+        assert num_layers >= 2, "num_layers must be at least 2 (input and output layers)."
+        
+        # Calculate flattened input size based on max_len
+        flattened_input_size = max_len * input_size
+        print(f"Max length: {max_len}, Flattened input size: {flattened_input_size}")
+        
+        layers = []
+        for l in range(num_layers - 1):
+            in_features = flattened_input_size if l == 0 else hidden_size
+            layers.append(nn.Linear(in_features, hidden_size))
+            layers.append(nn.LayerNorm(hidden_size))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(dropout))
+        
+        layers.append(nn.Linear(hidden_size, output_size))
+        self.network = nn.Sequential(*layers)
+        
+
+    def forward(self, x: torch.Tensor, src_padding_mask: torch.Tensor = None) -> torch.Tensor:
+        """
+        Forward pass using concatenation with fixed max_len.
+        """
+        # Embed the input tokens
+        x_emb = self.embedding(x)  # (batch_size, seq_len, input_size)
+        
+        # Truncate or pad to max_len
+        batch_size, seq_len, emb_dim = x_emb.shape
+
+        # NOTE: Truncation is not done.
+        # Padding if sequence is shorter than max_len
+        padding = torch.zeros(batch_size, self.max_len - seq_len, emb_dim, 
+                            device=x_emb.device, dtype=x_emb.dtype)
+        x_emb = torch.cat([x_emb, padding], dim=1)
+            
+        # Flatten to (batch_size, max_len * input_size)
+        concat_emb = x_emb.reshape(batch_size, -1)
+        
+        # Pass through feedforward network
+        logits = self.network(concat_emb)
+        
+        return logits
+
+
+def create_linear_model(config_name: str, input_size: int, num_classes: int, device="cpu", max_len=2048, io_sep_token_id=None,
+                        item_sep_token_id=None, pooling_strategy='global', batch_size=32, use_flash_attention=False, padding_side: str = "right"):
+    """
+    Creates a simple feedforward neural network (linear model) based on a configuration name.
+    The parameter counts are approximate and depend on the exact input and output sizes.
+    The configurations are approximately the same size as that of the StoneStateDecoderClassifier models.
+    """
+
+    configs = {
+        'tiny': { # Approx 1M params
+            'num_layers': 4,
+            'hidden_sizes': [128, 256],
+            'dropout': 0.1
+        },
+        'xsmall': { # Approx 2M params
+            'num_layers': 4,
+            'hidden_sizes': [256, 512],
+            'dropout': 0.1
+        }
+    }
+
+    if config_name not in configs:
+        raise ValueError(f"Unknown configuration name: {config_name}. Choose from {list(configs.keys())}")
+
+    config = configs[config_name]
+    embedding_size, hidden_size = config['hidden_sizes']
+    dropout = config['dropout']
+    num_layers = config['num_layers']
+
+
+    model = LinearBaseline(
+        vocab_size=input_size,
+        input_size=embedding_size,
+        hidden_size=hidden_size,
+        output_size=num_classes,
+        dropout=dropout,
+        use_flash_attention=use_flash_attention,
+        max_len=max_len,
+        num_layers=num_layers,
+    )
+
+
+    model.to(device)
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model '{config_name}' (LinearBaseline: input_size={input_size}, num_classes={num_classes}) on {device} has {total_params/1e6:.2f}M parameters.")
+
+    return model
+
+
+
+
+
 
 def create_transformer_model(config_name: str, src_vocab_size: int, tgt_vocab_size: int, device="cpu", max_len=1024):
     """
