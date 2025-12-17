@@ -1809,7 +1809,7 @@ three_hop_epoch_values_text = [0, 200, 600, 800, 999]
 four_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
 five_hop_epoch_values_text = [0, 200, 600, 800, 999]
 
-four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 500]
+four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 500, 1000]
 
 # Create a dictionary mapping hop counts to their hop-specific epoch values
 hop_to_epoch_values = {

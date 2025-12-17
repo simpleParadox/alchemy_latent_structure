@@ -2,6 +2,7 @@ alchemy_env/
 *.json
 wandb/
 checkpoints/
+pca_plots_dir/
 *.json.gz
 *.sh
 output_files/

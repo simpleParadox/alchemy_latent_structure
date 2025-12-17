@@ -255,9 +255,13 @@ def load_model_from_checkpoint(checkpoint_path, device='cpu'):
 if __name__ == "__main__":
     import os
     import re
+    import argparse
+    parser = argparse.ArgumentParser(description="Analyze Intrinsic Dimension over Training Epochs")
+    parser.add_argument('--custom_save_dir', type=str, required=True, help='Path to save the output plot')
+    args = parser.parse_args()
     
     # Directory containing checkpoints
-    base_checkpoint_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/best_model_epoch_200_classification_xsmall.pt'
+    base_checkpoint_path = '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/best_model_epoch_200_classification_xsmall.pt'
     checkpoint_dir = os.path.dirname(base_checkpoint_path)
     
     print(f"Looking for checkpoints in: {checkpoint_dir}")
@@ -319,7 +323,7 @@ if __name__ == "__main__":
 
     val_dataloader = DataLoader(
                 val_dataset,
-                batch_size=args.batch_size,
+                batch_size=1000,
                 shuffle=False,
                 collate_fn=custom_collate_val,
                 num_workers=1,
@@ -334,6 +338,7 @@ if __name__ == "__main__":
         
         # Load model
         model, _ = load_model_from_checkpoint(ckpt_path, device=device)
+        import pdb; pdb.set_trace()
         
         # Get activations
         activations, labels = get_layer_wise_activations(model, val_dataloader, device, val_dataset.pad_token_id, get_last_token_only=True)
@@ -363,6 +368,6 @@ if __name__ == "__main__":
     plt.legend(fontsize=10)
     plt.grid(True, alpha=0.3)
     
-    output_plot_path = os.path.join('id_evolution_over_epochs.png')
+    output_plot_path = args.custom_save_dir
     plt.savefig(output_plot_path, dpi=300)
     print(f"Saved ID evolution plot to {output_plot_path}")

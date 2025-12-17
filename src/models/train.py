@@ -159,8 +159,16 @@ def parse_args():
     parser.add_argument("--fp16", type=str, default="False", choices=["True", "False"])
 
     # Add resume arguments
-    parser.add_argument("--resume_from_checkpoint", type=str, default=None,
+    parser.add_argument("--resume_from_checkpoint", type=str, default='False',
                         help="Path to checkpoint file to resume training from.")
+    parser.add_argument("--resume_checkpoint_epoch", type=str, default=None)
+    parser.add_argument("--resume_checkpoint_path", type=str, default=None)
+    
+    parser.add_argument("--freeze_layers", type=str, default=None,
+                        help="Comma-separated list of layer names to freeze (e.g., 'transformer_layer_0,transformer_layer_1').")
+    
+
+
     parser.add_argument("--resume_wandb_run_id", type=str, default=None,
                         help="wandb run ID to resume. If provided, will continue the same wandb run.")
     parser.add_argument("--allow_data_path_mismatch", type=str, default="False", choices=["True", "False"],
@@ -170,6 +178,9 @@ def parse_args():
                         help="Whether to use flash attention in transformer layers (if supported). Default is False.")
     
     parser.add_argument("--custom_checkpoint_dir", type=str, default=None)
+    parser.add_argument("--include_nonlinearity", type=str, default="True", choices=["True", "False"], 
+                        help="Whether to include non-linearity in transformer feed-forward layers. Default is True.")
+
     
     return parser.parse_args()
 
@@ -285,6 +296,122 @@ def calculate_accuracy_generated_seq2seq(generated_ids, targets, pad_token_id):
     accuracy = num_correct / batch_size if batch_size > 0 else 0.0
     
     return accuracy, num_correct, batch_size
+
+def _apply_freeze_layers_in_place(model, freeze_layers: str):
+    """
+    Freeze selected layers by setting requires_grad=False in-place.
+    Expects layer names like: 'transformer_layer_0,transformer_layer_1,classification_layer'
+    """
+    if not freeze_layers:
+        return
+
+    layers_to_freeze = [x.strip() for x in freeze_layers.split(",") if x.strip()]
+    if not layers_to_freeze:
+        return
+
+    # model here is the *raw* (unwrapped) model (before accelerator.prepare)
+    unwrapped_model = model
+    if hasattr(unwrapped_model, "module"):
+        unwrapped_model = unwrapped_model.module
+
+    print(f"Manual Freezing Enabled for: {layers_to_freeze}")
+
+    found_any = False
+
+    # Encoder-style naming in your current code path
+    if hasattr(unwrapped_model, "transformer_encoder"):
+        for layer_name in layers_to_freeze:
+            found = False
+            if layer_name.startswith("transformer_layer_"):
+                try:
+                    idx = int(layer_name.split("_")[-1])
+                    target_layer = unwrapped_model.transformer_encoder.layers[idx]
+                    for p in target_layer.parameters():
+                        p.requires_grad = False
+                    print(f"Froze {layer_name} (Encoder Layer {idx})")
+                    found = True
+                except (IndexError, ValueError) as e:
+                    print(f"ERROR: Could not parse or find {layer_name}: {e}")
+
+            elif layer_name == "classification_layer":
+                try:
+                    for p in unwrapped_model.classification_head.parameters():
+                        p.requires_grad = False
+                    print("Froze classification_layer")
+                    found = True
+                except AttributeError as e:
+                    print(f"ERROR: Could not find classification_layer: {e}")
+
+            if not found:
+                print(f"WARNING: Layer {layer_name} not found in model structure.")
+            found_any = found_any or found
+
+    else:
+        print("WARNING: Model architecture does not match expected structure for freezing.")
+
+    # Convenience summary
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"Freezing complete. Trainable params: {trainable:,} / {total:,}")
+
+def _get_checkpoint_lr(checkpoint: dict) -> float | None:
+    opt_state = checkpoint.get("optimizer_state_dict")
+    if not opt_state:
+        return None
+    try:
+        return float(opt_state["param_groups"][0]["lr"])
+    except Exception:
+        return None
+
+def load_checkpoint(
+    checkpoint_path,
+    model,
+    optimizer,
+    scheduler,
+    accelerator,
+    checkpoint_epoch,
+    model_size,
+    *,
+    load_optimizer_state: bool = True,
+    load_scheduler_state: bool = True,
+    restore_lr_if_skipping_optimizer: bool = True,
+):
+    """Load checkpoint and return starting epoch and best validation loss."""
+    print(f"Loading checkpoint from: {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+    unwrapped_model = accelerator.unwrap_model(model)
+    unwrapped_model.load_state_dict(checkpoint["model_state_dict"])
+
+    ckpt_lr = _get_checkpoint_lr(checkpoint)
+
+    if load_optimizer_state:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    else:
+        print("Skipping optimizer state load (branch training / freezing changes trainable params).")
+        if restore_lr_if_skipping_optimizer and ckpt_lr is not None:
+            for pg in optimizer.param_groups:
+                pg["lr"] = ckpt_lr
+            print(f"Restored optimizer LR from checkpoint: {ckpt_lr:.6e}")
+
+    if scheduler is not None and "scheduler_state_dict" in checkpoint and load_scheduler_state:
+        try:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            print("Loaded scheduler state from checkpoint")
+        except Exception as e:
+            print(f"WARNING: Failed to load scheduler state_dict ({type(e).__name__}: {e})")
+            if ckpt_lr is not None:
+                for pg in optimizer.param_groups:
+                    pg["lr"] = ckpt_lr
+                print(f"Fallback: set optimizer LR from checkpoint: {ckpt_lr:.6e}")
+
+    start_epoch = checkpoint["epoch"] + 1
+    best_val_loss = checkpoint.get("best_val_loss", checkpoint.get("loss", float("inf")))
+
+    print(f"Resumed from epoch {checkpoint['epoch']}, starting epoch {start_epoch}")
+    print(f"Previous best validation loss: {best_val_loss}")
+
+    return start_epoch, best_val_loss, checkpoint.get("args", None)
 
 def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator, epoch_num, pad_token_id, args):
     model.train()
@@ -767,32 +894,6 @@ def _save_validation_predictions(all_predictions, all_targets, all_encoder_input
     print(f"Saved predictions to: {pred_path}")
     print(f"Saved targets to: {target_path}")
 
-def load_checkpoint(checkpoint_path, model, optimizer, scheduler, accelerator):
-    """Load checkpoint and return starting epoch and best validation loss."""
-    print(f"Loading checkpoint from: {checkpoint_path}")
-    
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    
-    # Load model state
-    unwrapped_model = accelerator.unwrap_model(model)
-    unwrapped_model.load_state_dict(checkpoint['model_state_dict'])
-    
-    # Load optimizer state
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    
-    # Load scheduler state if available
-    if scheduler is not None and 'scheduler_state_dict' in checkpoint:
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        print("Loaded scheduler state from checkpoint")
-    
-    start_epoch = checkpoint['epoch'] + 1
-    best_val_loss = checkpoint.get('best_val_loss', checkpoint.get('loss', float('inf')))
-    
-    print(f"Resumed from epoch {checkpoint['epoch']}, starting epoch {start_epoch}")
-    print(f"Previous best validation loss: {best_val_loss}")
-    
-    return start_epoch, best_val_loss, checkpoint.get('args', None)
-
 def validate_resume_compatibility(checkpoint_args, current_args, allow_mismatch=False):
     """Validate that resumed training is compatible with current arguments."""
     if not checkpoint_args:
@@ -814,15 +915,29 @@ def validate_resume_compatibility(checkpoint_args, current_args, allow_mismatch=
             current_val = getattr(current_args, param)
             if checkpoint_val != current_val:
                 errors.append(f"{param}: checkpoint={checkpoint_val}, current={current_val}")
-    
+    data_split_seed = checkpoint_args.data_split_seed if hasattr(checkpoint_args, 'data_split_seed') else None
     # Check data parameters
     for param in data_params:
         if hasattr(checkpoint_args, param) and hasattr(current_args, param):
+            # Add the data_split_seed from the checkpoint to the current args to ensure consistency.
+            # From the following example path, only get the string after 'dm_aclhemy'=/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_0.json
+
             checkpoint_val = getattr(checkpoint_args, param)
             current_val = getattr(current_args, param)
+            if param != 'data_split_seed':
+                suffix_path = getattr(checkpoint_args, param).split('dm_alchemy/')[-1] if 'dm_alchemy/' in getattr(checkpoint_args, param) else getattr(checkpoint_args, param) 
+                # Add the data_split_seed to the current args just before the .json.
+                checkpoint_val = suffix_path 
+                if data_split_seed is not None and current_val.endswith('.json'):
+                    if 'seed_' in current_val:
+                        continue
+                    else:
+                        current_val = current_val.replace('.json', f'_seed_{data_split_seed}.json')
+
             if checkpoint_val != current_val:
                 warnings.append(f"{param}: checkpoint={checkpoint_val}, current={current_val}")
-    
+
+    # import pdb; pdb.set_trace()
     if errors:
         raise ValueError(f"Critical parameter mismatch - cannot resume: {errors}")
     
@@ -834,40 +949,74 @@ def validate_resume_compatibility(checkpoint_args, current_args, allow_mismatch=
         else:
             print("Continuing with different data paths as requested")
 
+def validate_scheduler_resume_compatibility(checkpoint_args, args):
+    if checkpoint_args is None:
+        return
+    fields = ["scheduler_type", "scheduler_call_location", "eta_min"]
+    mismatches = []
+    for f in fields:
+        if hasattr(checkpoint_args, f) and hasattr(args, f):
+            if str(getattr(checkpoint_args, f)) != str(getattr(args, f)):
+                mismatches.append((f, getattr(checkpoint_args, f), getattr(args, f)))
+    if mismatches:
+        raise ValueError(f"Scheduler mismatch on resume: {mismatches}. Refusing to resume.")
+
 def main():
     args = parse_args()
-    
-    # ADD THIS SECTION - Handle resume logic early
+
+    # Normalize boolean-like args early
+    args.allow_data_path_mismatch = str(args.allow_data_path_mismatch).lower() == "true"
+    args.resume_from_checkpoint = str(args.resume_from_checkpoint).lower() == "true"
+
     start_epoch = 0
     best_val_loss = float('inf')
     resume_checkpoint_path = None
     checkpoint_args = None
-    
-    if args.resume_from_checkpoint and args.resume_from_checkpoint != '':
-        resume_checkpoint_path = args.resume_from_checkpoint
+
+    if args.resume_from_checkpoint:
+        if args.resume_checkpoint_path is None or args.resume_checkpoint_epoch is None:
+            raise ValueError(
+                "resume_from_checkpoint=True but resume_checkpoint_path or resume_checkpoint_epoch is None. "
+                "Provide both --resume_checkpoint_path and --resume_checkpoint_epoch."
+            )
+
+        # Build FULL checkpoint filename once (no double-appending later)
+        resume_checkpoint_path = os.path.join(
+            args.resume_checkpoint_path,
+            f"best_model_epoch_{args.resume_checkpoint_epoch}_classification_{args.model_size}.pt"
+        )
+
+        # Extract the hyperparameters from the resume_checkpoint_path to correctly update the wandb args. For example, extract the lr, model_size, eta_min, seed, weight_decay etc.
+        # Here's an example of a path: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/'
+        args.weight_decay = float(re.search(r'wd_([0-9.eE+-]+)', resume_checkpoint_path).group(1))
+        args.learning_rate = float(re.search(r'lr_([0-9.eE+-]+)', resume_checkpoint_path).group(1))
+        args.eta_min = float(re.search(r'eta_min_([0-9.eE+-]+)', resume_checkpoint_path).group(1))
+        args.model_size = re.search(r'/(tiny|small|medium|large|xsmall|base|large_v2)/', resume_checkpoint_path).group(1)
+        args.seed = int(re.search(r'seed_(\d+)', resume_checkpoint_path).group(1))
+        print("Extracted args from resume checkpoint path:")
+        print(f"weight_decay: {args.weight_decay}")
+        print(f"learning_rate: {args.learning_rate}")
+        print(f"eta_min: {args.eta_min}")
+        print(f"model_size: {args.model_size}")
+        print(f"seed: {args.seed}")
+
+
+
         if not os.path.exists(resume_checkpoint_path):
             raise FileNotFoundError(f"Checkpoint not found: {resume_checkpoint_path}")
-        
-        # Load checkpoint to get original args for validation
-        print(f"Loading checkpoint for resume: {resume_checkpoint_path}")
-        checkpoint = torch.load(resume_checkpoint_path, map_location='cpu')
+
+        print(f"Loading checkpoint for resume (for validation): {resume_checkpoint_path}")
+        checkpoint = torch.load(resume_checkpoint_path, map_location='cpu', weights_only=False)
         checkpoint_args = checkpoint.get('args', None)
-        
-        # Validate compatibility
+
         validate_resume_compatibility(
-            checkpoint_args, 
-            args, 
+            checkpoint_args,
+            args,
             allow_mismatch=args.allow_data_path_mismatch
         )
-        
+
         print(f"Resuming training from epoch {checkpoint['epoch'] + 1}")
-        if checkpoint_args:
-            print(f"Original train data: {getattr(checkpoint_args, 'train_data_path', 'N/A')}")
-            print(f"Current train data: {args.train_data_path}")
 
-    args.allow_data_path_mismatch = str(args.allow_data_path_mismatch) == 'True'  or str(args.allow_data_path_mismatch) == 'true'
-
-    
     args.is_held_out_color_exp = str(args.is_held_out_color_exp) == 'True' or str(args.is_held_out_color_exp) == 'true'  # Convert to boolean 
     if args.is_held_out_color_exp:  
         print("Running held-out color experiment.")
@@ -915,6 +1064,16 @@ def main():
     args.save_dir = os.path.join(base_path, args.save_dir)
     print("Updated train data path: ", args.train_data_path)
     print("Updated validation data path: ", args.val_data_path if args.val_data_path else "None")
+
+
+    if args.resume_from_checkpoint:
+        # Validate compatibility
+        validate_resume_compatibility(
+            checkpoint_args, 
+            args, 
+            allow_mismatch=args.allow_data_path_mismatch
+        )
+        validate_scheduler_resume_compatibility(checkpoint_args, args)
     
     # Extract the 'shop' and 'qhop' length from the args.train_data_path.
     # the train_data_path is expected to be in the format:
@@ -1153,6 +1312,7 @@ def main():
             )
         elif args.model_architecture == 'linear':
             print("Using linear classifier architecture for classification task.")
+            include_nonlinearity = str(args.include_nonlinearity) == 'True'
             model = create_linear_model(
                 config_name=args.model_size,
                 input_size=src_vocab_size,
@@ -1164,7 +1324,8 @@ def main():
                 pooling_strategy=args.pooling_strategy,
                 batch_size=args.batch_size,
                 use_flash_attention=args.use_flash_attention,
-                padding_side=args.padding_side
+                padding_side=args.padding_side,
+                include_nonlinearity=include_nonlinearity
             )
         else:  # encoder architecture
             model = create_classifier_model(
@@ -1206,36 +1367,28 @@ def main():
     else:
         raise ValueError(f"Unknown task_type: {args.task_type}")
     
-    # if accelerator.is_local_main_process:
-    #     # FIX #5: Reduce wandb memory usage - log only gradients, less frequently
-    #     wandb.watch(model, log="gradients", log_freq=500)  # or remove entirely
+    if args.freeze_layers:
+        # Do freezing before optimizer creation & before DDP wrapping
+        _apply_freeze_layers_in_place(model, args.freeze_layers)
 
     # --- Optimizer and Scheduler ---
     print(f"Base learning rate: {args.learning_rate }, Weight decay: {args.weight_decay}")
 
+    # IMPORTANT: build optimizer only from trainable parameters
+    trainable_parameters = [p for p in model.parameters() if p.requires_grad]
 
     if args.optimizer == "adamw":
-        optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+        optimizer = optim.AdamW(trainable_parameters, lr=args.learning_rate, weight_decay=args.weight_decay)
         print("Using AdamW optimizer.")
     elif args.optimizer == "adam":
-        optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=0)
+        optimizer = optim.Adam(trainable_parameters, lr=args.learning_rate, weight_decay=0)
         print("Using Adam optimizer with no weight decay (0) - hardcoded.")
     elif args.optimizer == 'rmsprop':
-        optimizer = optim.RMSprop(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+        optimizer = optim.RMSprop(trainable_parameters, lr=args.learning_rate, weight_decay=args.weight_decay)
         print("Using RMSprop optimizer.")
     elif args.optimizer == 'adagrad':
-        optimizer = optim.Adagrad(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+        optimizer = optim.Adagrad(trainable_parameters, lr=args.learning_rate, weight_decay=args.weight_decay)
         print("Using Adagrad optimizer.")
-    # elif args.optimizer == 'adafactor':
-    #     optimizer = optim.Adafactor(
-    #         model.parameters(),
-    #         lr=args.learning_rate,
-    #         scale_parameter=False,
-    #         relative_step=False,
-    #         weight_decay=args.weight_decay,
-    #         warmup_init=False
-    #     )
-        # print("Using Adafactor optimizer.")
     
     use_scheduler = str(args.use_scheduler) == "True" or str(args.use_scheduler) == "true"
     print("Use scheduler: ", use_scheduler)
@@ -1307,14 +1460,37 @@ def main():
         model, optimizer, train_dataloader, scheduler
     )
     
-    # ADD THIS SECTION - Load checkpoint after preparation if resuming
+    # Only initialize if not resuming; if resuming, load_checkpoint will supply it.
+    best_val_loss = float('inf')
     if resume_checkpoint_path:
+        # Branch training when freezing is enabled: do NOT load optimizer state.
+        freeze_active = args.freeze_layers is not None and str(args.freeze_layers).strip() != ""
+
         start_epoch, best_val_loss, _ = load_checkpoint(
-            resume_checkpoint_path, model, optimizer, scheduler, accelerator
+            resume_checkpoint_path,
+            model,
+            optimizer,
+            scheduler,
+            accelerator,
+            checkpoint_epoch=args.resume_checkpoint_epoch,
+            model_size=args.model_size,
+            load_optimizer_state=(not freeze_active),
+            # For cosine, it's usually OK to load scheduler state even if optimizer state is skipped,
+            # as long as param_group count matches (commonly 1 group here).
+            load_scheduler_state=True,
+            restore_lr_if_skipping_optimizer=True,
         )
-    # END OF ADDED SECTION
-    
-    # Note: val_dataloader is NOT prepared with accelerator for single GPU validation
+
+        # Resume diagnostics: prove scheduler/optimizer weren't reset
+        if accelerator.is_local_main_process:
+            print(f"[RESUME] start_epoch={start_epoch}, best_val_loss={best_val_loss}")
+            if scheduler is not None:
+                # last_epoch is the internal counter used by PyTorch schedulers
+                last_epoch = getattr(scheduler, "last_epoch", None)
+                current_lr = scheduler.get_last_lr()[0] if hasattr(scheduler, "get_last_lr") else optimizer.param_groups[0]["lr"]
+                print(f"[RESUME] Scheduler type={args.scheduler_type}, call_location={args.scheduler_call_location}, last_epoch={last_epoch}, lr={current_lr:.6e}, eta_min={args.eta_min}")
+
+    # Note: val_dataloader is NOT prepared with accelerator for single GPU validation.
 
     if accelerator.is_local_main_process:
         print(f"Model initialized: {args.model_size}, Architecture: {args.model_architecture}, Task: {args.task_type}")
@@ -1322,9 +1498,13 @@ def main():
         
         if scheduler:
             if args.scheduler_type == "cosine":
-                # num_training_steps = args.epochs * len(train_dataloader)
-                num_training_steps = args.epochs
-                print(f"Scheduler: CosineAnnealingLR, T_max: {num_training_steps} (called per batch)")
+                if args.scheduler_call_location == "after_batch":
+                    num_training_steps = args.epochs * len(train_dataloader)
+                    print(f"Scheduler: CosineAnnealingLR, T_max: {num_training_steps} (called per batch)")
+                else:
+                    num_training_steps = args.epochs
+                    print(f"Scheduler: CosineAnnealingLR, T_max: {num_training_steps} (called per epoch)")
+                print(f"Scheduler eta_min: {args.eta_min}")
             elif args.scheduler_type == "exponential":
                 print(f"Scheduler: ExponentialLR, gamma: {args.gamma} (called per epoch)")
         else:
@@ -1363,7 +1543,7 @@ def main():
         held_out_edge_match = re.search(r'_held_out_color_(\d+)_edges_exp', args.train_data_path)
         if held_out_edge_match:
             held_out_edge_number = held_out_edge_match.group(1)
-            print(f"Held-out color number extracted: {held_out_edge_number}")
+            print(f"Held-out number extracted: {held_out_edge_number}")
         args.save_dir = os.path.join(args.save_dir, f"held_out_color_exp")
         if 'same_reward' in args.preprocessed_dir:
             args.save_dir = os.path.join(args.save_dir, f"same_reward_held_out_color_{held_out_edge_number}")
@@ -1407,16 +1587,34 @@ def main():
         f"shop_{support_hop}_qhop_{query_hop}",
         f"seed_{args.data_split_seed}"
     )
-    
+
+    # --- NEW: if resuming, write checkpoints into a subdirectory under seed_*/ ---
+    # This ensures you never overwrite the original run's checkpoints and you can
+    # distinguish resumed training branches by resume epoch + freezing config.
+    if args.resume_from_checkpoint:
+        # Use the epoch number encoded in the checkpoint filename (args.resume_checkpoint_epoch)
+        # since that's what the user provided for resumption.
+        resume_epoch_str = str(args.resume_checkpoint_epoch)
+
+        # Make freeze_layers safe for folder names
+        freeze_layers_str = (args.freeze_layers or "none").strip()
+        freeze_layers_str = freeze_layers_str.replace(" ", "")
+        # Avoid overly messy path separators
+        freeze_layers_str = freeze_layers_str.replace("/", "_").replace("\\", "_")
+
+        # Example: seed_0/resume_from_epoch_140__freeze_transformer_layer_0,transformer_layer_1
+        resume_subdir_name = f"resume_from_epoch_{resume_epoch_str}__freeze_{freeze_layers_str}"
+
+        hierarchical_save_dir = os.path.join(hierarchical_save_dir, resume_subdir_name)
+
     if accelerator.is_local_main_process:
         if not os.path.exists(hierarchical_save_dir):
-            os.makedirs(hierarchical_save_dir)
+            os.makedirs(hierarchical_save_dir, exist_ok=True)
             print(f"Created checkpoint directory: {hierarchical_save_dir}")
-        
+
         # Update args.save_dir to use the hierarchical structure
         args.save_dir = hierarchical_save_dir
 
-    best_val_loss = float('inf')
 
     for epoch in tqdm(range(start_epoch, args.epochs), disable=not accelerator.is_local_main_process):
         if accelerator.is_local_main_process:

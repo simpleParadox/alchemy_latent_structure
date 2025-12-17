@@ -321,7 +321,7 @@ class StoneStateClassifier(nn.Module):
         elif self.pooling_strategy == 'last_token':
             # Use the representation of the last non-padding token in each sequence.
             if src_padding_mask is not None:
-                # If right padding, the last token is a pad token, so we need to find the index of the last valid token.
+                # If right-padding, the last token is a pad token, so we need to find the index of the last valid token.
                 sequence_lengths = (~src_padding_mask).sum(dim=1) - 1 # Get the last valid token index. It's actually the length - 1.
                 # Clamp to ensure we don't go below 0 for edge cases
                 sequence_lengths = torch.clamp(sequence_lengths, min=0)
@@ -545,57 +545,57 @@ class StoneStateDecoderClassifier(nn.Module):
 class LinearBaseline(nn.Module):
     def __init__(self, vocab_size: int, input_size: int, hidden_size: int, output_size: int, 
                  dropout: float = 0.1, use_flash_attention: bool = True,
-                 max_len: int = 1024, num_layers: int = 4):
+                 max_len: int = 1024, num_layers: int = 4, include_nonlinearity: bool = True):
         super(LinearBaseline, self).__init__()
         
         self.embedding = nn.Embedding(vocab_size, input_size)
-        self.max_len = max_len
-        
+        self.max_len = max_len  # can still keep for consistency, but not used in params
+
         assert num_layers >= 2, "num_layers must be at least 2 (input and output layers)."
-        
-        # Calculate flattened input size based on max_len
-        flattened_input_size = max_len * input_size
-        print(f"Max length: {max_len}, Flattened input size: {flattened_input_size}")
-        
+        print("Including non-linearity in LinearBaseline:", include_nonlinearity)
+
         layers = []
         for l in range(num_layers - 1):
-            in_features = flattened_input_size if l == 0 else hidden_size
+            in_features = input_size if l == 0 else hidden_size
             layers.append(nn.Linear(in_features, hidden_size))
             layers.append(nn.LayerNorm(hidden_size))
-            layers.append(nn.ReLU())
+            if include_nonlinearity:
+                layers.append(nn.ReLU())
             layers.append(nn.Dropout(dropout))
         
         layers.append(nn.Linear(hidden_size, output_size))
         self.network = nn.Sequential(*layers)
-        
+
 
     def forward(self, x: torch.Tensor, src_padding_mask: torch.Tensor = None) -> torch.Tensor:
         """
-        Forward pass using concatenation with fixed max_len.
+        Forward pass using length-invariant pooling.
+        x: (batch_size, seq_len)
+        src_padding_mask: (batch_size, seq_len), True for pad.
         """
-        # Embed the input tokens
+        # Embed tokens
         x_emb = self.embedding(x)  # (batch_size, seq_len, input_size)
-        
-        # Truncate or pad to max_len
-        batch_size, seq_len, emb_dim = x_emb.shape
 
-        # NOTE: Truncation is not done.
-        # Padding if sequence is shorter than max_len
-        padding = torch.zeros(batch_size, self.max_len - seq_len, emb_dim, 
-                            device=x_emb.device, dtype=x_emb.dtype)
-        x_emb = torch.cat([x_emb, padding], dim=1)
-            
-        # Flatten to (batch_size, max_len * input_size)
-        concat_emb = x_emb.reshape(batch_size, -1)
-        
-        # Pass through feedforward network
-        logits = self.network(concat_emb)
-        
+        if src_padding_mask is not None:
+            # Zero out padded positions
+            mask_expanded = src_padding_mask.unsqueeze(-1).expand_as(x_emb)  # (B, L, D)
+            x_emb = x_emb.masked_fill(mask_expanded, 0.0)
+            # Sum non-pad embeddings
+            summed = x_emb.sum(dim=1)  # (B, D)
+            # Count valid tokens
+            lengths = (~src_padding_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)  # (B, 1)
+            pooled = summed / lengths  # mean pooling (B, D)
+        else:
+            # Simple mean over time if no mask
+            pooled = x_emb.mean(dim=1)  # (B, D)
+
+        logits = self.network(pooled)  # (B, output_size)
         return logits
 
 
 def create_linear_model(config_name: str, input_size: int, num_classes: int, device="cpu", max_len=2048, io_sep_token_id=None,
-                        item_sep_token_id=None, pooling_strategy='global', batch_size=32, use_flash_attention=False, padding_side: str = "right"):
+                        item_sep_token_id=None, pooling_strategy='global', batch_size=32, use_flash_attention=False, padding_side: str = "right",
+                        include_nonlinearity: bool = True):
     """
     Creates a simple feedforward neural network (linear model) based on a configuration name.
     The parameter counts are approximate and depend on the exact input and output sizes.
@@ -609,7 +609,7 @@ def create_linear_model(config_name: str, input_size: int, num_classes: int, dev
             'dropout': 0.1
         },
         'xsmall': { # Approx 2M params
-            'num_layers': 4,
+            'num_layers': 9,
             'hidden_sizes': [256, 512],
             'dropout': 0.1
         }
@@ -633,6 +633,7 @@ def create_linear_model(config_name: str, input_size: int, num_classes: int, dev
         use_flash_attention=use_flash_attention,
         max_len=max_len,
         num_layers=num_layers,
+        include_nonlinearity=include_nonlinearity
     )
 
 
