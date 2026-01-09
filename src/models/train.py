@@ -23,6 +23,7 @@ import re
 from models import create_transformer_model, create_classifier_model, create_decoder_classifier_model, create_linear_model
 
 def set_seed(seed_value):
+    print("Setting seed:", seed_value)
     random.seed(seed_value)
     np.random.seed(seed_value)
     torch.manual_seed(seed_value)
@@ -180,6 +181,9 @@ def parse_args():
     parser.add_argument("--custom_checkpoint_dir", type=str, default=None)
     parser.add_argument("--include_nonlinearity", type=str, default="True", choices=["True", "False"], 
                         help="Whether to include non-linearity in transformer feed-forward layers. Default is True.")
+    
+    parser.add_argument("--flatten_linear_model_input", type=str, default="False", choices=["True", "False"],
+                        help="Whether to flatten the input for linear models. Default is False.")
 
     
     return parser.parse_args()
@@ -866,7 +870,7 @@ def _save_validation_predictions(all_predictions, all_targets, all_encoder_input
     if not os.path.exists(predictions_dir):
         os.makedirs(predictions_dir)
     
-    epoch_str = f"epoch_{epoch_num+1:03d}"
+    epoch_str = f"epoch_{epoch_num:03d}"
     pred_filename = f"predictions_{args.task_type}_{epoch_str}.npz"
     target_filename = f"targets_{args.task_type}_{epoch_str}.npz"
     input_filename = f"inputs_{args.task_type}_{epoch_str}.npz"
@@ -999,6 +1003,9 @@ def main():
         print(f"eta_min: {args.eta_min}")
         print(f"model_size: {args.model_size}")
         print(f"seed: {args.seed}")
+        
+        args.flatten_linear_model_input = str(args.flatten_linear_model_input) == 'True'  # Convert to boolean
+        print("Flatten linear model input: ", args.flatten_linear_model_input)
 
 
 
@@ -1198,6 +1205,10 @@ def main():
             print(f"Adjusted args.max_seq_len: {args.max_seq_len}")
     else:
         print(f"Maximum sequence length {max_length} is within args.max_seq_len {args.max_seq_len}. No adjustment needed.")
+        if args.model_architecture == 'linear' and args.flatten_linear_model_input:
+            # For linear model with flattened input, we need to adjust max_seq_len to be the exact max_length.
+            args.max_seq_len = max_length
+            print(f"Changed args.max_seq_len to: {args.max_seq_len}")
 
     # Determine validation strategy
     if args.val_split is not None:
@@ -1325,7 +1336,8 @@ def main():
                 batch_size=args.batch_size,
                 use_flash_attention=args.use_flash_attention,
                 padding_side=args.padding_side,
-                include_nonlinearity=include_nonlinearity
+                include_nonlinearity=include_nonlinearity,
+                flatten_input=args.flatten_linear_model_input
             )
         else:  # encoder architecture
             model = create_classifier_model(
@@ -1483,12 +1495,12 @@ def main():
 
         # Resume diagnostics: prove scheduler/optimizer weren't reset
         if accelerator.is_local_main_process:
-            print(f"[RESUME] start_epoch={start_epoch}, best_val_loss={best_val_loss}")
+            print(f"Resuming start_epoch={start_epoch}, best_val_loss={best_val_loss}")
             if scheduler is not None:
                 # last_epoch is the internal counter used by PyTorch schedulers
                 last_epoch = getattr(scheduler, "last_epoch", None)
                 current_lr = scheduler.get_last_lr()[0] if hasattr(scheduler, "get_last_lr") else optimizer.param_groups[0]["lr"]
-                print(f"[RESUME] Scheduler type={args.scheduler_type}, call_location={args.scheduler_call_location}, last_epoch={last_epoch}, lr={current_lr:.6e}, eta_min={args.eta_min}")
+                print(f"Scheduler type={args.scheduler_type}, call_location={args.scheduler_call_location}, last_epoch={last_epoch}, lr={current_lr:.6e}, eta_min={args.eta_min}")
 
     # Note: val_dataloader is NOT prepared with accelerator for single GPU validation.
 
@@ -1587,9 +1599,11 @@ def main():
         f"shop_{support_hop}_qhop_{query_hop}",
         f"seed_{args.data_split_seed}"
     )
+    if args.flatten_linear_model_input:
+        hierarchical_save_dir = os.path.join(hierarchical_save_dir, "flatten_linear_input")
 
-    # --- NEW: if resuming, write checkpoints into a subdirectory under seed_*/ ---
-    # This ensures you never overwrite the original run's checkpoints and you can
+    # if resuming, write checkpoints into a subdirectory under seed_*/ ---
+    # This ensures we never overwrite the original run's checkpoints and we can
     # distinguish resumed training branches by resume epoch + freezing config.
     if args.resume_from_checkpoint:
         # Use the epoch number encoded in the checkpoint filename (args.resume_checkpoint_epoch)

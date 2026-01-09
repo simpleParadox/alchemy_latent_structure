@@ -545,18 +545,32 @@ class StoneStateDecoderClassifier(nn.Module):
 class LinearBaseline(nn.Module):
     def __init__(self, vocab_size: int, input_size: int, hidden_size: int, output_size: int, 
                  dropout: float = 0.1, use_flash_attention: bool = True,
-                 max_len: int = 1024, num_layers: int = 4, include_nonlinearity: bool = True):
+                 max_len: int = 1024, num_layers: int = 4, include_nonlinearity: bool = True,
+                 flatten_input: bool = False):
         super(LinearBaseline, self).__init__()
         
-        self.embedding = nn.Embedding(vocab_size, input_size)
-        self.max_len = max_len  # can still keep for consistency, but not used in params
-
+        # Store original embedding size
+        embedding_dim = input_size
+        
+        # Calculate the size after flattening (if applicable)
+        if flatten_input:
+            print("Using flattened input in LinearBaseline.")
+            first_layer_input_size = input_size * max_len  # Size after flattening
+        else:
+            first_layer_input_size = input_size  # Size after pooling
+            
+        # Create embedding with ORIGINAL input_size
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.max_len = max_len
+        self.flatten_input = flatten_input
+        
         assert num_layers >= 2, "num_layers must be at least 2 (input and output layers)."
         print("Including non-linearity in LinearBaseline:", include_nonlinearity)
 
         layers = []
         for l in range(num_layers - 1):
-            in_features = input_size if l == 0 else hidden_size
+            # First layer takes flattened/pooled input, rest take hidden_size
+            in_features = first_layer_input_size if l == 0 else hidden_size
             layers.append(nn.Linear(in_features, hidden_size))
             layers.append(nn.LayerNorm(hidden_size))
             if include_nonlinearity:
@@ -575,19 +589,36 @@ class LinearBaseline(nn.Module):
         """
         # Embed tokens
         x_emb = self.embedding(x)  # (batch_size, seq_len, input_size)
-
-        if src_padding_mask is not None:
-            # Zero out padded positions
-            mask_expanded = src_padding_mask.unsqueeze(-1).expand_as(x_emb)  # (B, L, D)
-            x_emb = x_emb.masked_fill(mask_expanded, 0.0)
-            # Sum non-pad embeddings
-            summed = x_emb.sum(dim=1)  # (B, D)
-            # Count valid tokens
-            lengths = (~src_padding_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)  # (B, 1)
-            pooled = summed / lengths  # mean pooling (B, D)
+        
+        if self.flatten_input:
+            batch_size, seq_len, emb_dim = x_emb.shape
+            
+            # # Ensure sequence length matches max_len by padding/truncating
+            # if seq_len < self.max_len:
+            #     # Pad to max_len
+            #     padding = torch.zeros(batch_size, self.max_len - seq_len, emb_dim, 
+            #                         device=x_emb.device, dtype=x_emb.dtype)
+            #     x_emb = torch.cat([x_emb, padding], dim=1)
+            # elif seq_len > self.max_len:
+            #     # Truncate to max_len
+            #     x_emb = x_emb[:, :self.max_len, :]
+            
+            # Now flatten with guaranteed consistent dimensions
+            pooled = x_emb.view(batch_size, -1)
         else:
-            # Simple mean over time if no mask
-            pooled = x_emb.mean(dim=1)  # (B, D)
+            # Apply mean pooling considering padding
+            if src_padding_mask is not None:
+                # Zero out padded positions
+                mask_expanded = src_padding_mask.unsqueeze(-1).expand_as(x_emb)  # (B, L, D)
+                x_emb = x_emb.masked_fill(mask_expanded, 0.0)
+                # Sum non-pad embeddings
+                summed = x_emb.sum(dim=1)  # (B, D)
+                # Count valid tokens
+                lengths = (~src_padding_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)  # (B, 1)
+                pooled = summed / lengths  # mean pooling (B, D)
+            else:
+                # Simple mean over time if no mask
+                pooled = x_emb.mean(dim=1)  # (B, D)
 
         logits = self.network(pooled)  # (B, output_size)
         return logits
@@ -595,7 +626,7 @@ class LinearBaseline(nn.Module):
 
 def create_linear_model(config_name: str, input_size: int, num_classes: int, device="cpu", max_len=2048, io_sep_token_id=None,
                         item_sep_token_id=None, pooling_strategy='global', batch_size=32, use_flash_attention=False, padding_side: str = "right",
-                        include_nonlinearity: bool = True):
+                        include_nonlinearity: bool = True, flatten_input=False):
     """
     Creates a simple feedforward neural network (linear model) based on a configuration name.
     The parameter counts are approximate and depend on the exact input and output sizes.
@@ -633,7 +664,8 @@ def create_linear_model(config_name: str, input_size: int, num_classes: int, dev
         use_flash_attention=use_flash_attention,
         max_len=max_len,
         num_layers=num_layers,
-        include_nonlinearity=include_nonlinearity
+        include_nonlinearity=include_nonlinearity,
+        flatten_input=flatten_input
     )
 
 

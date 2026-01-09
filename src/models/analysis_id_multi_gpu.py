@@ -444,6 +444,7 @@ if __name__ == "__main__":
     parser.add_argument('--wandb_entity', type=str, default='simpleParadox')
     parser.add_argument('--wandb_run_name', type=str, default=None, help='WandB run name')
     parser.add_argument('--analysis_method', type=str, choices=['id'], default='id')
+    parser.add_argument('--max_epochs', type=int, default=500, help='Maximum number of epochs to analyze')
 
     # Replace the old id_algorithm flag with id_method
     parser.add_argument(
@@ -465,10 +466,15 @@ if __name__ == "__main__":
         }
     if args_cli.exp_type == 'composition':
         if args_cli.hop == 2:
+            # seed_paths = {
+            #     0: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/best_model_epoch_200_classification_xsmall.pt',
+            #     16: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_16/best_model_epoch_200_classification_xsmall.pt',
+            #     29: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_29/best_model_epoch_200_classification_xsmall.pt'
+            # }
             seed_paths = {
-                0: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/best_model_epoch_200_classification_xsmall.pt',
-                16: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_16/best_model_epoch_200_classification_xsmall.pt',
-                29: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_29/best_model_epoch_200_classification_xsmall.pt'
+                0: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/flatten_linear_input/best_model_epoch_200_classification_xsmall.pt',
+                16: ' /home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_16/flatten_linear_input/best_model_epoch_200_classification_xsmall.pt',
+                29: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_29/flatten_linear_input/best_model_epoch_200_classification_xsmall.pt'
             }
         elif args_cli.hop == 3:
             seed_paths = {
@@ -537,6 +543,10 @@ if __name__ == "__main__":
     unique_checkpoints = {epoch: path for epoch, path in checkpoint_files}
     sorted_epochs = sorted(unique_checkpoints.keys())
     print(f"Found {len(sorted_epochs)} unique epochs to process.")
+    
+    # Restrict the number of epochs to user-specified maximum if needed.
+    if args_cli.max_epochs is not None:
+        sorted_epochs = [epoch for epoch in sorted_epochs if epoch <= args_cli.max_epochs]
 
     num_gpus = torch.cuda.device_count()
     print(f"Found {num_gpus} GPUs available.")
@@ -652,7 +662,7 @@ if __name__ == "__main__":
     plt.legend(fontsize=10)
     plt.grid(True, alpha=0.3)
 
-    folder = 'intrinsic_dimension_plots'
+    folder = 'intrinsic_dimension_plots_seed_wise'
 
     if not os.path.exists(folder):
         os.makedirs(folder)
