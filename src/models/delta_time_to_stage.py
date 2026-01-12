@@ -1,9 +1,9 @@
 """
 delta_time_to_stage.py
 
-Minimal delta-t (delay) computation for event curves saved as NumPy .npz.
+Minimal delta-t (delay) computation for event curves saved as stagewise .pkl.
 
-Each .npz must contain:
+Each .pkl must contain:
   - epochs: 1D array (E,)
   - one or more metric arrays, each 1D (E,)
 
@@ -15,16 +15,17 @@ consecutive evaluation points.
 
 Usage
 -----
-# Compute delta-t for a chosen metric key
+# Compute delta-t for chosen metric keys (single or multiple)
 python src/models/delta_time_to_stage.py \
-  --baseline_npz /abs/path/to/baseline_metrics.npz \
-  --intervention_npz /abs/path/to/freeze_layer0_metrics.npz \
-  --metric_key EVENT_B_GIVEN_A \
-  --tau 0.90 --consecutive 3
+  --baseline_pickle /abs/path/to/baseline_metrics.pkl \
+  --intervention_pickle /abs/path/to/freeze_layer0_metrics.pkl \
+  --metric_key EVENT_B_GIVEN_A EVENT_C_GIVEN_AB \
+  --tau 0.90 --consecutive 3 \
+  --output_json /abs/path/to/delta_t_results.json
 
-# List available keys in a .npz
+# List available keys in a .pkl
 python src/models/delta_time_to_stage.py \
-  --baseline_npz /abs/path/to/baseline_metrics.npz \
+  --baseline_pickle /abs/path/to/baseline_metrics.pkl \
   --list_keys
 """
 
@@ -34,13 +35,15 @@ import argparse
 import json
 import os
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
 import pickle
 import numpy as np
 
 
-from baseline_and_frozen_filepaths import held_out_file_paths, frozen_held_out_file_paths_per_layer_per_init_seed, \
-                staged_accuracies_held_out_file_paths_baseline_pickles, staged_accuracies_held_out_file_paths_frozen_pickles
+from baseline_and_frozen_filepaths import (
+    staged_accuracies_held_out_file_paths_baseline_pickles,
+    staged_accuracies_held_out_file_paths_frozen_pickles,
+)
 
 
 # -----------------------------
@@ -61,14 +64,12 @@ class StageSpec:
     consecutive: int = 3  # number of consecutive points to consider a stage 'complete'. This means that the metric must be >= tau for `consecutive` eval points.
 
 
-def load_npz(path: str) -> np.lib.npyio.NpzFile:
-    if not path.lower().endswith(".npz"):
-        raise ValueError(f"Expected a .npz file, got: {path}")
-    return np.load(path, allow_pickle=False)
-
-
-def list_keys(npz: np.lib.npyio.NpzFile) -> Tuple[str, ...]:
-    return tuple(npz.files)
+def list_metric_keys(payload: dict, seed: int) -> List[str]:
+    if "seed_results" not in payload:
+        raise KeyError("payload missing required key 'seed_results'")
+    if seed not in payload["seed_results"]:
+        raise KeyError(f"Seed {seed} not found. Available: {sorted(payload['seed_results'].keys())}")
+    return sorted(payload["seed_results"][seed].keys())
 
 
 def first_sustained_crossing(
@@ -120,22 +121,24 @@ def parse_args() -> argparse.Namespace:
         "--baseline_pickle",
         type=str,
         required=False,
-        help="Absolute path to baseline .npz (must contain 'epochs' and metric arrays).",
+        help="Absolute path to baseline .pkl (must contain 'epochs' and metric arrays).",
     )
     p.add_argument(
         "--intervention_pickle",
         type=str,
-        default=False,
-        help="Absolute path to intervention .npz. Required unless --list_keys is used.",
+        nargs="*",
+        default=None,
+        help="One or more intervention .pkl files. Required unless --list_keys is used.",
     )
 
     p.add_argument(
         "--metric_key",
-        type=str,
-        default="EVENT_B_GIVEN_A",
+        nargs="+",
+        default=["EVENT_B_GIVEN_A", "EVENT_C_GIVEN_AB", "EVENT_A"],
         help=(
-            "Metric key to use for stage time. You may pass either a key in METRIC_KEYS "
-            "(e.g., EVENT_C_GIVEN_AB) or a raw .npz key name (e.g., p_b_given_a)."
+            "Metric key(s) to use for stage time. You may pass either keys in METRIC_KEYS "
+            "(e.g., EVENT_C_GIVEN_AB) or raw .pkl keys (e.g., p_b_given_a). "
+            "You can pass multiple values separated by spaces."
         ),
     )
 
@@ -145,92 +148,122 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--list_keys",
         action="store_true",
-        help="If set, list keys in --baseline_npz and exit.",
+        help="If set, list keys in --baseline_pickle and exit.",
     )
 
-    p.add_argument('--seed', type=int, default=0, help='Seed index to use from the .npz files.')
+    p.add_argument('--seed', type=int, default=0, help='Seed index to use from the .pkl files.')
+    p.add_argument('--data_split_seed', type=int, default=0, help='Data split seed used in the experiments.')
+    p.add_argument('--init_seed', type=int, default=42, help='Model initialization seed used in the experiments.')
+    p.add_argument(
+        "--output_json",
+        type=str,
+        default="delta_time_results.json",
+        help="Path to save or update the delta-t results JSON.",
+    )
+    p.add_argument(
+        "--exp_typ",
+        type=str,
+        default="held_out",
+        choices=["held_out", "composition", "decomposition"],
+        help="Type of experiment for frozen pickles.",
+    )
 
     return p.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-
-    args.baseline_pickle = "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_4_exp_held_out.pkl"
-
-    args.intervention_pickle = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/stagewise_accuracies_frozen_layer_transformer_layer_1_freeze_epoch_100_data_split_seed_0_init_seed_42_hop_4_exp_held_out.pkl'
-
-    base_payload = load_stagewise_pickle(args.baseline_pickle)
-
-    if args.list_keys:
-        print(
-            json.dumps(
-                {
-                    "file": args.baseline_pickle,
-                    "keys": list(list_keys(base_payload)),
-                    "placeholder_keys": METRIC_KEYS,
-                },
-                indent=2,
-            )
-        )
-        return
-
-    if not args.intervention_pickle:
-        raise ValueError("--intervention_pickle is required unless --list_keys is set")
-
-    int_payload = load_stagewise_pickle(args.intervention_pickle)
-
-    base_epochs = base_payload["epochs"]
-    int_epochs = int_payload["epochs"]
+def resolve_metric_keys(raw_keys: Iterable[str]) -> List[str]:
+    resolved = []
+    for key in raw_keys:
+        if "," in key:
+            for part in key.split(","):
+                part = part.strip()
+                if part:
+                    resolved.append(METRIC_KEYS.get(part, part))
+        else:
+            resolved.append(METRIC_KEYS.get(key, key))
+    return resolved
 
 
-    # Resolve metric key: allow either placeholder name or raw key.
-    metric_key = METRIC_KEYS.get(args.metric_key, args.metric_key)
+def collect_frozen_pickles(data_split_seed: int, init_seed: int,
+    base_path: str, frozen_epochs: List[int], frozen_layers: List[str],
+    exp_typ: str) -> List[str]:
+    results: List[str] = []
 
-    base_values = get_curve(base_payload, seed=0, metric_key=metric_key)
-    int_values = get_curve(int_payload, seed=0, metric_key=metric_key)
-    # Validate presence
-    if "epochs" not in base_payload:
-        raise KeyError(f"baseline npz missing required key 'epochs'. Keys: {base_payload}")
-    if "epochs" not in int_payload:
-        raise KeyError(f"intervention npz missing required key 'epochs'. Keys: {int_payload}")
+    """
+    Example: /home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/stagewise_accuracies_frozen_layer_transformer_layer_0_freeze_epoch_100_data_split_seed_0_init_seed_42_hop_4_exp_held_out.pkl
     
+    """
+    if exp_typ == 'held_out':
+        file_paths = [
+            f"{base_path}/stagewise_accuracies_frozen_layer_{layer}_freeze_epoch_{epoch}_data_split_seed_{data_split_seed}_init_seed_{init_seed}_hop_4_exp_held_out.pkl"
+            for layer in frozen_layers
+            for epoch in frozen_epochs
+        ]
+    elif exp_typ == 'composition':
+        file_paths = []
+        raise NotImplementedError("Composition frozen pickle collection not implemented yet.")
 
-    if metric_key not in base_payload['seed_results'][args.seed]:
-        raise KeyError(f"baseline npz missing metric '{metric_key}'. Keys: {base_payload['seed_results'][args.seed].keys()}")
-    if metric_key not in int_payload['seed_results'][args.seed]:
-        raise KeyError(f"intervention npz missing metric '{metric_key}'. Keys: {int_payload['seed_results'][args.seed].keys()}")
+    elif exp_typ == 'decomposition':
+        file_paths = []
+        raise NotImplementedError("Decomposition frozen pickle collection not implemented yet.")
+
+    for path in file_paths:
+        if os.path.exists(path):
+            results.append(path)
+        else:
+            print(f"Warning: Frozen pickle not found at {path}, skipping.")
+    return results   
+
+
+def compute_delta_t(
+    base_payload: dict,
+    int_payload: dict,
+    metric_key: str,
+    seed: int,
+    spec: StageSpec,
+) -> dict:
+    if "epochs" not in base_payload:
+        raise KeyError("baseline pickle missing required key 'epochs'")
+    if "epochs" not in int_payload:
+        raise KeyError("intervention pickle missing required key 'epochs'")
+
+    if metric_key not in base_payload["seed_results"][seed]:
+        raise KeyError(f"baseline pickle missing metric '{metric_key}'")
+    if metric_key not in int_payload["seed_results"][seed]:
+        raise KeyError(f"intervention pickle missing metric '{metric_key}'")
 
     base_epochs = np.asarray(base_payload["epochs"]).astype(int)[:-1]
     int_epochs = np.asarray(int_payload["epochs"]).astype(int)[:-1]
-
-    base_values = np.asarray(base_payload['seed_results'][args.seed][metric_key]).astype(float)
-    int_values = np.asarray(int_payload['seed_results'][args.seed][metric_key]).astype(float)
-
-    spec = StageSpec(tau=float(args.tau), consecutive=int(args.consecutive))
-    import pdb; pdb.set_trace()
+    base_values = np.asarray(base_payload["seed_results"][seed][metric_key]).astype(float)
+    int_values = np.asarray(int_payload["seed_results"][seed][metric_key]).astype(float)
 
     t_base = first_sustained_crossing(base_epochs, base_values, spec)
-    interv_first_epoch = int(np.min(int_epochs))
-    freeze_epoch = interv_first_epoch - 1  # by your guarantee: first saved = freeze + 1
-    import pdb; pdb.set_trace()
+    if t_base is None:
+        raise RuntimeError(
+            f"Baseline never reached stage for metric={metric_key} with tau={spec.tau}, consecutive={spec.consecutive}."
+        )
 
-    if len(int_epochs) > 0:
+    interv_first_epoch = int(np.min(int_epochs)) if int_epochs.size > 0 else None
+    freeze_epoch = None
+    if interv_first_epoch is not None:
+        freeze_epoch = interv_first_epoch - 1
+
+    if int_epochs.size > 0:
         assert int_epochs.min() == freeze_epoch + 1, (
             f"Intervention epochs should start at freeze_epoch + 1 = {freeze_epoch + 1}, "
             f"but got min epoch = {int_epochs.min()}"
         )
 
-    # If baseline reached the stage before (or at) the freeze point, the intervention shares that
-    # entire history, so the stage time is identical.
-    if t_base is not None and int(t_base) <= int(freeze_epoch):
+    if t_base is not None and freeze_epoch is not None and int(t_base) <= int(freeze_epoch):
         t_int = t_base
-        print(f"Intervention shares baseline history up to epoch {freeze_epoch}, so t_intervention = t_baseline = {t_base}")
     else:
-        # Hybrid curve: last (consecutive-1) baseline points before intervention + intervention suffix.
         prefix_needed = max(spec.consecutive - 1, 0)
-        prefix_mask = base_epochs < interv_first_epoch
-        base_prefix_epochs = base_epochs[prefix_mask][-prefix_needed:] if prefix_needed > 0 and prefix_mask.any() else np.array([], dtype=int)
+        prefix_mask = base_epochs < (interv_first_epoch if interv_first_epoch is not None else 0)
+        base_prefix_epochs = (
+            base_epochs[prefix_mask][-prefix_needed:]
+            if prefix_needed > 0 and prefix_mask.any()
+            else np.array([], dtype=int)
+        )
 
         if base_prefix_epochs.size > 0:
             base_map = {int(e): float(v) for e, v in zip(base_epochs.tolist(), base_values.tolist())}
@@ -240,38 +273,139 @@ def main() -> None:
 
         hybrid_epochs = np.concatenate([base_prefix_epochs, int_epochs]).astype(int)
         hybrid_values = np.concatenate([prefix_vals, int_values]).astype(float)
-
         t_int = first_sustained_crossing(hybrid_epochs, hybrid_values, spec)
 
-    if t_base is None:
-        raise RuntimeError(
-            f"Baseline never reached stage for metric={metric_key} with tau={spec.tau}, consecutive={spec.consecutive}."
-        )
-
     if t_int is None:
-        out = {
+        return {
             "metric_key": metric_key,
             "t_baseline": int(t_base),
             "t_intervention": None,
-            "delta_t": float("inf"),
+            "delta_t": 100000,
             "tau": spec.tau,
             "consecutive": spec.consecutive,
             "note": "intervention never reached stage within available epochs",
+            "intervention_first_epoch": int(interv_first_epoch) if interv_first_epoch is not None else None,
+            "freeze_epoch": int(freeze_epoch) if freeze_epoch is not None else None,
+            "init_seed": int_payload.get("init_seed", None),
+            "data_split_seed": int_payload.get("data_split_seed", None),
         }
-        print(json.dumps(out, indent=2))
-        return
 
-    out = {
+    return {
         "metric_key": metric_key,
         "t_baseline": int(t_base),
         "t_intervention": int(t_int),
         "delta_t": int(t_int - t_base),
         "tau": spec.tau,
         "consecutive": spec.consecutive,
-        "intervention_first_epoch": int(interv_first_epoch),
-        "freeze_epoch": int(freeze_epoch),
+        "intervention_first_epoch": int(interv_first_epoch) if interv_first_epoch is not None else None,
+        "freeze_epoch": int(freeze_epoch) if freeze_epoch is not None else None,
+        "init_seed": int_payload.get("init_seed", None),
+        "data_split_seed": int_payload.get("data_split_seed", None),
     }
-    print(json.dumps(out, indent=2))
+
+
+def load_results_json(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_results_json(path: str, payload: dict) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+
+def main() -> None:
+    args = parse_args()
+
+    if not args.baseline_pickle:
+        args.baseline_pickle = staged_accuracies_held_out_file_paths_baseline_pickles.get(
+            args.data_split_seed, {}
+        ).get(args.init_seed)
+
+    if not args.baseline_pickle:
+        raise ValueError("--baseline_pickle is required unless configured in baseline_and_frozen_filepaths.py")
+
+    base_payload = load_stagewise_pickle(args.baseline_pickle)
+
+    if args.list_keys:
+        print(
+            json.dumps(
+                {
+                    "file": args.baseline_pickle,
+                    "keys": list_metric_keys(base_payload, args.seed),
+                    "placeholder_keys": METRIC_KEYS,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    intervention_pickles = args.intervention_pickle or []
+
+    # Held out frozen epochs and layers configuration
+    frozen_epochs = [100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200]
+
+    # For composition.
+    # frozen_epochs = []
+
+    # For decomposition
+    # frozen_epochs = []
+
+    frozen_layers = [f"transformer_layer_{i}" for i in range(4)]
+
+
+    if not intervention_pickles:
+        if args.exp_typ == 'held_out':
+            base_path = staged_accuracies_held_out_file_paths_frozen_pickles.get(
+                args.data_split_seed, {}
+            ).get(args.init_seed)['base_path']
+        elif args.exp_typ == 'composition':
+            base_path = None
+            raise NotImplementedError("Composition frozen pickle base path not implemented yet.")
+        elif args.exp_typ == 'decomposition':
+            base_path = None
+            raise NotImplementedError("Decomposition frozen pickle base path not implemented yet.")
+        assert base_path is not None, "Base path for frozen pickles not found in configuration."
+
+        intervention_pickles = collect_frozen_pickles(args.data_split_seed, args.init_seed,
+            base_path=base_path,
+            frozen_epochs=frozen_epochs,
+            frozen_layers=frozen_layers,
+            exp_typ=args.exp_typ
+        )
+
+    if not intervention_pickles:
+        raise ValueError("--intervention_pickle is required unless frozen pickles are configured")
+
+    metric_keys = resolve_metric_keys(args.metric_key)
+
+    spec = StageSpec(tau=float(args.tau), consecutive=int(args.consecutive))
+    results_json = load_results_json(args.output_json)
+    results_json.setdefault("baseline_pickle", args.baseline_pickle)
+    results_json.setdefault("seed", args.seed)
+    results_json.setdefault("tau", spec.tau)
+    results_json.setdefault("consecutive", spec.consecutive)
+    results_json.setdefault("results", {})
+
+    for intervention_path in intervention_pickles:
+        int_payload = load_stagewise_pickle(intervention_path)
+        entry = results_json["results"].setdefault(
+            intervention_path,
+            {"intervention_pickle": intervention_path, "metrics": {}},
+        )
+        for metric_key in metric_keys:
+            entry["metrics"][metric_key] = compute_delta_t(
+                base_payload=base_payload,
+                int_payload=int_payload,
+                metric_key=metric_key,
+                seed=args.seed,
+                spec=spec,
+            )
+
+    save_results_json(args.output_json, results_json)
+    print(json.dumps(results_json, indent=2))
 
 
 if __name__ == "__main__":

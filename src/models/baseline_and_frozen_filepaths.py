@@ -1,4 +1,5 @@
 # The first key is the hop. The second key is data split seed, the third key is model init seed.
+# Best runs from the hyperparameter tuning.
 held_out_file_paths = {
         # Normalized reward paths.
         # 4: [
@@ -31,7 +32,7 @@ held_out_file_paths = {
     }
 
 # Frozen layer held-out jobs. The first key is the hop. The second key is data split seed, the third key is model init seed.
-{
+frozen_held_out_file_paths_per_layer_per_init_seed = {
     4: {
         0: {
             42: {
@@ -138,6 +139,18 @@ held_out_file_paths = {
         },
     }
 }
+
+
+# Held out pickle files after analyzing predictions.
+# The first key is data split seed, the second key is model init seed.
+staged_accuracies_held_out_file_paths_baseline_pickles = {
+    0: {
+        42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_4_exp_held_out.pkl",
+        0: "",
+        1: "",
+        2: "",
+        3: ""
+    },    
     1: {
         0: "",
         1: "",
@@ -156,6 +169,7 @@ held_out_file_paths = {
 staged_accuracies_held_out_file_paths_frozen_pickles = {
     0: {
         42: {
+            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/',
             'freeze_epoch_200': {
                 'transformer_layer_0': ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/stagewise_accuracies_frozen_layer_transformer_layer_0_data_split_seed_0_init_seed_42_hop_4_exp_held_out.pkl'],
                 'transformer_layer_1': [''],

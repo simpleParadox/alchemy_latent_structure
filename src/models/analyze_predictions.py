@@ -1532,7 +1532,8 @@ if __name__ == "__main__":
         
         if args.frozen_layer is not None:
             assert args.freeze_epoch is not None, "If frozen_layer is specified, freeze_epoch must also be specified."
-            updated_held_out_file_path = frozen_held_out_file_paths_per_layer_per_init_seed[hop][args.data_split_seed][args.init_seed][f'freeze_epoch_{args.freeze_epoch}'][args.frozen_layer][0]
+            updated_held_out_file_base_path = frozen_held_out_file_paths_per_layer_per_init_seed[hop][args.data_split_seed][args.init_seed]['base_path']
+            updated_held_out_file_path = f"{updated_held_out_file_base_path}/resume_from_epoch_{str(args.freeze_epoch).zfill(3)}__freeze_{args.frozen_layer}/predictions/"
             start_epoch = args.freeze_epoch + 1
         
         
@@ -1557,7 +1558,6 @@ if __name__ == "__main__":
         )
 
 
-    import pdb; pdb.set_trace()
 
     seed_data_files = {}
     for seed in predictions_by_epoch_by_seed.keys():
@@ -1963,6 +1963,16 @@ if __name__ == "__main__":
 
 
     if args.save_stagewise_accuracies_only:
+        if exp_typ == 'held_out':
+            base_path = '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/'
+        elif exp_typ == 'decomposition':
+            base_path = '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/'
+        else:
+            base_path = '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/'
+
+        os.makedirs(base_path, exist_ok=True)
+        os.chdir(base_path)
+
         if args.frozen_layer is not None:
             # Add data_split_seed and init_seed to the filename
             output_file_name = (
