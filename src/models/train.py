@@ -1597,9 +1597,10 @@ def main():
         f"input_{args.input_format or 'default'}",
         f"output_{args.output_format or 'default'}",
         f"shop_{support_hop}_qhop_{query_hop}",
-        f"seed_{args.data_split_seed}"
+        f"seed_{args.data_split_seed}",
+        f"init_seed_{args.seed}"
     )
-    if args.flatten_linear_model_input:
+    if args.flatten_linear_model_input and args.model_architecture == 'linear':
         hierarchical_save_dir = os.path.join(hierarchical_save_dir, "flatten_linear_input")
 
     # if resuming, write checkpoints into a subdirectory under seed_*/ ---
