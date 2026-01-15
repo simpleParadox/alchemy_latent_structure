@@ -9,7 +9,8 @@ from cluster_profile import cluster
 import os
 import re
 
-from baseline_and_frozen_filepaths import held_out_file_paths, frozen_held_out_file_paths_per_layer_per_init_seed
+from baseline_and_frozen_filepaths import held_out_file_paths, frozen_held_out_file_paths_per_layer_per_init_seed, composition_file_paths, composition_file_paths_non_subsampled, \
+            decomposition_file_paths, decomposition_file_paths_non_subsampled
 
 # Load the metadata, data, and vocab.
 if cluster == 'vulcan':
@@ -1245,84 +1246,93 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
     non_subsampled_targets_by_seed = {}
 
     # file_paths is a list 
-    if file_paths is not None:
-        seeds = []
-        for path in file_paths:
-            # Extract seed from the path assuming the path contains 'seed_{seed_number}'
-            import re
-            match = re.search(r'seed_(\d+)', path)
-            if match:
-                seed_number = int(match.group(1))
-                seeds.append(seed_number)
-            else:
-                raise ValueError(f"Seed not found in the provided file path: {path}")
+    if type(file_paths) == list:
+        if file_paths is not None:
+            seeds = []
+            for path in file_paths:
+                # Extract seed from the path assuming the path contains 'seed_{seed_number}'
+                import re
+                import pdb; pdb.set_trace()
+                match = re.search(r'seed_(\d+)', path)
+                if match:
+                    seed_number = int(match.group(1))
+                    seeds.append(seed_number)
+                else:
+                    raise ValueError(f"Seed not found in the provided file path: {path}")
+    elif type(file_paths) == dict:
+        print("file_paths is a dict, extracting seeds and paths.")
+        seeds = list(file_paths.keys())
+        file_paths = list(file_paths.values())
+        import pdb; pdb.set_trace()
 
-        # Load the data for each provided file path
-        print("Loading data from provided file paths for seeds: ", seeds)
-        for i, path in enumerate(file_paths):
-            print("Loading data for seed ", seeds[i], " from path ", path)
-            seed = seeds[i]
-            predictions_by_epoch = {}
+    # Load the data for each provided file path
+    print("Loading data from provided file paths for seeds: ", seeds)
+    for i, path in enumerate(file_paths):
+        print("Loading data for seed ", seeds[i], " from path ", path)
+        seed = seeds[i]
+        predictions_by_epoch = {}
 
-            if exp_typ == 'composition' or exp_typ == 'decomposition':
-                if file_paths_non_subsampled is not None:
-                    non_subsampled_path = file_paths_non_subsampled[hop][i]
-                    # Check if the seed in the non_subsampled_path matches the current seed
-                    match_non_subsampled = re.search(r'seed_(\d+)', non_subsampled_path)
-                    if match_non_subsampled:
-                        seed_non_subsampled = int(match_non_subsampled.group(1))
-                        # import pdb; pdb.set_trace()
-                        if seed_non_subsampled != seed:
-                            # print(f"Warning: Seed mismatch between subsampled and non-subsampled paths: {seed} vs {seed_non_subsampled}. Proceeding anyway.")
-                            raise ValueError(f"Seed mismatch between subsampled and non-subsampled paths: {seed} vs {seed_non_subsampled}")
-                        else:
-                            non_subsampled_path_val_data = pickle.load(open(non_subsampled_path, 'rb'))
-                            # Iterate through the non-subsampled data to extract inputs and targets
-                            inputs_raw = []
-                            targets_raw = []
-                            for sample in non_subsampled_path_val_data:
-                                inputs_raw.append(sample['encoder_input_ids'])
-                                targets_raw.append(sample['target_class_id'])
-                            
-                            # Create a data_with_targets list
-                            data_with_targets_non_subsampled = [{'encoder_input_ids': inputs_raw[i], 'target_class_id': targets_raw[i]} for i in range(len(targets_raw))]
-                            print("Created non-subsampled data for seed ", seed, " with ", len(data_with_targets_non_subsampled), " samples.")
-                            non_subsampled_targets_by_seed[seed] = data_with_targets_non_subsampled
+        if exp_typ == 'composition' or exp_typ == 'decomposition':
+            if file_paths_non_subsampled is not None:
+                non_subsampled_path = file_paths_non_subsampled[hop][i]
+                # Check if the seed in the non_subsampled_path matches the current seed
+                match_non_subsampled = re.search(r'seed_(\d+)', non_subsampled_path)
+                if match_non_subsampled:
+                    seed_non_subsampled = int(match_non_subsampled.group(1))
+                    # import pdb; pdb.set_trace()
+                    if seed_non_subsampled != seed:
+                        # print(f"Warning: Seed mismatch between subsampled and non-subsampled paths: {seed} vs {seed_non_subsampled}. Proceeding anyway.")
+                        raise ValueError(f"Seed mismatch between subsampled and non-subsampled paths: {seed} vs {seed_non_subsampled}")
                     else:
-                        raise ValueError(f"Seed not found in the provided non-subsampled file path: {non_subsampled_path}")
+                        non_subsampled_path_val_data = pickle.load(open(non_subsampled_path, 'rb'))
+                        # Iterate through the non-subsampled data to extract inputs and targets
+                        inputs_raw = []
+                        targets_raw = []
+                        for sample in non_subsampled_path_val_data:
+                            inputs_raw.append(sample['encoder_input_ids'])
+                            targets_raw.append(sample['target_class_id'])
                         
-            
-            for epoch in range(epoch_start, epoch_end + 1):
-                # Reformat the epoch_number because the files are saved with epoch numbers like 001, 002, ..., 1000
-                epoch_number = str(epoch).zfill(3)
-                
-                predictions_raw_file_path = f'{path}/predictions_classification_epoch_{epoch_number}.npz'
-                
-                try:
-                    predictions_raw = np.load(predictions_raw_file_path, allow_pickle=True)['predictions']
-                    # Store predictions for this epoch
-                    predictions_by_epoch[epoch_number] = predictions_raw.tolist()
+                        # Create a data_with_targets list
+                        data_with_targets_non_subsampled = [{'encoder_input_ids': inputs_raw[i], 'target_class_id': targets_raw[i]} for i in range(len(targets_raw))]
+                        print("Created non-subsampled data for seed ", seed, " with ", len(data_with_targets_non_subsampled), " samples.")
+                        non_subsampled_targets_by_seed[seed] = data_with_targets_non_subsampled
+                else:
+                    raise ValueError(f"Seed not found in the provided non-subsampled file path: {non_subsampled_path}")
                     
-                except FileNotFoundError:
-                    print(f"Warning: Files for epoch {epoch_number} not found in path {path}, skipping...")
-                    continue
-
-            predictions_by_epoch_by_seed[seed] = predictions_by_epoch 
-            inputs_raw_file_path = f'{path}/inputs_classification_epoch_001.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs.
-            targets_raw_file_path = f'{path}/targets_classification_epoch_001.npz' # Use the last epoch number loaded.
-
-            inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
-            targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
-            
-            stacked_inputs = np.vstack(inputs_raw) # Flatten inputs from (39, 32, 181) to (1240, 181) 
-            data_with_targets = [{'encoder_input_ids': stacked_inputs[i].tolist(), 'target_class_id': int(targets_raw[i])} for i in range(len(targets_raw))]
-
-            inputs_by_seed[seed] = data_with_targets
         
-        if file_paths_non_subsampled is not None:
-            return predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_targets_by_seed
+        for epoch in range(epoch_start, epoch_end + 1):
+            # Reformat the epoch_number because the files are saved with epoch numbers like 001, 002, ..., 1000
+            epoch_number = str(epoch).zfill(3)
+            
+            predictions_raw_file_path = f'{path}/predictions_classification_epoch_{epoch_number}.npz'
+            
+            try:
+                predictions_raw = np.load(predictions_raw_file_path, allow_pickle=True)['predictions']
+                # Store predictions for this epoch
+                predictions_by_epoch[epoch_number] = predictions_raw.tolist()
+                
+            except FileNotFoundError:
+                print(f"Warning: Files for epoch {epoch_number} not found in path {path}, skipping...")
+                continue
 
-        return predictions_by_epoch_by_seed, inputs_by_seed, None
+        predictions_by_epoch_by_seed[seed] = predictions_by_epoch 
+        inputs_raw_file_path = f'{path}/inputs_classification_epoch_001.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs.
+        targets_raw_file_path = f'{path}/targets_classification_epoch_001.npz' # Use the last epoch number loaded.
+
+        inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
+        targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
+        
+        stacked_inputs = np.vstack(inputs_raw) # Flatten inputs from (39, 32, 181) to (1240, 181) 
+        data_with_targets = [{'encoder_input_ids': stacked_inputs[i].tolist(), 'target_class_id': int(targets_raw[i])} for i in range(len(targets_raw))]
+
+        inputs_by_seed[seed] = data_with_targets
+    
+    if file_paths_non_subsampled is not None:
+        return predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_targets_by_seed
+
+    import pdb; pdb.set_trace()
+
+    return predictions_by_epoch_by_seed, inputs_by_seed, None
 
 def load_epoch_data_updated_single_seed(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), file_path = None, file_paths_non_subsampled = None,
                     frozen_layer = None):
@@ -1459,7 +1469,7 @@ if __name__ == "__main__":
     if exp_typ == 'decomposition':
         # NOTE: Do not change this.
         seed_values_2_hop = [0, 16, 29]
-        # seed_values_3_hop = [0,1,2,3,4]
+        # seed_values_3_hop = [0,1,2,3,4
         # seed_values_3_hop = [3] # For the 3 Testing with only seed 3 for 3-hop decomposition for now.
         seed_values_3_hop = [0,16,29]
         # seed_values_4_hop = [2,3,4] # For the 4
@@ -1470,7 +1480,9 @@ if __name__ == "__main__":
         seed_values_5_hop = [0,2,16] 
     elif exp_typ == 'held_out':
         # NOTE: Do not change this.
-        seed_values_4_hop = [2,3,4]
+        # seed_values_4_hop = [2,3,4]
+
+        seed_values_4_hop = [0]
 
         hop_to_epoch_values = {
             4: four_edge_held_out_epoch_values_text
@@ -1497,7 +1509,8 @@ if __name__ == "__main__":
         }
         
         seed_values_hop_dict = {
-            2: [0, 16, 29],
+            2: [0],
+            # 2: [0, 16, 29],
             3: [0, 16, 29],
             4: [0, 16, 29],
             5: [0, 16, 29]
@@ -1533,7 +1546,7 @@ if __name__ == "__main__":
         if args.frozen_layer is not None:
             assert args.freeze_epoch is not None, "If frozen_layer is specified, freeze_epoch must also be specified."
             updated_held_out_file_base_path = frozen_held_out_file_paths_per_layer_per_init_seed[hop][args.data_split_seed][args.init_seed]['base_path']
-            updated_held_out_file_path = f"{updated_held_out_file_base_path}/resume_from_epoch_{str(args.freeze_epoch).zfill(3)}__freeze_{args.frozen_layer}/predictions/"
+            updated_held_out_file_path = f"{updated_held_out_file_base_path}/resume_from_epoch_{str(args.freeze_epoch)}__freeze_{args.frozen_layer}/predictions/"
             start_epoch = args.freeze_epoch + 1
         
         
@@ -1546,13 +1559,23 @@ if __name__ == "__main__":
             frozen_layer = args.frozen_layer
         )
     else:
+        start_epoch = hop_to_epoch_values[hop][0]
+        if args.data_split_seed is not None:
+            if exp_typ == 'held_out':
+                updated_held_out_file_paths = {}
+                for seed in [42, 1, 3]:
+                    updated_held_out_file_paths[seed] = held_out_file_paths[hop][args.data_split_seed][seed]
+                
+        else:
+            updated_held_out_file_paths = held_out_file_paths[hop]
+
         predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_composition_data  = load_epoch_data(
             exp_typ = exp_typ,
             hop = hop,
             epoch_range = (start_epoch, hop_to_epoch_values[hop][-1]),
-            seeds = seed_values_hop_dict[hop],
+            seeds = seed_values_hop_dict[hop] if args.init_seed is None else [args.init_seed],
             scheduler_prefix = scheduler_prefix,
-            file_paths = composition_file_paths[hop] if exp_typ == 'composition' else decomposition_file_paths[hop] if exp_typ == 'decomposition' else held_out_file_paths[hop],
+            file_paths = composition_file_paths[hop][args.data_split_seed][args.init_seed] if exp_typ == 'composition' else decomposition_file_paths[hop][args.data_split_seed][args.init_seed] if exp_typ == 'decomposition' else updated_held_out_file_paths,
             file_paths_non_subsampled = composition_file_paths_non_subsampled if exp_typ == 'composition' else decomposition_file_paths_non_subsampled if exp_typ == 'decomposition' else None,
             frozen_layer = args.frozen_layer
         )
@@ -1560,7 +1583,8 @@ if __name__ == "__main__":
 
 
     seed_data_files = {}
-    for seed in predictions_by_epoch_by_seed.keys():
+    data_seeds = list(predictions_by_epoch_by_seed.keys()) if args.data_split_seed is None else [args.data_split_seed]
+    for seed in data_seeds:
         if exp_typ == 'held_out':
             if not args.normalized_reward:
                 data_files = {
@@ -1896,13 +1920,17 @@ if __name__ == "__main__":
     # Whether it predicts the correct half, if within the correct half, whether it predicts the correct stone, and whether the model predicts that
     # the stone is in the other incorrect half.
     seed_results = {}
-    for seed in predictions_by_epoch_by_seed.keys():
+    # data_seeds = list(predictions_by_epoch_by_seed.keys()) if args.data_split_seed is None else [args.data_split_seed]
+    for seed in predictions_by_epoch_by_seed.keys(): 
         print(f"\n\nAnalyzing seed {seed}...")
         predictions_by_epoch = predictions_by_epoch_by_seed[seed]
         data_with_predictions = inputs_by_seed[seed]
         
         # Load the correct vocab for this seed
-        vocab = seed_data_files[seed]['vocab']
+        if args.data_split_seed is None:
+            vocab = seed_data_files[seed]['vocab']
+        else:
+            vocab = seed_data_files[args.data_split_seed]['vocab']
         
         # Run the analysis
         print("Running half-chemistry behavior analysis")
@@ -1964,11 +1992,13 @@ if __name__ == "__main__":
 
     if args.save_stagewise_accuracies_only:
         if exp_typ == 'held_out':
-            base_path = '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/'
+            # base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/'
+            # Base path for relative epoch frozen layer experiments.
+            base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_relative_epoch_frozen_layer_hop_4_exp_held_out/'
         elif exp_typ == 'decomposition':
-            base_path = '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/'
+            base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/'
         else:
-            base_path = '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/'
+            base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/'
 
         os.makedirs(base_path, exist_ok=True)
         os.chdir(base_path)
@@ -1979,6 +2009,7 @@ if __name__ == "__main__":
                 f'stagewise_accuracies_frozen_layer_{args.frozen_layer}_'
                 f'freeze_epoch_{args.freeze_epoch}_'
                 f'data_split_seed_{args.data_split_seed}_init_seed_{args.init_seed}_hop_{hop}_exp_{exp_typ}.pkl'
+                f'absolute_epoch' if 'relative' not in base_path else 'relative_epoch'
             )
             start_epoch = args.freeze_epoch
         else:

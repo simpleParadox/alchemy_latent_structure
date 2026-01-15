@@ -12,8 +12,9 @@ held_out_file_paths = {
             0: {
                 42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/predictions/",
                 0: "",
-                1: "",
+                1: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/init_seed_1/predictions/",
                 2: "",
+                3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/init_seed_3/predictions/",
             },
             2: {
                 42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_2/predictions/",
@@ -36,7 +37,7 @@ frozen_held_out_file_paths_per_layer_per_init_seed = {
     4: {
         0: {
             42: {
-                'base_path': '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/',
+                'base_path': '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/init_seed_42/',
                 'freeze_epoch_200': {
                     'transformer_layer_0': ['/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/resume_from_epoch_200__freeze_transformer_layer_0/predictions/'],
                     'transformer_layer_1': [''],
@@ -123,6 +124,7 @@ frozen_held_out_file_paths_per_layer_per_init_seed = {
                 'transformer_layer_4': [''],
             },
             1: {
+                'base_path': '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/init_seed_1/',
                 'transformer_layer_0': [''],
                 'transformer_layer_1': [''],
                 'transformer_layer_2': [''],
@@ -135,7 +137,15 @@ frozen_held_out_file_paths_per_layer_per_init_seed = {
                 'transformer_layer_2': [''],
                 'transformer_layer_3': [''],
                 'transformer_layer_4': [''],
-            }
+            },
+            3: {
+                'base_path': '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/init_seed_3/',
+                'transformer_layer_0': [''],
+                'transformer_layer_1': [''],
+                'transformer_layer_2': [''],
+                'transformer_layer_3': [''],
+                'transformer_layer_4': [''],
+            },
         },
     }
 }
@@ -143,13 +153,14 @@ frozen_held_out_file_paths_per_layer_per_init_seed = {
 
 # Held out pickle files after analyzing predictions.
 # The first key is data split seed, the second key is model init seed.
+# This is for the delta_time_to_stage.py file.
 staged_accuracies_held_out_file_paths_baseline_pickles = {
     0: {
         42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_4_exp_held_out.pkl",
         0: "",
-        1: "",
+        1: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/stagewise_accuracies_data_split_seed_0_init_seed_1_hop_4_exp_held_out.pkl",
         2: "",
-        3: ""
+        3: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/stagewise_accuracies_data_split_seed_0_init_seed_3_hop_4_exp_held_out.pkl",
     },    
     1: {
         0: "",
@@ -186,6 +197,7 @@ staged_accuracies_held_out_file_paths_frozen_pickles = {
             },
         },
         0: {
+            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/',
             'freeze_epoch_200': {
                 'transformer_layer_0': [''],
                 'transformer_layer_1': [''],
@@ -202,6 +214,7 @@ staged_accuracies_held_out_file_paths_frozen_pickles = {
             },
         },
         1: {
+            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/',
             'freeze_epoch_200': {
                 'transformer_layer_0': [''],
                 'transformer_layer_1': [''],
@@ -226,6 +239,16 @@ staged_accuracies_held_out_file_paths_frozen_pickles = {
                 'transformer_layer_4': [''],
             },
             'freeze_epoch_100': {
+                'transformer_layer_0': [''],
+                'transformer_layer_1': [''],
+                'transformer_layer_2': [''],
+                'transformer_layer_3': [''],
+                'transformer_layer_4': [''],
+            },
+        },
+        3: {
+            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/',
+            'freeze_epoch_200': {
                 'transformer_layer_0': [''],
                 'transformer_layer_1': [''],
                 'transformer_layer_2': [''],
@@ -270,29 +293,51 @@ composition_file_paths_non_subsampled = {
 
 composition_file_paths = {
     # 2: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_step_lr/wd_0.001_lr_0.0001/step_size_165_gamma_0.2/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/predictions',
-    #     '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_16/predictions', 
+    #     '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_16/predictions',
     #     '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_step_lr/wd_0.001_lr_0.0001/step_size_250_gamma_0.4/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_29/predictions'
     #     ],
 
-    2: [
+    2: {
         # '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/predictions/',
-        '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/flatten_linear_input/predictions/',
-        '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_16/flatten_linear_input/predictions/',
+        0: {
+            42: [
+                '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/flatten_linear_input/predictions/'
+            ],  # init_seed 42
+        },
+        16: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_16/flatten_linear_input/predictions/',
         # '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_29/flatten_linear_input/predictions/',
-        '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_29/flatten_linear_input/predictions/'
-    ],
-    3: [
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_0/predictions', 
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_16/predictions', 
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.1_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_29/predictions'],
+        29: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_29/flatten_linear_input/predictions/',
+    },
 
-    4: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_0/predictions', 
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_16/predictions', 
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_29/predictions'],
+    3: {
+        0: {
+            42: [
+                '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_0/predictions'
+            ],
+        },
+        16: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_16/predictions',
+        29: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.1_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_29/predictions',
+    },
 
-    5: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine_restarts/wd_0.001_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_0/predictions',
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.1_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_16/predictions',
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_29/predictions']
+    4: {
+        0: {
+            42: [
+                '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_0/predictions'
+            ],
+        },
+        16: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_16/predictions',
+        29: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_29/predictions',
+    },
+
+    5: {
+        0: {
+            42: [ # Note that this run was with cosine_restarts scheduler but the updated run on wandb has with cosine scheduler.
+                '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine_restarts/wd_0.001_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_0/predictions'
+            ],
+        },
+        16: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.1_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_16/predictions',
+        29: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_29/predictions',
+    },
 }
 
 decomposition_file_paths_non_subsampled = {
@@ -341,17 +386,23 @@ decomposition_file_paths_non_subsampled = {
 
 
 decomposition_file_paths = {
-    2: [
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_0/predictions/',
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_16/predictions/',
-        '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/',
+    2: {
+        0: {
+            42: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_0/predictions/'],
+        },
+        16: {
+            42: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_16/predictions/'],
+        },
+        29: {
+            42: ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/'],
+        },
 
 
         # Anomalous runs to show the effect of bad hyperparameters.
         # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/',
         # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/',
         # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_29/predictions/'
-        ],
+    },
 
         # NOTE: Why are there so many files for 3-hop decomposition? It's because we wanted to see if different hyperparameter settings made a difference in when the final phase was being learned and if there was overlap with other stages.
 

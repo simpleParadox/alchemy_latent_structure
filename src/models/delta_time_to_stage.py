@@ -13,6 +13,9 @@ This script computes:
 where t is the first epoch where the chosen metric >= tau for `consecutive`
 consecutive evaluation points.
 
+The output JSON is structured as:
+  results -> exp_typ -> layer -> epoch -> metric_key -> { values }
+
 Usage
 -----
 # Compute delta-t for chosen metric keys (single or multiple)
@@ -34,8 +37,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Any
 import pickle
 import numpy as np
 
@@ -151,7 +155,7 @@ def parse_args() -> argparse.Namespace:
         help="If set, list keys in --baseline_pickle and exit.",
     )
 
-    p.add_argument('--seed', type=int, default=0, help='Seed index to use from the .pkl files.')
+    p.add_argument('--seed', type=int, default=42, help='Seed index to use from the .pkl files.')
     p.add_argument('--data_split_seed', type=int, default=0, help='Data split seed used in the experiments.')
     p.add_argument('--init_seed', type=int, default=42, help='Model initialization seed used in the experiments.')
     p.add_argument(
@@ -159,6 +163,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="delta_time_results.json",
         help="Path to save or update the delta-t results JSON.",
+    )
+    p.add_argument(
+        "--calc_baseline_only",
+        action="store_true",
+        help="If set, only compute t_baseline for the given metrics and exit (skips intervention pickles).",
     )
     p.add_argument(
         "--exp_typ",
@@ -186,33 +195,63 @@ def resolve_metric_keys(raw_keys: Iterable[str]) -> List[str]:
 
 def collect_frozen_pickles(data_split_seed: int, init_seed: int,
     base_path: str, frozen_epochs: List[int], frozen_layers: List[str],
-    exp_typ: str) -> List[str]:
-    results: List[str] = []
+    exp_typ: str) -> List[Dict[str, Any]]:
+    
+    results: List[Dict[str, Any]] = []
 
     """
     Example: /home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/stagewise_accuracies_frozen_layer_transformer_layer_0_freeze_epoch_100_data_split_seed_0_init_seed_42_hop_4_exp_held_out.pkl
-    
     """
+    
+    # Generate list of (path, layer, epoch) tuples first
+    candidates = []
+    
     if exp_typ == 'held_out':
-        file_paths = [
-            f"{base_path}/stagewise_accuracies_frozen_layer_{layer}_freeze_epoch_{epoch}_data_split_seed_{data_split_seed}_init_seed_{init_seed}_hop_4_exp_held_out.pkl"
-            for layer in frozen_layers
-            for epoch in frozen_epochs
-        ]
+        for layer in frozen_layers:
+            for epoch in frozen_epochs:
+                path = f"{base_path}/stagewise_accuracies_frozen_layer_{layer}_freeze_epoch_{epoch}_data_split_seed_{data_split_seed}_init_seed_{init_seed}_hop_4_exp_held_out.pkl"
+                candidates.append((path, layer, epoch))
+                
     elif exp_typ == 'composition':
-        file_paths = []
         raise NotImplementedError("Composition frozen pickle collection not implemented yet.")
 
     elif exp_typ == 'decomposition':
-        file_paths = []
         raise NotImplementedError("Decomposition frozen pickle collection not implemented yet.")
 
-    for path in file_paths:
+    for (path, layer, epoch) in candidates:
         if os.path.exists(path):
-            results.append(path)
+            results.append({
+                "path": path,
+                "layer": layer,
+                "epoch": epoch,
+                "exp_typ": exp_typ
+            })
         else:
             print(f"Warning: Frozen pickle not found at {path}, skipping.")
+            
     return results   
+
+
+def parse_filename_metadata(path: str, default_exp_typ: str) -> Dict[str, Any]:
+    """
+    Attempts to extract layer, epoch, and experiment type from a manually provided filename.
+    Useful when files are provided via CLI args instead of auto-collected.
+    """
+    filename = os.path.basename(path)
+    # Regex designed to capture 'frozen_layer_X' and 'freeze_epoch_Y'
+    # Flexible enough to catch simple variations
+    layer_match = re.search(r"frozen_layer_(.+?)_freeze_epoch", filename)
+    epoch_match = re.search(r"freeze_epoch_(\d+)", filename)
+    
+    layer = layer_match.group(1) if layer_match else "unknown_layer"
+    epoch = int(epoch_match.group(1)) if epoch_match else -1
+    
+    return {
+        "path": path,
+        "layer": layer,
+        "epoch": epoch,
+        "exp_typ": default_exp_typ  # Assume user provided type applies
+    }
 
 
 def compute_delta_t(
@@ -221,21 +260,22 @@ def compute_delta_t(
     metric_key: str,
     seed: int,
     spec: StageSpec,
+    data_split_seed: Optional[int] = None,
 ) -> dict:
     if "epochs" not in base_payload:
         raise KeyError("baseline pickle missing required key 'epochs'")
     if "epochs" not in int_payload:
         raise KeyError("intervention pickle missing required key 'epochs'")
 
-    if metric_key not in base_payload["seed_results"][seed]:
+    if metric_key not in base_payload["seed_results"][data_split_seed]:
         raise KeyError(f"baseline pickle missing metric '{metric_key}'")
-    if metric_key not in int_payload["seed_results"][seed]:
+    if metric_key not in int_payload["seed_results"][data_split_seed]:
         raise KeyError(f"intervention pickle missing metric '{metric_key}'")
 
-    base_epochs = np.asarray(base_payload["epochs"]).astype(int)[:-1]
-    int_epochs = np.asarray(int_payload["epochs"]).astype(int)[:-1]
-    base_values = np.asarray(base_payload["seed_results"][seed][metric_key]).astype(float)
-    int_values = np.asarray(int_payload["seed_results"][seed][metric_key]).astype(float)
+    base_epochs = np.asarray(base_payload["epochs"]).astype(int)[1:]
+    int_epochs = np.asarray(int_payload["epochs"]).astype(int)[1:]
+    base_values = np.asarray(base_payload["seed_results"][data_split_seed][metric_key]).astype(float)
+    int_values = np.asarray(int_payload["seed_results"][data_split_seed][metric_key]).astype(float)
 
     t_base = first_sustained_crossing(base_epochs, base_values, spec)
     if t_base is None:
@@ -286,8 +326,8 @@ def compute_delta_t(
             "note": "intervention never reached stage within available epochs",
             "intervention_first_epoch": int(interv_first_epoch) if interv_first_epoch is not None else None,
             "freeze_epoch": int(freeze_epoch) if freeze_epoch is not None else None,
-            "init_seed": int_payload.get("init_seed", None),
-            "data_split_seed": int_payload.get("data_split_seed", None),
+            "init_seed": seed, 
+            "data_split_seed": data_split_seed,
         }
 
     return {
@@ -299,8 +339,8 @@ def compute_delta_t(
         "consecutive": spec.consecutive,
         "intervention_first_epoch": int(interv_first_epoch) if interv_first_epoch is not None else None,
         "freeze_epoch": int(freeze_epoch) if freeze_epoch is not None else None,
-        "init_seed": int_payload.get("init_seed", None),
-        "data_split_seed": int_payload.get("data_split_seed", None),
+        "init_seed": seed,
+        "data_split_seed": data_split_seed,
     }
 
 
@@ -319,8 +359,15 @@ def save_results_json(path: str, payload: dict) -> None:
 def main() -> None:
     args = parse_args()
 
+    if args.exp_typ == 'held_out':
+        baseline_file_paths = staged_accuracies_held_out_file_paths_baseline_pickles
+    elif args.exp_typ == 'composition':
+        raise NotImplementedError("Composition baseline pickle path not implemented yet.")
+    elif args.exp_typ == 'decomposition':
+        raise NotImplementedError("Decomposition baseline pickle path not implemented yet.")
+
     if not args.baseline_pickle:
-        args.baseline_pickle = staged_accuracies_held_out_file_paths_baseline_pickles.get(
+        args.baseline_pickle = baseline_file_paths.get(
             args.data_split_seed, {}
         ).get(args.init_seed)
 
@@ -334,7 +381,7 @@ def main() -> None:
             json.dumps(
                 {
                     "file": args.baseline_pickle,
-                    "keys": list_metric_keys(base_payload, args.seed),
+                    "keys": list_metric_keys(base_payload, args.init_seed),
                     "placeholder_keys": METRIC_KEYS,
                 },
                 indent=2,
@@ -342,21 +389,63 @@ def main() -> None:
         )
         return
 
-    intervention_pickles = args.intervention_pickle or []
+    metric_keys = resolve_metric_keys(args.metric_key)
+    spec = StageSpec(tau=float(args.tau), consecutive=int(args.consecutive))
 
-    # Held out frozen epochs and layers configuration
-    frozen_epochs = [100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200]
+    # --- NEW: scope results by (data_split_seed, init_seed) ---
+    results_json = load_results_json(args.output_json)
 
-    # For composition.
-    # frozen_epochs = []
+    ds_key = str(args.data_split_seed)
+    init_key = str(args.init_seed)
 
-    # For decomposition
-    # frozen_epochs = []
+    ds_dict = results_json.setdefault(ds_key, {})
+    run_json = ds_dict.setdefault(init_key, {})
 
-    frozen_layers = [f"transformer_layer_{i}" for i in range(4)]
+    # Always write/run-specific metadata (do not use setdefault)
+    run_json["baseline_pickle"] = args.baseline_pickle
+    run_json["data_split_seed"] = args.data_split_seed
+    run_json["init_seed"] = args.init_seed
+    run_json["tau"] = spec.tau
+    run_json["consecutive"] = spec.consecutive
+    run_json["exp_typ"] = args.exp_typ
 
+    print("Baseline pickle:", args.baseline_pickle)
 
-    if not intervention_pickles:
+    if args.calc_baseline_only:
+        print("Calculating baseline stages only...")
+        baseline_stages = run_json.setdefault("baseline_stages", {})
+
+        # Verify data_split_seed exists in baseline payload
+        if args.data_split_seed not in base_payload["seed_results"]:
+            raise KeyError(f"Data split seed {args.data_split_seed} not found in baseline pickle.")
+
+        base_epochs = np.asarray(base_payload["epochs"]).astype(int)[1:]
+
+        for metric_key in metric_keys:
+            if metric_key not in base_payload["seed_results"][args.data_split_seed]:
+                print(
+                    f"Warning: Metric '{metric_key}' not found in baseline for data_split_seed {args.data_split_seed}. Skipping."
+                )
+                continue
+
+            base_values = np.asarray(base_payload["seed_results"][args.data_split_seed][metric_key]).astype(float)
+            t_base = first_sustained_crossing(base_epochs, base_values, spec)
+            baseline_stages[metric_key] = int(t_base) if t_base is not None else None
+
+        # save_results_json(args.output_json, results_json)
+        print(json.dumps(run_json, indent=2))
+        return
+
+    intervention_items: List[Dict[str, Any]] = []
+
+    if args.intervention_pickle:
+        for p in args.intervention_pickle:
+            intervention_items.append(parse_filename_metadata(p, args.exp_typ))
+    else:
+        # frozen_epochs = [100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200]
+        frozen_epochs = np.arange(100, 301, 10).tolist()
+        frozen_layers = [f"transformer_layer_{i}" for i in range(4)]
+
         if args.exp_typ == 'held_out':
             base_path = staged_accuracies_held_out_file_paths_frozen_pickles.get(
                 args.data_split_seed, {}
@@ -367,45 +456,54 @@ def main() -> None:
         elif args.exp_typ == 'decomposition':
             base_path = None
             raise NotImplementedError("Decomposition frozen pickle base path not implemented yet.")
+
         assert base_path is not None, "Base path for frozen pickles not found in configuration."
 
-        intervention_pickles = collect_frozen_pickles(args.data_split_seed, args.init_seed,
+        intervention_items = collect_frozen_pickles(
+            args.data_split_seed, args.init_seed,
             base_path=base_path,
             frozen_epochs=frozen_epochs,
             frozen_layers=frozen_layers,
             exp_typ=args.exp_typ
         )
 
-    if not intervention_pickles:
-        raise ValueError("--intervention_pickle is required unless frozen pickles are configured")
+    if not intervention_items:
+        raise ValueError("--intervention_pickle is required unless frozen pickles can be collected from config")
 
-    metric_keys = resolve_metric_keys(args.metric_key)
+    # Ensure results container exists within this run
+    run_json.setdefault("results", {})
 
-    spec = StageSpec(tau=float(args.tau), consecutive=int(args.consecutive))
-    results_json = load_results_json(args.output_json)
-    results_json.setdefault("baseline_pickle", args.baseline_pickle)
-    results_json.setdefault("seed", args.seed)
-    results_json.setdefault("tau", spec.tau)
-    results_json.setdefault("consecutive", spec.consecutive)
-    results_json.setdefault("results", {})
+    for item in intervention_items:
+        path = item["path"]
+        layer_name = item["layer"]
+        epoch_val = item["epoch"]
+        exp_typ = item["exp_typ"]
 
-    for intervention_path in intervention_pickles:
-        int_payload = load_stagewise_pickle(intervention_path)
-        entry = results_json["results"].setdefault(
-            intervention_path,
-            {"intervention_pickle": intervention_path, "metrics": {}},
-        )
+        try:
+            int_payload = load_stagewise_pickle(path)
+        except (FileNotFoundError, EOFError, pickle.UnpicklingError) as e:
+            print(f"Error loading pickle {path}: {e}. Skipping.")
+            continue
+
+        exp_dict = run_json["results"].setdefault(exp_typ, {})
+        layer_dict = exp_dict.setdefault(layer_name, {})
+        epoch_dict = layer_dict.setdefault(str(epoch_val), {})
+
         for metric_key in metric_keys:
-            entry["metrics"][metric_key] = compute_delta_t(
+            computed_result = compute_delta_t(
                 base_payload=base_payload,
                 int_payload=int_payload,
                 metric_key=metric_key,
-                seed=args.seed,
+                seed=args.init_seed,
+                data_split_seed=args.data_split_seed,
                 spec=spec,
             )
+            computed_result["intervention_pickle"] = path
+            epoch_dict[metric_key] = computed_result
 
     save_results_json(args.output_json, results_json)
-    print(json.dumps(results_json, indent=2))
+    print(f"Saved delta-t results to {args.output_json}")
+    # print(json.dumps(run_json, indent=2))
 
 
 if __name__ == "__main__":

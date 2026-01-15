@@ -82,7 +82,7 @@ def parse_args():
     # NOTE: pytorch 2.4 does not have Adafactor implemented. So not adding it here.
 
 
-    parser.add_argument("--seed", type=int, default=42,
+    parser.add_argument("--seed", type=int, default=1,
                         help="Random seed for reproducibility.")
     parser.add_argument("--save_dir", type=str, default="src/saved_models/",
                         help="Directory to save model checkpoints.")
@@ -345,6 +345,15 @@ def _apply_freeze_layers_in_place(model, freeze_layers: str):
                     found = True
                 except AttributeError as e:
                     print(f"ERROR: Could not find classification_layer: {e}")
+            elif layer_name == 'embedding_layer':
+                try:
+                    for p in unwrapped_model.src_tok_emb.parameters():
+                        p.requires_grad = False
+                    print("Froze embedding_layer")
+                    found = True
+                except AttributeError as e:
+                    print(f"ERROR: Could not find embedding_layer: {e}")
+
 
             if not found:
                 print(f"WARNING: Layer {layer_name} not found in model structure.")
@@ -996,14 +1005,19 @@ def main():
         args.learning_rate = float(re.search(r'lr_([0-9.eE+-]+)', resume_checkpoint_path).group(1))
         args.eta_min = float(re.search(r'eta_min_([0-9.eE+-]+)', resume_checkpoint_path).group(1))
         args.model_size = re.search(r'/(tiny|small|medium|large|xsmall|base|large_v2)/', resume_checkpoint_path).group(1)
-        args.seed = int(re.search(r'seed_(\d+)', resume_checkpoint_path).group(1))
+        try:
+            args.seed = int(re.search(r'init_seed_(\d+)', resume_checkpoint_path).group(1))
+        except:
+            args.seed = 42
+        args.data_split_seed = int(re.search(r'seed_(\d+)', resume_checkpoint_path).group(1))
         print("Extracted args from resume checkpoint path:")
         print(f"weight_decay: {args.weight_decay}")
         print(f"learning_rate: {args.learning_rate}")
         print(f"eta_min: {args.eta_min}")
         print(f"model_size: {args.model_size}")
-        print(f"seed: {args.seed}")
-        
+        print(f"data_split_seed: {args.data_split_seed}")
+        print(f"init_seed: {args.seed}")
+
         args.flatten_linear_model_input = str(args.flatten_linear_model_input) == 'True'  # Convert to boolean
         print("Flatten linear model input: ", args.flatten_linear_model_input)
 
