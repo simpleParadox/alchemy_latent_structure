@@ -10,7 +10,11 @@ held_out_file_paths = {
         
         4: {
             0: {
-                42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/predictions/",
+                # Do not use the first checkpoint below because the file path has now changed. It should be commented out. If the first path
+                # is uncommented then I'm definitely doing some testing.
+                # 42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/init_seed_42/",
+
+                42: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/init_seed_42/predictions/",
                 0: "",
                 1: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/init_seed_1/predictions/",
                 2: "",
@@ -180,7 +184,7 @@ staged_accuracies_held_out_file_paths_baseline_pickles = {
 staged_accuracies_held_out_file_paths_frozen_pickles = {
     0: {
         42: {
-            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/',
+            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_relative_epoch_frozen_layer_hop_4_exp_held_out/',
             'freeze_epoch_200': {
                 'transformer_layer_0': ['/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/stagewise_accuracies_frozen_layer_transformer_layer_0_data_split_seed_0_init_seed_42_hop_4_exp_held_out.pkl'],
                 'transformer_layer_1': [''],
@@ -197,7 +201,7 @@ staged_accuracies_held_out_file_paths_frozen_pickles = {
             },
         },
         0: {
-            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/',
+            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_relative_epoch_frozen_layer_hop_4_exp_held_out/',
             'freeze_epoch_200': {
                 'transformer_layer_0': [''],
                 'transformer_layer_1': [''],
@@ -214,7 +218,7 @@ staged_accuracies_held_out_file_paths_frozen_pickles = {
             },
         },
         1: {
-            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/',
+            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_relative_epoch_frozen_layer_hop_4_exp_held_out/',
             'freeze_epoch_200': {
                 'transformer_layer_0': [''],
                 'transformer_layer_1': [''],
@@ -247,7 +251,7 @@ staged_accuracies_held_out_file_paths_frozen_pickles = {
             },
         },
         3: {
-            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/',
+            'base_path': '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_relative_epoch_frozen_layer_hop_4_exp_held_out/',
             'freeze_epoch_200': {
                 'transformer_layer_0': [''],
                 'transformer_layer_1': [''],

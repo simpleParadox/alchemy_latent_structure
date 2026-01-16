@@ -209,7 +209,7 @@ def collect_frozen_pickles(data_split_seed: int, init_seed: int,
     if exp_typ == 'held_out':
         for layer in frozen_layers:
             for epoch in frozen_epochs:
-                path = f"{base_path}/stagewise_accuracies_frozen_layer_{layer}_freeze_epoch_{epoch}_data_split_seed_{data_split_seed}_init_seed_{init_seed}_hop_4_exp_held_out.pkl"
+                path = f"{base_path}/stagewise_accuracies_frozen_layer_{layer}_freeze_epoch_{epoch}_data_split_seed_{data_split_seed}_init_seed_{init_seed}_hop_4_exp_held_out_relative_epoch.pkl"
                 candidates.append((path, layer, epoch))
                 
     elif exp_typ == 'composition':
@@ -442,9 +442,24 @@ def main() -> None:
         for p in args.intervention_pickle:
             intervention_items.append(parse_filename_metadata(p, args.exp_typ))
     else:
-        # frozen_epochs = [100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200]
-        frozen_epochs = np.arange(100, 301, 10).tolist()
+        # frozen_epochs = [100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200] # These were absolute epochs - do not use.
+        # frozen_epochs = np.arange(100, 301, 10).tolist()
+
+        # init seed 42 relative epochs.
+        if args.init_seed == 42:
+            frozen_epochs = [68, 78, 88, 98, 108, 118, 128, 138, 148, 158, 168, 178, 188, 198, 208, 218, 228, 238, 248, 258, 268, 278, 288, 298, 308]
+
+        # init seed 3 relative epochs.
+        elif args.init_seed == 3:
+            frozen_epochs = [72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312]
+
+        # init seed 1 relative epochs.
+        elif args.init_seed == 1:
+            frozen_epochs = [82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312, 322]
+        else:
+            raise ValueError(f"Relative frozen epochs not defined for init_seed {args.init_seed}")
         frozen_layers = [f"transformer_layer_{i}" for i in range(4)]
+        frozen_layers.insert(0, "embedding_layer")
 
         if args.exp_typ == 'held_out':
             base_path = staged_accuracies_held_out_file_paths_frozen_pickles.get(

@@ -2004,12 +2004,12 @@ if __name__ == "__main__":
         os.chdir(base_path)
 
         if args.frozen_layer is not None:
+            suffix = 'relative_epoch' if 'relative' in base_path else 'absolute_epoch'
             # Add data_split_seed and init_seed to the filename
             output_file_name = (
                 f'stagewise_accuracies_frozen_layer_{args.frozen_layer}_'
                 f'freeze_epoch_{args.freeze_epoch}_'
-                f'data_split_seed_{args.data_split_seed}_init_seed_{args.init_seed}_hop_{hop}_exp_{exp_typ}.pkl'
-                f'absolute_epoch' if 'relative' not in base_path else 'relative_epoch'
+                f'data_split_seed_{args.data_split_seed}_init_seed_{args.init_seed}_hop_{hop}_exp_{exp_typ}_{suffix}.pkl'
             )
             start_epoch = args.freeze_epoch
         else:

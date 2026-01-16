@@ -55,9 +55,10 @@ def extract_plot_data_with_errorbars(
     init_seeds: Optional[List[int]] = None,
     cap_never_reached: float = 1000.0,
     min_n: int = 2,
-    x_mode: str = "absolute",              # NEW
-    bin_width: int = 10,                  # NEW (used for relative)
-    anchor_metric_key: Optional[str] = None,  # NEW (defaults to target_metric_key)
+    x_mode: str = "absolute",
+    bin_width: int = 1,  # CHANGED: default no binning
+    anchor_metric_key: Optional[str] = None,
+    debug_relative: bool = False,  # NEW
 ) -> Dict[str, List[Tuple[int, float, float, int]]]:
     """
     Returns:
@@ -80,8 +81,13 @@ def extract_plot_data_with_errorbars(
         print(f"Warning: data_split_seed '{ds_key}' not found in {results_json_path}")
         return {}
 
-    # Collect values: layer -> epoch -> list[delta_t across seeds]
+    # Collect values: layer -> x_val -> list[delta_t across seeds]
     values: Dict[str, Dict[int, List[float]]] = {}
+
+    # Optional debug: collect per-seed relative x support (across all layers)
+    rel_support_by_seed: Dict[int, set] = {}
+    # Optional debug: per seed per layer relative support
+    rel_support_by_seed_by_layer: Dict[int, Dict[str, set]] = {}
 
     for init_seed in init_seeds:
         init_key = str(init_seed)
@@ -108,24 +114,17 @@ def extract_plot_data_with_errorbars(
                     try:
                         freeze_epoch = int(epoch_str)
                     except ValueError:
-                        raise ValueError(f"Invalid epoch string: {epoch_str}")
+                        # Skip malformed epoch keys
+                        continue
 
                 delta_t = _cap_delta_t(payload.get("delta_t"), cap_never_reached)
                 if delta_t is None:
                     continue
 
-                if anchor_metric_key is None:
-                    anchor_metric_key = target_metric_key
-
                 if x_mode == "absolute":
                     x_val = int(freeze_epoch)
 
                 elif x_mode == "relative":
-                    # print(f"Computing relative x for layer={layer_name}, epoch={freeze_epoch}, init_seed={init_seed}")
-                    # We need t_baseline for the anchor metric.
-                    # 1) If anchor_metric_key == target_metric_key, it's in the same payload.
-                    # 2) If different, try to read it from the corresponding anchor payload at same (layer, epoch),
-                    #    else skip (or you could implement a more thorough lookup).
                     if anchor_metric_key == target_metric_key:
                         t_base = _get_t_baseline_from_payload(payload)
                     else:
@@ -133,25 +132,84 @@ def extract_plot_data_with_errorbars(
                         t_base = _get_t_baseline_from_payload(anchor_payload)
 
                     if t_base is None:
-                        raise ValueError(
-                            f"t_baseline for anchor_metric_key='{anchor_metric_key}' not found "
-                            f"at layer='{layer_name}', epoch={freeze_epoch}, init_seed={init_seed}."
-                        )
+                        # Skip point rather than crashing
+                        continue
 
-                    rel = float(freeze_epoch) - float(t_base)
-                    # print(f"  t_baseline={t_base}, relative freeze epoch={rel}")
-                    x_val = _bin_center(rel, bin_width=bin_width)
+                    rel = int(freeze_epoch) - int(t_base)
+
+                    # Only bin if user requested binning
+                    if bin_width > 1:
+                        x_val = _bin_center(rel, bin_width=bin_width)
+                    else:
+                        x_val = int(rel)
+
+                    # Debug tracking for relative mode
+                    rel_support_by_seed.setdefault(init_seed, set()).add(int(x_val))
+                    rel_support_by_seed_by_layer.setdefault(init_seed, {}).setdefault(layer_name, set()).add(int(x_val))
 
                 else:
                     raise ValueError(f"Unknown x_mode={x_mode}. Use 'absolute' or 'relative'.")
 
                 values.setdefault(layer_name, {}).setdefault(int(x_val), []).append(float(delta_t))
 
+    if debug_relative and x_mode == "relative":
+        # Seed-level union across layers
+        for s in init_seeds:
+            xs = sorted(rel_support_by_seed.get(s, set()))
+            if not xs:
+                print(f"[debug_relative] init_seed={s}: no relative x-values found (maybe missing data).")
+                continue
+            has0 = (0 in rel_support_by_seed.get(s, set()))
+            print(f"[debug_relative] init_seed={s}: union(all layers): min={xs[0]}, max={xs[-1]}, count={len(xs)}, has0={has0}")
+            if not has0:
+                print(
+                    f"[debug_relative] WARNING: init_seed={s} has no x=0 point. "
+                    f"Expected if freeze schedule includes freeze_epoch == t_baseline(anchor)."
+                )
+
+        # Layer-level: per-seed support and intersection across seeds
+        all_layers = sorted(values.keys(), key=natural_sort_key)
+        for layer in all_layers:
+            print(f"[debug_relative] layer={layer}")
+
+            per_seed_sets = []
+            for s in init_seeds:
+                sset = rel_support_by_seed_by_layer.get(s, {}).get(layer, set())
+                xs = sorted(sset)
+                if not xs:
+                    print(f"  init_seed={s}: no x-values")
+                    continue
+                print(f"  init_seed={s}: min={xs[0]}, max={xs[-1]}, count={len(xs)}, has0={(0 in sset)}")
+                per_seed_sets.append(sset)
+
+            if per_seed_sets:
+                common = set.intersection(*per_seed_sets)
+                common_xs = sorted(common)
+                if common_xs:
+                    print(
+                        f"  common_across_seeds: min={common_xs[0]}, max={common_xs[-1]}, "
+                        f"count={len(common_xs)}, has0={(0 in common)}"
+                    )
+                else:
+                    print("  common_across_seeds: EMPTY (no shared x-values across the seeds for this layer)")
+
+            # NEW: how many x-points survive min_n for this layer?
+            epoch_map = values.get(layer, {})
+            total_points = len(epoch_map)
+            surviving = sum(1 for _x, vals in epoch_map.items() if len(vals) >= min_n)
+            # Also compute distribution of n across x-buckets
+            n_counts = {}
+            for _x, vals in epoch_map.items():
+                n_counts[len(vals)] = n_counts.get(len(vals), 0) + 1
+
+            n_counts_str = ", ".join(f"n={k}:{v}" for k, v in sorted(n_counts.items()))
+            print(f"  points: total={total_points}, survive_min_n({min_n})={surviving} | {n_counts_str}")
+
     # Aggregate to mean + SEM
+    import pdb; pdb.set_trace()
     layer_data: Dict[str, List[Tuple[int, float, float, int]]] = {}
     for layer_name, epoch_map in values.items():
         series = []
-        # import pdb; pdb.set_trace()
         for x_key, vals in epoch_map.items():
             n = len(vals)
             if n < min_n:
@@ -183,10 +241,11 @@ def plot_deltas_with_errorbars(
     init_seeds: Optional[List[int]] = None,
     min_n: int = 2,
     cap_never_reached: float = 1000.0,
-    x_mode: str = "absolute",       # NEW
-    bin_width: int = 10,            # NEW
-    anchor_metric: Optional[str] = None,  # NEW (resolved metric string)
-    anchor_key: Optional[str] = None,     # NEW (alias)
+    x_mode: str = "absolute",
+    bin_width: int = 10,
+    anchor_metric: Optional[str] = None,
+    anchor_key: Optional[str] = None,
+    debug_relative: bool = False,  # NEW
 ):
     layer_data = extract_plot_data_with_errorbars(
         results_json_path=results_path,
@@ -199,6 +258,7 @@ def plot_deltas_with_errorbars(
         x_mode=x_mode,
         bin_width=bin_width,
         anchor_metric_key=anchor_metric,
+        debug_relative=debug_relative,
     )
 
     if not layer_data:
@@ -211,13 +271,31 @@ def plot_deltas_with_errorbars(
     fig, ax = plt.subplots(figsize=(8, 6))
 
     sorted_layers = sorted(layer_data.keys(), key=natural_sort_key)
+
+    # Define colors per layer: embedding layer is brown; other layers use matplotlib's default "Purples" gradient.
+    has_embedding = "embedding_layer" in sorted_layers
+    purple_layers = [l for l in sorted_layers if l != "embedding_layer"]
+    total_purples = max(len(purple_layers), 1)
+
+    layer_to_color: Dict[str, Tuple[float, float, float]] = {}
+
+    cmap = plt.get_cmap("Purples")
+    # Sample within the colormap (avoid extreme white at 0.0).
+    for j, layer in enumerate(purple_layers):
+        t = (j + 0.1) / max(total_purples - 1, 1)  # 0..1
+        r, g, b, _a = cmap(0.30 + 0.70 * t)
+        layer_to_color[layer] = (float(r), float(g), float(b))
+
+    if has_embedding:
+        layer_to_color["embedding_layer"] = (165 / 255, 42 / 255, 42 / 255)  # brown
+
     for layer in sorted_layers:
         series = layer_data[layer]
         epochs = [p[0] for p in series]
         means = [p[1] for p in series]
-        sems = [p[2] for p in series]
+        # sems = [p[2] for p in series]
+        sems = [0 for p in series]  # TEMPORARILY disable error bars
         ns = [p[3] for p in series]
-        # import pdb; pdb.set_trace()
 
         ax.errorbar(
             epochs,
@@ -226,6 +304,7 @@ def plot_deltas_with_errorbars(
             marker="o",
             linestyle="-",
             capsize=3,
+            color=layer_to_color.get(layer, "tab:cyan"),
             label=f"{layer}",
         )
 
@@ -233,32 +312,41 @@ def plot_deltas_with_errorbars(
         # for x, y, n in zip(epochs, means, ns):
         #     ax.annotate(str(n), (x, y), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
 
-    ax.axhline(y=epsilon, color="black", linestyle="--", label=f"Critical epoch threshold ({epsilon})")
+    ax.axhline(y=epsilon, color="black", linestyle="--", label=f"Plasticity threshold ({epsilon})")
 
     if x_mode == "absolute":
         ax.set_xlabel("Freeze Epoch", fontsize=18)
     else:
-        ax.set_xlabel(
-            f"Relative Freeze Epoch (t_f - t_base[{anchor_key or stage_key}]) [bin={bin_width}]",
-            fontsize=18,
-        )
-        ax.axvline(x=0, color="gray", linestyle=":", alpha=0.8)
+        if bin_width > 1:
+            xlabel = f"Relative Freeze Epoch (t_f - t_base[{anchor_key or stage_key}]) [bin={bin_width}]"
+        else:
+            # xlabel = f"Relative Freeze Epoch (t_f - t_base[{anchor_key or stage_key}])"
+            xlabel = f"Relative Freeze Epoch"
+        ax.set_xlabel(xlabel, fontsize=18)
+        ax.axvline(x=0, color="black", linestyle=":", alpha=1.0)
+
+    stage_key_map = {
+        "p_b_given_a": "P[B|A]",
+        "p_a": "P[A]",
+        "p_c_given_ab": "P[C|A∩B]",
+    }
 
     init_seed_str = ",".join(str(s) for s in (init_seeds if init_seeds is not None else [1, 3, 42]))
-    ax.set_ylabel("Δt (Delay to Event 'k')", fontsize=18)
-    ax.set_title(
-        "Impact of Freezing on the Delay of Event 'k'\n"
-        # f"exp_typ={exp_typ} | metric={stage_key} | data_split_seed={data_split_seed} | init_seeds=[{init_seed_str}]"
-        f"exp_typ={exp_typ} | event={stage_key}",
-        fontsize=20,
-    )
+    ax.set_ylabel(f"Δt for event {stage_key_map.get(stage_key, stage_key)})", fontsize=18)
+    # ax.set_title(
+    #     "Impact of Freezing on the Delay of Event 'k'\n"
+    #     # f"exp_typ={exp_typ} | metric={stage_key} | data_split_seed={data_split_seed} | init_seeds=[{init_seed_str}]"
+    #     f"exp_typ={exp_typ} | event={stage_key_map.get(stage_key, stage_key)}",
+    #     fontsize=20,
+    # )
     # ax.legend(title="Frozen Layer", bbox_to_anchor=(1.05, 1), loc="upper left")
     ax.legend(title="Frozen Layer", loc="upper right")
-    ax.grid(True, linestyle=":", alpha=0.6)
+    # ax.grid(True, linestyle=":", alpha=0.6)
+    ax.grid(True)
 
     # x-ticks font size
-    plt.xticks(fontsize=14)
-    plt.yticks(fontsize=14)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
 
 
     plt.tight_layout()
@@ -335,19 +423,24 @@ def main():
         type=str,
         default="relative",
         choices=["absolute", "relative"],
-        help="Use absolute freeze epochs or relative (freeze_epoch - t_baseline) with optional binning.",
+        help="Use absolute freeze epochs or relative (freeze_epoch - t_baseline).",
     )
     parser.add_argument(
         "--bin_width",
         type=int,
-        default=10,
-        help="Bin width for relative x_mode (ignored for absolute).",
+        default=1,  # CHANGED: default no binning
+        help="Bin width for relative x_mode. Use 1 to disable binning (default).",
     )
     parser.add_argument(
         "--anchor_metric",
         type=str,
         default='p_a',
         help="Metric alias used as the baseline anchor (t_baseline). Defaults to --metric if not provided.",
+    )
+    parser.add_argument(
+        "--debug_relative",
+        action="store_true",
+        help="Print per-init_seed coverage of relative x-values (checks that x=0 exists, etc.).",
     )
 
     args = parser.parse_args()
@@ -374,6 +467,7 @@ def main():
         bin_width=args.bin_width,
         anchor_metric=anchor_metric,
         anchor_key=anchor_alias,
+        debug_relative=args.debug_relative,
     )
 
 
