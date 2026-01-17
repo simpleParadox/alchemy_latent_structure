@@ -206,7 +206,7 @@ def extract_plot_data_with_errorbars(
             print(f"  points: total={total_points}, survive_min_n({min_n})={surviving} | {n_counts_str}")
 
     # Aggregate to mean + SEM
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
     layer_data: Dict[str, List[Tuple[int, float, float, int]]] = {}
     for layer_name, epoch_map in values.items():
         series = []
@@ -219,6 +219,8 @@ def extract_plot_data_with_errorbars(
             # SEM: std / sqrt(n); use ddof=1 only if n>1
             std = float(np.std(arr, ddof=1)) if n > 1 else 0.0
             sem = float(std / np.sqrt(n)) if n > 1 else 0.0
+            # mean = float(np.median(arr))
+            # import pdb; pdb.set_trace()
 
             x = int(x_key)
             series.append((x, mean, sem, n))
@@ -352,6 +354,7 @@ def plot_deltas_with_errorbars(
     plt.tight_layout()
     if output_path:
         plt.savefig(output_path, dpi=200)
+        plt.savefig(output_path.replace(".png", ".pdf"), dpi=200)
         print(f"Plot saved to {output_path}")
     else:
         plt.show()
@@ -366,7 +369,7 @@ def main():
         default="delta_time_results.json",
         help="Path to the results JSON file.",
     )
-    parser.add_argument(
+    parser.add_argument( 
         "--metric",
         type=str,
         default="p_c_given_ab",

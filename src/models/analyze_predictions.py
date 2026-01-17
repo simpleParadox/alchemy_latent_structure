@@ -10,7 +10,7 @@ import os
 import re
 
 from baseline_and_frozen_filepaths import held_out_file_paths, frozen_held_out_file_paths_per_layer_per_init_seed, composition_file_paths, composition_file_paths_non_subsampled, \
-            decomposition_file_paths, decomposition_file_paths_non_subsampled
+        decomposition_file_paths, decomposition_file_paths_non_subsampled, composition_baseline_file_paths, composition_non_subsampled_file_paths_dict
 
 # Load the metadata, data, and vocab.
 if cluster == 'vulcan':
@@ -1263,14 +1263,14 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
         print("file_paths is a dict, extracting seeds and paths.")
         seeds = list(file_paths.keys())
         file_paths = list(file_paths.values())
-        import pdb; pdb.set_trace()
 
     # Load the data for each provided file path
     print("Loading data from provided file paths for seeds: ", seeds)
     for i, path in enumerate(file_paths):
         print("Loading data for seed ", seeds[i], " from path ", path)
-        seed = seeds[i]
+        seed = seeds[i] # This is actually the data split seed.
         predictions_by_epoch = {}
+        import pdb; pdb.set_trace()
 
         if exp_typ == 'composition' or exp_typ == 'decomposition':
             if file_paths_non_subsampled is not None:
@@ -1330,7 +1330,6 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
     if file_paths_non_subsampled is not None:
         return predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_targets_by_seed
 
-    import pdb; pdb.set_trace()
 
     return predictions_by_epoch_by_seed, inputs_by_seed, None
 
@@ -1385,6 +1384,9 @@ def load_epoch_data_updated_single_seed(exp_typ: str = 'held_out', hop = 2, epoc
 
     if exp_typ == 'held_out':
         return predictions_by_epoch_by_seed, inputs_by_seed, None
+    else:
+        return None, None, None
+   
 
 if __name__ == "__main__":
 
@@ -1482,6 +1484,8 @@ if __name__ == "__main__":
         # NOTE: Do not change this.
         # seed_values_4_hop = [2,3,4]
 
+
+        # Later decided to just use seed 0 for all held out experiments.
         seed_values_4_hop = [0]
 
         hop_to_epoch_values = {
@@ -1496,24 +1500,27 @@ if __name__ == "__main__":
             5: seed_values_5_hop
         }
     elif exp_typ == 'composition':
-        hop_to_epoch_values = {
-            # 2: [0, 200, 400, 600, 800, 999],
-            # 3: [0, 200, 400, 600, 800, 999],
-            # 4: [0, 200, 400, 600, 800, 999],
-            # 5: [0, 200, 400, 600, 800, 999]
-            # Till 500 only.
-            2: [0, 200, 400, 500],
-            3: [0, 200, 400, 500],
-            4: [0, 200, 400, 500],
-            5: [0, 200, 400, 500]
-        }
+        if args.save_stagewise_accuracies_only:
+            hop_to_epoch_values = {
+                2: [0, 200, 400, 600, 800, 999],
+                3: [0, 200, 400, 600, 800, 999],
+                4: [0, 200, 400, 600, 800, 999],
+                5: [0, 200, 400, 600, 800, 999]
+            }
+        else:
+        # Till 500 only.
+            hop_to_epoch_values = {
+                    2: [0, 200, 400, 500],
+                    3: [0, 200, 400, 500],
+                    4: [0, 200, 400, 500],
+                    5: [0, 200, 400, 500]
+            }
         
         seed_values_hop_dict = {
-            2: [0],
-            # 2: [0, 16, 29],
-            3: [0, 16, 29],
-            4: [0, 16, 29],
-            5: [0, 16, 29]
+            2: [0],  #,, 16, 29]
+            3: [0], #, 16, 29],
+            4: [0], #, 16, 29],
+            5: [0] #, 16, 29]
         }
     else:
         seed_values_hop_dict = {
@@ -1539,25 +1546,48 @@ if __name__ == "__main__":
 
 
     if args.save_stagewise_accuracies_only:
-        updated_held_out_file_path = held_out_file_paths[hop][args.data_split_seed][args.init_seed]
+        if exp_typ == 'composition':
+            updated_path  = composition_baseline_file_paths[hop][args.data_split_seed][args.init_seed]
+                
+        elif exp_typ == 'held_out':
+            updated_path = held_out_file_paths[hop][args.data_split_seed][args.init_seed]
         start_epoch = hop_to_epoch_values[hop][0]
         frozen_layers = None
         
         if args.frozen_layer is not None:
             assert args.freeze_epoch is not None, "If frozen_layer is specified, freeze_epoch must also be specified."
-            updated_held_out_file_base_path = frozen_held_out_file_paths_per_layer_per_init_seed[hop][args.data_split_seed][args.init_seed]['base_path']
-            updated_held_out_file_path = f"{updated_held_out_file_base_path}/resume_from_epoch_{str(args.freeze_epoch)}__freeze_{args.frozen_layer}/predictions/"
+            if exp_typ == 'composition':
+                updated_base_path = composition_baseline_file_paths[hop][args.data_split_seed][args.init_seed]
+
+            elif exp_typ == 'decomposition':
+                raise NotImplementedError("Frozen decomposition experiments not implemented yet.")
+            elif exp_typ == 'held_out':
+                updated_base_path = frozen_held_out_file_paths_per_layer_per_init_seed[hop][args.data_split_seed][args.init_seed]['base_path']
+                updated_path = f"{updated_base_path}/resume_from_epoch_{str(args.freeze_epoch)}__freeze_{args.frozen_layer}/predictions/"
             start_epoch = args.freeze_epoch + 1
         
-        
-        predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_composition_data  = load_epoch_data_updated_single_seed(
-            exp_typ = exp_typ,
-            hop = hop,
-            epoch_range = (start_epoch, hop_to_epoch_values[hop][-1]),
-            file_path = updated_held_out_file_path,
-            file_paths_non_subsampled = None,
-            frozen_layer = args.frozen_layer
-        )
+        if exp_typ == 'held_out':
+            predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_composition_data  = load_epoch_data_updated_single_seed(
+                exp_typ = exp_typ,
+                hop = hop,
+                epoch_range = (start_epoch, hop_to_epoch_values[hop][-1]),
+                file_path = updated_path,
+                file_paths_non_subsampled = None,
+                frozen_layer = args.frozen_layer
+            )
+        elif exp_typ in ['composition', 'decomposition']:
+            predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_composition_data  = load_epoch_data(
+                        exp_typ = exp_typ,
+                        hop = hop,
+                        epoch_range = (start_epoch, hop_to_epoch_values[hop][-1]),
+                        seeds = seed_values_hop_dict[hop] if args.init_seed is None else [args.init_seed],
+                        scheduler_prefix = scheduler_prefix,
+                        file_paths = [updated_path],
+                        file_paths_non_subsampled = composition_non_subsampled_file_paths_dict if exp_typ == 'composition' else None,
+                        frozen_layer = args.frozen_layer
+                    )
+            import pdb; pdb.set_trace()
+            
     else:
         start_epoch = hop_to_epoch_values[hop][0]
         if args.data_split_seed is not None:
@@ -1579,7 +1609,6 @@ if __name__ == "__main__":
             file_paths_non_subsampled = composition_file_paths_non_subsampled if exp_typ == 'composition' else decomposition_file_paths_non_subsampled if exp_typ == 'decomposition' else None,
             frozen_layer = args.frozen_layer
         )
-
 
 
     seed_data_files = {}
@@ -1627,6 +1656,7 @@ if __name__ == "__main__":
             vocab = pickle.load(open(data_files["vocab"], "rb"))
 
             seed_data_files[seed] = {'vocab': vocab, 'metadata': metadata}
+            import pdb; pdb.set_trace()
 
 
 

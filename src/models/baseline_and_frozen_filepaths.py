@@ -37,6 +37,8 @@ held_out_file_paths = {
     }
 
 # Frozen layer held-out jobs. The first key is the hop. The second key is data split seed, the third key is model init seed.
+# This dictionary is required to calculate the stage-wise accuracies inside analyzing predictions.
+# This is a precursor to the staged_accuracies_held_out_file_paths_frozen_pickles dictionary below.
 frozen_held_out_file_paths_per_layer_per_init_seed = {
     4: {
         0: {
@@ -265,13 +267,66 @@ staged_accuracies_held_out_file_paths_frozen_pickles = {
 
 
 
+composition_baseline_file_paths = {
+    2: {
+        0:{
+            42: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/init_seed_42/predictions/",
+            1: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_8.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/init_seed_1/predictions/",
+            3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/init_seed_3/predictions/"
+        }
+    },
+    3: {
+        0:{
+            42: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_0/init_seed_42/predictions/",
+            1: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_0/init_seed_1/predictions/",
+            3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_3/seed_0/init_seed_3/predictions/"
+        }
+    },
+    4: {
+        0:{
+            42: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_0/init_seed_42/predictions/",
+            1: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_0/init_seed_1/predictions/",
+            3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_4/seed_0/init_seed_3/predictions/"
+        }
+    },
+    5: {
+        0:{
+            42: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_0/init_seed_42/predictions/",
+            1: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_8.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_0/init_seed_1/predictions/",
+            3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_5/seed_0/init_seed_3/predictions/"
+        }
+    }
+}
 
-
-
-
+# Note that the frozen file paths can be constructed from the baseline file paths above.
 
 # #### Composition and Decomposition file paths for non-subsampled and subsampled data.
+# The first key is the hop length, and the second key is the data split seed.
+composition_non_subsampled_file_paths_dict = {
+    2: {
+        0: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+    }
+    3: {
+        0: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_3_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+    },
+    4: {
+        0: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_4_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+    },
+    5: {
+        0: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_5_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
+    }
+}
 
+
+
+
+
+
+
+
+
+
+##############################################################################
 
 composition_file_paths_non_subsampled = {
     2: [
@@ -306,7 +361,14 @@ composition_file_paths = {
         0: {
             42: [
                 '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/flatten_linear_input/predictions/'
+      "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_0/init_seed_42/",
             ],  # init_seed 42
+            1: [
+                ""
+            ],
+            3: [
+                "",
+            ],
         },
         16: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/no_scheduler/wd_0.01_lr_0.0001/eta_min_1e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_16/flatten_linear_input/predictions/',
         # '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/fully_shuffled/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_2/seed_29/flatten_linear_input/predictions/',
