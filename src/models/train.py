@@ -185,6 +185,9 @@ def parse_args():
     parser.add_argument("--flatten_linear_model_input", type=str, default="False", choices=["True", "False"],
                         help="Whether to flatten the input for linear models. Default is False.")
 
+    parser.add_argument('--store_in_scratch', type=str, default='False', choices=['True', 'False'],
+                        help="Whether to store model checkpoints and logs in /scratch/ directory. Default is False.")
+
     
     return parser.parse_args()
 
@@ -897,17 +900,15 @@ def _save_validation_predictions(all_predictions, all_targets, all_encoder_input
     
     # Save using numpy compressed format
     np.savez_compressed(pred_path, predictions=predictions_array)
-    if epoch_str == "epoch_001":
-        np.savez_compressed(target_path, targets=targets_array)
-        print(f"Saved targets to: {target_path}")
+    np.savez_compressed(target_path, targets=targets_array)
     
     if all_encoder_inputs:
         inputs_array = np.concatenate([i.numpy() for i in all_encoder_inputs], axis=0)
-        if epoch_str == "epoch_001":
-            np.savez_compressed(input_path, inputs=inputs_array)
-            print(f"Saved inputs to: {input_path}")
+        np.savez_compressed(input_path, inputs=inputs_array)
+        print(f"Saved inputs to: {input_path}")
     
-        print(f"Saved predictions to: {pred_path}")
+    print(f"Saved predictions to: {pred_path}")
+    print(f"Saved targets to: {target_path}")
 
 def validate_resume_compatibility(checkpoint_args, current_args, allow_mismatch=False):
     """Validate that resumed training is compatible with current arguments."""
@@ -978,6 +979,8 @@ def validate_scheduler_resume_compatibility(checkpoint_args, args):
 
 def main():
     args = parse_args()
+
+    args.store_in_scratch = str(args.store_in_scratch).lower() == "true"
 
     # Normalize boolean-like args early
     args.allow_data_path_mismatch = str(args.allow_data_path_mismatch).lower() == "true"
@@ -1704,6 +1707,9 @@ def main():
                 if args.custom_checkpoint_dir is not None:
                     # Replace 'def-afyshe-ab' with 'aip-afyshe' in the custom checkpoint dir if needed
                     args.save_dir = args.save_dir.replace('def-afyshe-ab', 'aip-afyshe')
+                    if args.store_in_scratch:
+                        # Replace anything before 'dm_alchemy' with '/home/rsaha/scratch'
+                        args.save_dir = re.sub(r'^.*dm_alchemy', '/home/rsaha/scratch/dm_alchemy', args.save_dir)
                     # Check if updated args.save_dir exists, if not create it
                     if not os.path.exists(args.save_dir):
                         os.makedirs(args.save_dir)
