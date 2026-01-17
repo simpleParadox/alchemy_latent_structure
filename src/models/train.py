@@ -897,15 +897,17 @@ def _save_validation_predictions(all_predictions, all_targets, all_encoder_input
     
     # Save using numpy compressed format
     np.savez_compressed(pred_path, predictions=predictions_array)
-    np.savez_compressed(target_path, targets=targets_array)
+    if epoch_str == "epoch_001":
+        np.savez_compressed(target_path, targets=targets_array)
+        print(f"Saved targets to: {target_path}")
     
     if all_encoder_inputs:
         inputs_array = np.concatenate([i.numpy() for i in all_encoder_inputs], axis=0)
-        np.savez_compressed(input_path, inputs=inputs_array)
-        print(f"Saved inputs to: {input_path}")
+        if epoch_str == "epoch_001":
+            np.savez_compressed(input_path, inputs=inputs_array)
+            print(f"Saved inputs to: {input_path}")
     
-    print(f"Saved predictions to: {pred_path}")
-    print(f"Saved targets to: {target_path}")
+        print(f"Saved predictions to: {pred_path}")
 
 def validate_resume_compatibility(checkpoint_args, current_args, allow_mismatch=False):
     """Validate that resumed training is compatible with current arguments."""
