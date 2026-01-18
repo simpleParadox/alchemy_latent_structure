@@ -1252,7 +1252,6 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
             for path in file_paths:
                 # Extract seed from the path assuming the path contains 'seed_{seed_number}'
                 import re
-                import pdb; pdb.set_trace()
                 match = re.search(r'seed_(\d+)', path)
                 if match:
                     seed_number = int(match.group(1))
@@ -1270,7 +1269,6 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
         print("Loading data for seed ", seeds[i], " from path ", path)
         seed = seeds[i] # This is actually the data split seed.
         predictions_by_epoch = {}
-        import pdb; pdb.set_trace()
 
         if exp_typ == 'composition' or exp_typ == 'decomposition':
             if file_paths_non_subsampled is not None:
@@ -1502,10 +1500,10 @@ if __name__ == "__main__":
     elif exp_typ == 'composition':
         if args.save_stagewise_accuracies_only:
             hop_to_epoch_values = {
-                2: [0, 200, 400, 600, 800, 999],
-                3: [0, 200, 400, 600, 800, 999],
-                4: [0, 200, 400, 600, 800, 999],
-                5: [0, 200, 400, 600, 800, 999]
+                2: [0, 200, 400, 500, 800, 999],
+                3: [0, 200, 400, 500, 800, 999],
+                4: [0, 200, 400, 500, 800, 999],
+                5: [0, 200, 400, 500, 800, 999]
             }
         else:
         # Till 500 only.
@@ -1586,7 +1584,6 @@ if __name__ == "__main__":
                         file_paths_non_subsampled = composition_non_subsampled_file_paths_dict if exp_typ == 'composition' else None,
                         frozen_layer = args.frozen_layer
                     )
-            import pdb; pdb.set_trace()
             
     else:
         start_epoch = hop_to_epoch_values[hop][0]
@@ -1656,7 +1653,6 @@ if __name__ == "__main__":
             vocab = pickle.load(open(data_files["vocab"], "rb"))
 
             seed_data_files[seed] = {'vocab': vocab, 'metadata': metadata}
-            import pdb; pdb.set_trace()
 
 
 

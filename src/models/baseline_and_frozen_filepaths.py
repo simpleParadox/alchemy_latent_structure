@@ -305,7 +305,7 @@ composition_baseline_file_paths = {
 composition_non_subsampled_file_paths_dict = {
     2: {
         0: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
-    }
+    },
     3: {
         0: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_3_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl',
     },
@@ -317,7 +317,37 @@ composition_non_subsampled_file_paths_dict = {
     }
 }
 
-
+# The baseline pickles need to the direct path to the pickle files.
+composition_baseline_pickle_file_paths = {
+    2: {
+        0: {
+            42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_2_exp_composition.pkl",
+            1: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_1_hop_2_exp_composition.pkl",
+            3: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_3_hop_2_exp_composition.pkl"
+        }
+    },
+    3: {
+        0: {
+            42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_3_exp_composition.pkl",
+            1: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_1_hop_3_exp_composition.pkl",
+            3: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_3_hop_3_exp_composition.pkl"
+        }
+    },
+    4: {
+        0: {
+            42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_4_exp_composition.pkl",
+            1: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_1_hop_4_exp_composition.pkl",
+            3: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_3_hop_4_exp_composition.pkl" 
+        }
+    },
+    5: {
+        0: {
+            42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_5_exp_composition.pkl",  
+            1: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_1_hop_5_exp_composition.pkl",
+            3: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/stagewise_accuracies_data_split_seed_0_init_seed_3_hop_5_exp_composition.pkl"
+        }
+    }
+}
 
 
 

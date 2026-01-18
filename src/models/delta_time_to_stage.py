@@ -47,6 +47,7 @@ import numpy as np
 from baseline_and_frozen_filepaths import (
     staged_accuracies_held_out_file_paths_baseline_pickles,
     staged_accuracies_held_out_file_paths_frozen_pickles,
+    composition_baseline_pickle_file_paths
 )
 
 
@@ -158,6 +159,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--seed', type=int, default=42, help='Seed index to use from the .pkl files.')
     p.add_argument('--data_split_seed', type=int, default=0, help='Data split seed used in the experiments.')
     p.add_argument('--init_seed', type=int, default=42, help='Model initialization seed used in the experiments.')
+    p.add_argument('--hop', type=int, default=4, help='Hop length used for composition / decomposition.')
     p.add_argument(
         "--output_json",
         type=str,
@@ -180,17 +182,40 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def resolve_metric_keys(raw_keys: Iterable[str]) -> List[str]:
-    resolved = []
-    for key in raw_keys:
-        if "," in key:
-            for part in key.split(","):
-                part = part.strip()
-                if part:
-                    resolved.append(METRIC_KEYS.get(part, part))
-        else:
-            resolved.append(METRIC_KEYS.get(key, key))
-    return resolved
+def resolve_metric_keys(raw_keys: Iterable[str], exp_typ='held_out') -> List[str]:
+
+    if exp_typ in ['held_out', 'decomposition']:
+        resolved = []
+        for key in raw_keys:
+            if "," in key:
+                for part in key.split(","):
+                    part = part.strip()
+                    if part:
+                        resolved.append(METRIC_KEYS.get(part, part))
+            else:
+                resolved.append(METRIC_KEYS.get(key, key))
+        return resolved
+    elif exp_typ == 'composition':
+        METRIC_KEYS_COMPOSITION = {
+            "EVENT_A": "predicted_in_context_accuracies",
+            "EVENT_B_GIVEN_A": "correct_within_candidates",
+            "EVENT_C_GIVEN_AB": "predicted_in_context_correct_candidate_accuracies" 
+        }
+
+        resolved = []
+        for key in raw_keys:
+            if "," in key:
+                for part in key.split(","):
+                    part = part.strip()
+                    if part:
+                        resolved.append(METRIC_KEYS_COMPOSITION.get(part, part))
+            else:
+                resolved.append(METRIC_KEYS_COMPOSITION.get(key, key))
+        return resolved
+    else:
+        raise ValueError(f"Unknown exp_typ '{exp_typ}' for resolving metric keys.")
+
+
 
 
 def collect_frozen_pickles(data_split_seed: int, init_seed: int,
@@ -362,7 +387,7 @@ def main() -> None:
     if args.exp_typ == 'held_out':
         baseline_file_paths = staged_accuracies_held_out_file_paths_baseline_pickles
     elif args.exp_typ == 'composition':
-        raise NotImplementedError("Composition baseline pickle path not implemented yet.")
+        baseline_file_paths = composition_baseline_pickle_file_paths[args.hop]
     elif args.exp_typ == 'decomposition':
         raise NotImplementedError("Decomposition baseline pickle path not implemented yet.")
 
@@ -389,7 +414,7 @@ def main() -> None:
         )
         return
 
-    metric_keys = resolve_metric_keys(args.metric_key)
+    metric_keys = resolve_metric_keys(args.metric_key, exp_typ=args.exp_typ)
     spec = StageSpec(tau=float(args.tau), consecutive=int(args.consecutive))
 
     # --- NEW: scope results by (data_split_seed, init_seed) ---
@@ -420,6 +445,7 @@ def main() -> None:
             raise KeyError(f"Data split seed {args.data_split_seed} not found in baseline pickle.")
 
         base_epochs = np.asarray(base_payload["epochs"]).astype(int)[1:]
+        import pdb; pdb.set_trace()
 
         for metric_key in metric_keys:
             if metric_key not in base_payload["seed_results"][args.data_split_seed]:
