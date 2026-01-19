@@ -350,6 +350,95 @@ composition_baseline_pickle_file_paths = {
 }
 
 
+### Decomposition file paths
+decomposition_baseline_file_paths = {
+    2: {
+        0:{
+            42: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_0/init_seed_42/predictions/",
+            1: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_0/init_seed_1/predictions/",
+            3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.001_lr_0.0001/eta_min_8.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_2_qhop_1/seed_0/init_seed_3/predictions/"
+        }
+    },
+    3: {
+        0:{
+            42: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/init_seed_42/predictions/",
+            1: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/init_seed_1/predictions/",
+            3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_9e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_3_qhop_1/seed_0/init_seed_3/predictions/"
+        }
+    },
+    4: {
+        0:{
+            42: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_0/init_seed_42/predictions/",
+            1: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_0/init_seed_1/predictions/",
+            3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_4_qhop_1/seed_0/init_seed_3/predictions/"
+        }
+    },
+    5: {
+        0:{
+            42: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_42/predictions/",
+            2: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_9e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_2/predictions/",
+            3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_3/predictions/"
+        }
+    }
+}
+
+
+
+decomposition_non_subsampled_file_paths_dict = {
+    2: {
+        0: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl'
+    },
+    3: {
+        0: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_3_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl'
+    },
+    4: {
+        0: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_4_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl'
+    },
+    5: {
+        0: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_5_qhop_1_seed_0_classification_filter_True_input_features_output_stone_states_data.pkl'
+    }
+}
+
+
+
+decomposition_baseline_pickle_file_paths = {
+    2: {
+        0: {
+            42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_2_exp_decomposition.pkl",
+            1: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_1_hop_2_exp_decomposition.pkl",
+            3: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_3_hop_2_exp_decomposition.pkl"
+        }
+    },
+    3: {
+        0: {
+            42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_3_exp_decomposition.pkl",  
+            1: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_1_hop_3_exp_decomposition.pkl",
+            3: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_3_hop_3_exp_decomposition.pkl"
+        }
+    },
+    4: {
+        0: {
+            42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_4_exp_decomposition.pkl",  
+            1: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_1_hop_4_exp_decomposition.pkl",
+            3: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_3_hop_4_exp_decomposition.pkl"
+        }
+    },
+    5: {
+        0: {
+            42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_5_exp_decomposition.pkl",
+            2: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_2_hop_5_exp_decomposition.pkl",
+            3: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_3_hop_5_exp_decomposition.pkl"
+        }
+    }
+}
+
+
+
+
+
+
+
+
 
 
 

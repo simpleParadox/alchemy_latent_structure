@@ -1745,9 +1745,9 @@ def main():
                     
                 if args.save_checkpoints:
                     torch.save(checkpoint, model_save_path)
-                print(f"New best validation loss: {best_val_loss:.4f}. Model saved to {model_save_path}")
+                    print(f"New best validation loss: {best_val_loss:.4f}. Model saved to {model_save_path}")
                 # del checkpoint  # Free up memory
-                # torch.cuda.empty_cache()
+                torch.cuda.empty_cache()
                 # gc.collect()
         else: 
             if accelerator.is_local_main_process:

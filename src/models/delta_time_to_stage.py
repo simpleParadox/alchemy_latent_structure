@@ -47,7 +47,8 @@ import numpy as np
 from baseline_and_frozen_filepaths import (
     staged_accuracies_held_out_file_paths_baseline_pickles,
     staged_accuracies_held_out_file_paths_frozen_pickles,
-    composition_baseline_pickle_file_paths
+    composition_baseline_pickle_file_paths,
+    decomposition_baseline_pickle_file_paths,
 )
 
 
@@ -389,7 +390,9 @@ def main() -> None:
     elif args.exp_typ == 'composition':
         baseline_file_paths = composition_baseline_pickle_file_paths[args.hop]
     elif args.exp_typ == 'decomposition':
-        raise NotImplementedError("Decomposition baseline pickle path not implemented yet.")
+        baseline_file_paths = decomposition_baseline_pickle_file_paths[args.hop]
+    else:
+        raise ValueError(f"Unknown exp_typ '{args.exp_typ}'")
 
     if not args.baseline_pickle:
         args.baseline_pickle = baseline_file_paths.get(
@@ -445,7 +448,7 @@ def main() -> None:
             raise KeyError(f"Data split seed {args.data_split_seed} not found in baseline pickle.")
 
         base_epochs = np.asarray(base_payload["epochs"]).astype(int)[1:]
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
 
         for metric_key in metric_keys:
             if metric_key not in base_payload["seed_results"][args.data_split_seed]:
@@ -458,7 +461,7 @@ def main() -> None:
             t_base = first_sustained_crossing(base_epochs, base_values, spec)
             baseline_stages[metric_key] = int(t_base) if t_base is not None else None
 
-        # save_results_json(args.output_json, results_json)
+        save_results_json(args.output_json, results_json)
         print(json.dumps(run_json, indent=2))
         return
 
