@@ -188,6 +188,13 @@ def parse_args():
     parser.add_argument('--store_in_scratch', type=str, default='False', choices=['True', 'False'],
                         help="Whether to store model checkpoints and logs in /scratch/ directory. Default is False.")
 
+    parser.add_argument(
+        "--multi_gpu_validation",
+        type=str,
+        default="False",
+        choices=["True", "False"],
+        help="If True, shard validation across GPUs (prepare val_dataloader) and reduce metrics across ranks."
+    )
     
     return parser.parse_args()
 
@@ -663,6 +670,7 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
     return avg_epoch_loss, avg_epoch_accuracy
 
+
 def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_token_id, args):
     if dataloader is None:
         return None, None, None if args.task_type == "seq2seq" else None
@@ -875,7 +883,6 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
         return avg_epoch_loss, avg_epoch_accuracy, all_accs
     return avg_epoch_loss, avg_epoch_accuracy
 
-
 def _save_validation_predictions(all_predictions, all_targets, all_encoder_inputs, args, epoch_num):
     """Helper function to save predictions to disk."""
     predictions_dir = os.path.join(args.save_dir, "predictions")
@@ -900,12 +907,16 @@ def _save_validation_predictions(all_predictions, all_targets, all_encoder_input
     
     # Save using numpy compressed format
     np.savez_compressed(pred_path, predictions=predictions_array)
-    np.savez_compressed(target_path, targets=targets_array)
+    if epoch_str == "epoch_001":
+        np.savez_compressed(target_path, targets=targets_array)
+        print(f"Saved predictions to: {pred_path}")
     
     if all_encoder_inputs:
-        inputs_array = np.concatenate([i.numpy() for i in all_encoder_inputs], axis=0)
-        np.savez_compressed(input_path, inputs=inputs_array)
-        print(f"Saved inputs to: {input_path}")
+        if epoch_str == "epoch_001":
+            # print(f"Shape of inputs array: {all_encoder_inputs[0].shape}")
+            inputs_array = np.concatenate([i.numpy() for i in all_encoder_inputs], axis=0)
+            np.savez_compressed(input_path, inputs=inputs_array)
+            print(f"Saved inputs to: {input_path}")
     
     print(f"Saved predictions to: {pred_path}")
     print(f"Saved targets to: {target_path}")
@@ -981,10 +992,9 @@ def main():
     args = parse_args()
 
     args.store_in_scratch = str(args.store_in_scratch).lower() == "true"
-
-    # Normalize boolean-like args early
     args.allow_data_path_mismatch = str(args.allow_data_path_mismatch).lower() == "true"
     args.resume_from_checkpoint = str(args.resume_from_checkpoint).lower() == "true"
+    args.multi_gpu_validation = str(args.multi_gpu_validation).lower() == "true"
 
     start_epoch = 0
     best_val_loss = float('inf')
@@ -1487,9 +1497,19 @@ def main():
         print("No scheduler will be used")
 
     # Prepare everything with Accelerator
-    model, optimizer, train_dataloader, scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, scheduler
-    )
+    # Default: keep single-GPU validation (val_dataloader not prepared, validate only on local main)
+    if args.multi_gpu_validation and (val_dataloader is not None):
+        model, optimizer, train_dataloader, val_dataloader, scheduler = accelerator.prepare(
+            model, optimizer, train_dataloader, val_dataloader, scheduler
+        )
+        if accelerator.is_local_main_process:
+            print("Multi-GPU validation ENABLED: val_dataloader prepared (sharded).")
+    else:
+        model, optimizer, train_dataloader, scheduler = accelerator.prepare(
+            model, optimizer, train_dataloader, scheduler
+        )
+        if accelerator.is_local_main_process:
+            print("Multi-GPU validation DISABLED: keeping current single-GPU validation behavior.")
     
     # Only initialize if not resuming; if resuming, load_checkpoint will supply it.
     best_val_loss = float('inf')
@@ -1662,13 +1682,37 @@ def main():
         epoch_log = {"epoch": epoch + 1, "train_epoch_loss": train_loss, "train_epoch_accuracy": train_acc}
 
         if val_dataloader:
-            if accelerator.is_local_main_process:
+            if args.multi_gpu_validation:
+                # Run on all ranks (dataloader is sharded), metrics are reduced inside validate_epoch()
                 if args.task_type == "seq2seq":
-                    val_loss, val_acc, val_batch_accs_list = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args)
+                    val_loss, val_acc, val_batch_accs_list = validate_epoch(
+                        model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args
+                    )
                     if accelerator.is_local_main_process and val_batch_accs_list:
-                        print(f"Validation Acc (Seq2Seq) mean over batches: {np.mean(val_batch_accs_list):.4f}, std: {np.std(val_batch_accs_list):.4f}")
+                        print(
+                            f"Validation Acc (Seq2Seq) mean over batches (rank-local): {np.mean(val_batch_accs_list):.4f}, "
+                            f"std: {np.std(val_batch_accs_list):.4f}"
+                        )
                 else:
-                    val_loss, val_acc = validate_epoch(model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args)
+                    val_loss, val_acc = validate_epoch(
+                        model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args
+                    )
+            else:
+                # Current behavior: single-GPU validation on local main process only
+                if accelerator.is_local_main_process:
+                    if args.task_type == "seq2seq":
+                        val_loss, val_acc, val_batch_accs_list = validate_epoch(
+                            model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args
+                        )
+                        if accelerator.is_local_main_process and val_batch_accs_list:
+                            print(
+                                f"Validation Acc (Seq2Seq) mean over batches: {np.mean(val_batch_accs_list):.4f}, "
+                                f"std: {np.std(val_batch_accs_list):.4f}"
+                            )
+                    else:
+                        val_loss, val_acc = validate_epoch(
+                            model, val_dataloader, criterion, accelerator, epoch, pad_token_id, args
+                        )
             
             # step if using ReduceLROnPlateau
             if scheduler and args.scheduler_type == 'reduce_on_plateau':
