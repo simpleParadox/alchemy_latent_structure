@@ -1277,6 +1277,7 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
             if file_paths_non_subsampled is not None:
                 non_subsampled_path = file_paths_non_subsampled[hop][i]
                 # Check if the seed in the non_subsampled_path matches the current seed
+                import pdb; pdb.set_trace()
                 match_non_subsampled = re.search(r'seed_(\d+)', non_subsampled_path)
                 if match_non_subsampled:
                     seed_non_subsampled = int(match_non_subsampled.group(1))

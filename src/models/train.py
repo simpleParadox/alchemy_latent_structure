@@ -1014,6 +1014,10 @@ def main():
             f"best_model_epoch_{args.resume_checkpoint_epoch}_classification_{args.model_size}.pt"
         )
 
+        if cluster == 'cc':
+            scratch_path = '/home/rsaha/scratch/'
+            resume_checkpoint_path = resume_checkpoint_path.replace('/home/rsaha/projects/aip-afyshe/rsaha/', scratch_path)
+
         # Extract the hyperparameters from the resume_checkpoint_path to correctly update the wandb args. For example, extract the lr, model_size, eta_min, seed, weight_decay etc.
         # Here's an example of a path: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/'
         args.weight_decay = float(re.search(r'wd_([0-9.eE+-]+)', resume_checkpoint_path).group(1))
