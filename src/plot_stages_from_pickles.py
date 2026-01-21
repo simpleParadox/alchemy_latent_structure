@@ -24,9 +24,11 @@ import re
 import pickle
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
-import numpy as np
 
+import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
 
 BASELINE_STAGEWISE_PICKLE_BASEDIR: Dict[str, str] = {
     "composition": "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/",
@@ -50,6 +52,17 @@ HELDOUT_AND_DECOMPOSITION_METRICS: Tuple[str, ...] = (
     "predicted_in_context_correct_half_accuracies",
     "predicted_in_context_correct_half_exact_accuracies",
 )
+
+# Custom colors per metric (Matplotlib color names or hex).
+METRIC_COLORS: Dict[str, str] = {
+    "predicted_in_context_accuracies": "orange",  # blue
+    "predicted_in_context_correct_candidate_accuracies": "purple",  # orange
+    "correct_within_candidates": "blue",  # green
+
+    "predicted_in_context_correct_half_accuracies": "purple",  # red
+    "predicted_in_context_correct_half_exact_accuracies": "blue",  # purple
+}
+
 
 def _ensure_dir_configured(exp_typ: str) -> str:
     base = BASELINE_STAGEWISE_PICKLE_BASEDIR.get(exp_typ)
@@ -205,25 +218,78 @@ def collect_series(
     return series
 
 
+def _lighten_rgba(rgba: Tuple[float, float, float, float], amount: float = 0.6) -> Tuple[float, float, float, float]:
+    """
+    Lighten a matplotlib RGBA color by blending it with white.
+
+    amount in [0, 1]:
+      0 -> original color
+      1 -> white
+    """
+    amount = float(np.clip(amount, 0.0, 1.0))
+    r, g, b, a = rgba
+    r2 = r + (1.0 - r) * amount
+    g2 = g + (1.0 - g) * amount
+    b2 = b + (1.0 - b) * amount
+    return (r2, g2, b2, a)
+
+
+def _metric_mean_series(series_for_metric: Sequence[SeriesSpec]) -> Tuple[List[int], List[float]]:
+    """
+    Align by epoch value (not index), then compute nanmean across seeds for each epoch.
+    Uses the union of epochs across seeds; missing values are treated as NaN.
+    """
+    all_epochs = sorted({e for s in series_for_metric for e in s.epochs})
+    if not all_epochs:
+        return [], []
+
+    # epoch -> list of values (one per seed, possibly missing)
+    epoch_to_vals: Dict[int, List[float]] = {e: [] for e in all_epochs}
+
+    for s in series_for_metric:
+        ep_to_v = dict(zip(s.epochs, s.values))
+        for e in all_epochs:
+            v = ep_to_v.get(e, np.nan)
+            epoch_to_vals[e].append(v)
+
+    mean_vals: List[float] = []
+    for e in all_epochs:
+        arr = np.array(epoch_to_vals[e], dtype=float)
+        mean_vals.append(float(np.nanmean(arr)))
+
+    return all_epochs, mean_vals
+
+
 def plot_series_one_figure(
     series: Sequence[SeriesSpec],
     title: str,
     output: Optional[str] = None,
     y_lim: Optional[Tuple[float, float]] = (0.0, 1.0),
     figsize: Tuple[int, int] = (10, 6),
+    plot_mean: bool = False,
+    seed_alpha: float = 0.35,
+    seed_lighten: float = 0.65,
+    mean_linewidth: float = 3.0,
+    legend_mode: str = "all",
 ):
     if not series:
         raise ValueError("No series to plot (check paths/metrics/pickles).")
+
+    if legend_mode not in {"all", "mean_only", "none"}:
+        raise ValueError("legend_mode must be one of: all, mean_only, none")
 
     # Stable ordering: metrics then init_seed
     metrics_sorted = sorted({s.metric for s in series})
     seeds_sorted = sorted({s.init_seed for s in series})
 
-    # Map metric -> color (consistent across seeds)
+    # Map metric -> color (prefer user-defined; fallback to tab10)
     cmap = plt.get_cmap("tab10")
     metric_to_color: Dict[str, Tuple[float, float, float, float]] = {}
     for i, m in enumerate(metrics_sorted):
-        metric_to_color[m] = cmap(i % 10)
+        if m in METRIC_COLORS:
+            metric_to_color[m] = mcolors.to_rgba(METRIC_COLORS[m])
+        else:
+            metric_to_color[m] = cmap(i % 10)
 
     # Map init_seed -> linestyle (consistent across metrics)
     linestyles = ["-", "--", ":", "-."]
@@ -233,20 +299,40 @@ def plot_series_one_figure(
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    # Plot (metric color, seed linestyle)
+    # Plot per-metric blocks
     for m in metrics_sorted:
+        base_color = metric_to_color[m]
+        light_color = _lighten_rgba(base_color, amount=seed_lighten)
+
+        series_m = [s for s in series if s.metric == m]
+
+        # 1) per-seed lines (lighter)
         for seed in seeds_sorted:
-            s_list = [s for s in series if s.metric == m and s.init_seed == seed]
+            s_list = [s for s in series_m if s.init_seed == seed]
             if not s_list:
                 continue
             s0 = s_list[0]
             ax.plot(
                 s0.epochs,
                 s0.values,
-                color=metric_to_color[m],
+                color=light_color if plot_mean else base_color,
+                alpha=seed_alpha if plot_mean else 1.0,
                 linestyle=seed_to_ls[seed],
-                linewidth=2.0,
-                label=f"{m} | init_seed={seed}",
+                linewidth=2.0 if not plot_mean else 1.75,
+                label=(f"{m} | init_seed={seed}" if legend_mode == "all" else None),
+            )
+
+        # 2) mean line (thicker, base color)
+        if plot_mean:
+            mean_epochs, mean_vals = _metric_mean_series(series_m)
+            ax.plot(
+                mean_epochs,
+                mean_vals,
+                color=base_color,
+                alpha=1.0,
+                linestyle="-",
+                linewidth=mean_linewidth,
+                label=(f"{m} | mean" if legend_mode in {"all", "mean_only"} else None),
             )
 
     ax.set_title(title)
@@ -255,16 +341,15 @@ def plot_series_one_figure(
     if y_lim is not None:
         ax.set_ylim(*y_lim)
     ax.grid(True, linestyle=":", alpha=0.6)
-    ax.legend(loc="best", fontsize=9)
+
+    if legend_mode != "none":
+        ax.legend(loc="best", fontsize=9)
+
     fig.tight_layout()
 
     if output:
         os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
         fig.savefig(output, dpi=200)
-        # Also save a PDF alongside, if output is .png/.jpg etc.
-        # root, ext = os.path.splitext(output)
-        # if ext.lower() != ".pdf":
-        #     fig.savefig(root + ".pdf")
         print(f" Saved: {output}")
     else:
         plt.show()
@@ -324,6 +409,36 @@ def main():
         default=1.0,
         help="Y-axis max (use -1 to disable y-lim).",
     )
+    parser.add_argument(
+        "--plot_mean",
+        action="store_true",
+        help="If set, overlays a per-metric mean line (thick) and draws per-seed lines as lighter shades.",
+    )
+    parser.add_argument(
+        "--legend_mode",
+        type=str,
+        default="all",
+        choices=["all", "mean_only", "none"],
+        help="Legend entries to show.",
+    )
+    parser.add_argument(
+        "--seed_alpha",
+        type=float,
+        default=0.35,
+        help="Alpha for per-seed lines when --plot_mean is enabled.",
+    )
+    parser.add_argument(
+        "--seed_lighten",
+        type=float,
+        default=0.65,
+        help="How much to lighten per-seed lines when --plot_mean is enabled (0=none, 1=white).",
+    )
+    parser.add_argument(
+        "--mean_linewidth",
+        type=float,
+        default=3.0,
+        help="Linewidth of mean line when --plot_mean is enabled.",
+    )
 
     args = parser.parse_args()
 
@@ -346,7 +461,17 @@ def main():
         y_lim = (args.ymin, args.ymax)
 
     title = f"Stages from pickles | exp_typ={args.exp_typ} | hop={args.hop} | data_split_seed={args.data_split_seed}"
-    plot_series_one_figure(series=series, title=title, output=args.output, y_lim=y_lim)
+    plot_series_one_figure(
+        series=series,
+        title=title,
+        output=args.output,
+        y_lim=y_lim,
+        plot_mean=args.plot_mean,
+        seed_alpha=args.seed_alpha,
+        seed_lighten=args.seed_lighten,
+        mean_linewidth=args.mean_linewidth,
+        legend_mode=args.legend_mode,
+    )
 
 
 if __name__ == "__main__":
