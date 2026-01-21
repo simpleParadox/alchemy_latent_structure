@@ -1755,13 +1755,13 @@ def main():
                 if args.custom_checkpoint_dir is not None:
                     # Replace 'def-afyshe-ab' with 'aip-afyshe' in the custom checkpoint dir if needed
                     args.save_dir = args.save_dir.replace('def-afyshe-ab', 'aip-afyshe')
-                    if args.store_in_scratch:
-                        # Replace anything before 'dm_alchemy' with '/home/rsaha/scratch'
-                        args.save_dir = re.sub(r'^.*dm_alchemy', '/home/rsaha/scratch/dm_alchemy', args.save_dir)
+                if args.store_in_scratch:
+                    # Replace anything before 'dm_alchemy' with '/home/rsaha/scratch'
+                    args.save_dir = re.sub(r'^.*dm_alchemy', '/home/rsaha/scratch/dm_alchemy', args.save_dir)
                     # Check if updated args.save_dir exists, if not create it
-                    if not os.path.exists(args.save_dir):
-                        os.makedirs(args.save_dir)
-                        print(f"Created custom checkpoint directory: {args.save_dir}")
+                if not os.path.exists(args.save_dir):
+                    os.makedirs(args.save_dir)
+                    print(f"Created custom checkpoint directory: {args.save_dir}")
                 model_save_path = os.path.join(args.save_dir, f"best_model_epoch_{epoch+1}_{args.task_type}_{args.model_size}.pt")
                 
                 # Get unwrapped model for saving
