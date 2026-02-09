@@ -284,9 +284,13 @@ def plot_deltas_with_errorbars(
     cmap = plt.get_cmap("Purples")
     # Sample within the colormap (avoid extreme white at 0.0).
     for j, layer in enumerate(purple_layers):
-        t = (j + 0.1) / max(total_purples - 1, 1)  # 0..1
+        t = (j + 0.6) / max(total_purples - 1, 1)  # 0..1
         r, g, b, _a = cmap(0.30 + 0.70 * t)
         layer_to_color[layer] = (float(r), float(g), float(b))
+    
+    # Set the 'transformer_layer_3' color to extremely deep purple.
+    if "transformer_layer_3" in layer_to_color:
+        layer_to_color["transformer_layer_3"] = (48 / 255, 25 / 255, 52 / 255)  # very deep purple
 
     if has_embedding:
         layer_to_color["embedding_layer"] = (165 / 255, 42 / 255, 42 / 255)  # brown
@@ -366,7 +370,7 @@ def main():
     parser.add_argument(
         "--json_path",
         type=str,
-        default="delta_time_results.json",
+        default="delta_time_held_out_data_split_seed_0_tau_095.json",
         help="Path to the results JSON file.",
     )
     parser.add_argument( 

@@ -1247,7 +1247,6 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
     non_subsampled_targets_by_seed = {}
 
     # file_paths is a list 
-    import pdb; pdb.set_trace()
 
     import re
     if type(file_paths) == list:
@@ -1445,7 +1444,7 @@ if __name__ == "__main__":
     four_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
     five_hop_epoch_values_text = [0, 200, 600, 800, 999]
 
-    four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 500, 999]
+    four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 500] #, 999]
 
     # Create a dictionary mapping hop counts to their hop-specific epoch values
     hop_to_epoch_values = {
@@ -1647,8 +1646,10 @@ if __name__ == "__main__":
                 }
 
             vocab = pickle.load(open(data_files["vocab"], "rb"))
+            # import pdb; pdb.set_trace()
             with open(data_files["metadata"], "r") as f:
                 metadata = json.load(f)
+            
 
             seed_data_files[seed] = {'vocab': vocab, 'metadata': metadata}
 
@@ -1688,6 +1689,8 @@ if __name__ == "__main__":
             data_with_predictions = inputs_by_seed[seed]
             
             # Load the correct vocab for this seed
+            if len(data_seeds) == 1:
+                seed = data_seeds[0]
             vocab = seed_data_files[seed]['vocab']
             
             # Run the analysis
@@ -1761,41 +1764,42 @@ if __name__ == "__main__":
             mean_within = averaged_adjacency_results['within_reachable_acc'][reward]
             std_within = std_errors_adjacency['within_reachable_acc'][reward]
             epochs_range = range(len(mean_within))
+
             
             axs[i].plot(epochs_range, mean_within, label='Within Reward Adjacent', color='blue')
-            axs[i].fill_between(epochs_range, 
-                    np.array(mean_within) - np.array(std_within),
-                    np.array(mean_within) + np.array(std_within),
-                    alpha=0.2, color='blue')
+            # axs[i].fill_between(epochs_range, 
+            #         np.array(mean_within) - np.array(std_within),
+            #         np.array(mean_within) + np.array(std_within),
+            #         alpha=0.2, color='blue')
             
             # [NEW] Plot True Adjacent Accuracy
             mean_true = averaged_adjacency_results['within_true_adjacent_acc'][reward]
             std_true = std_errors_adjacency['within_true_adjacent_acc'][reward]
             
             axs[i].plot(epochs_range, mean_true, label='Within True Adjacent (Graph)', color='orange')
-            axs[i].fill_between(epochs_range,
-                    np.array(mean_true) - np.array(std_true),
-                    np.array(mean_true) + np.array(std_true),
-                    alpha=0.2, color='orange')
+            # axs[i].fill_between(epochs_range,
+            #         np.array(mean_true) - np.array(std_true),
+            #         np.array(mean_true) + np.array(std_true),
+            #         alpha=0.2, color='orange')
 
             mean_correct = averaged_adjacency_results['correct_within_reachable_acc'][reward]
             std_correct = std_errors_adjacency['correct_within_reachable_acc'][reward]
             
             axs[i].plot(epochs_range, mean_correct, label='Correct in Reward Adjacent', linestyle='--', color='skyblue')
-            axs[i].fill_between(epochs_range,
-                    np.array(mean_correct) - np.array(std_correct),
-                    np.array(mean_correct) + np.array(std_correct),
-                    alpha=0.2, color='skyblue')
+            # axs[i].fill_between(epochs_range,
+            #         np.array(mean_correct) - np.array(std_correct),
+            #         np.array(mean_correct) + np.array(std_correct),
+            #         alpha=0.2, color='skyblue')
 
 
             # Plot the connected accuracy
             mean_connected = averaged_adjacency_results['within_connected_acc'][reward]
             std_connected = std_errors_adjacency['within_connected_acc'][reward]
             axs[i].plot(epochs_range, mean_connected, label='Within Adjacent in-support', color='red') 
-            axs[i].fill_between(epochs_range,
-                    np.array(mean_connected) - np.array(std_connected),
-                    np.array(mean_connected) + np.array(std_connected),
-                    alpha=0.2, color='red')
+            # axs[i].fill_between(epochs_range,
+                    # np.array(mean_connected) - np.array(std_connected),
+                    # np.array(mean_connected) + np.array(std_connected),
+                    # alpha=0.2, color='red')
 
             # Plot the connected in reachable accuracy
             # mean_connected_in_reachable = averaged_adjacency_results['within_connected_in_reachable_acc'][reward]
@@ -1807,17 +1811,19 @@ if __name__ == "__main__":
             #            alpha=0.2, color='black')
 
 
-
+            # Set tick fonts for axes.
+            # axs[i].tick_params(axis='x', labelsize=24)
+            # axs[i].tick_params(axis='y', labelsize=24)
             axs[i].set_title(f'Reward: {reward_title_mapping[reward]}')
             axs[i].set_xlabel('Epochs')
             axs[i].set_ylabel('Accuracy')
-            axs[i].legend(fontsize=9, loc='center right')
+            axs[i].legend(fontsize=8, loc='center right')
             axs[i].set_ylim(0, 1)
             # Add gridlines.
-            axs[i].grid(True, alpha=0.3)
+            axs[i].grid(True)
         plt.tight_layout()
-        plt.savefig(f'nov_21_adjacency_analysis_hop_{hop}_exp_{exp_typ}_adjacent_true_adjacent_connected_within.png')
-        plt.savefig(f'nov_21_adjacency_analysis_hop_{hop}_exp_{exp_typ}_adjacent_true_adjacent_connected_within.pdf', bbox_inches='tight')
+        plt.savefig(f'Jan_24_adjacency_analysis_hop_{hop}_exp_{exp_typ}_adjacent_true_adjacent_connected_within.png')
+        plt.savefig(f'Jan_24_adjacency_analysis_hop_{hop}_exp_{exp_typ}_adjacent_true_adjacent_connected_within.pdf', bbox_inches='tight')
         plt.close()
 
 
@@ -2065,6 +2071,9 @@ if __name__ == "__main__":
             # Add data_split_seed and init_seed to the filename without frozen layer
             output_file_name = f'stagewise_accuracies_data_split_seed_{args.data_split_seed}_init_seed_{args.init_seed}_hop_{hop}_exp_{exp_typ}.pkl'
             start_epoch = hop_to_epoch_values[hop][0]
+
+            if args.custom_output_file is not None:
+                output_file_name = args.custom_output_file
 
         # Create a pickle file with the output_file_name, sorted_epochs, and the metrics per_epoch for each seed.
         with open(output_file_name, 'wb') as f:
