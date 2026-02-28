@@ -11,7 +11,7 @@ import re
 
 from baseline_and_frozen_filepaths import held_out_file_paths, frozen_held_out_file_paths_per_layer_per_init_seed, composition_file_paths, composition_file_paths_non_subsampled, \
         decomposition_file_paths, decomposition_file_paths_non_subsampled, composition_baseline_file_paths, composition_non_subsampled_file_paths_dict, \
-        decomposition_baseline_file_paths, decomposition_non_subsampled_file_paths_dict, decomposition_baseline_pickle_file_paths
+        decomposition_baseline_file_paths, decomposition_non_subsampled_file_paths_dict, decomposition_baseline_pickle_file_paths, held_out_file_paths_input_stone_ids
 
 # Load the metadata, data, and vocab.
 if cluster == 'vulcan':
@@ -475,8 +475,761 @@ def analyze_adjacency_behavior(data, vocab, stone_state_to_id, predictions_by_ep
     return adjacency_accuracies
 
 
+# def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions_by_epoch, exp_typ='held_out', hop=2,
+#                                     composition_full_target_data=None, factorize_within_half_predictions=False):
+#     """
+#     Analyze model behavior on half-chemistry tasks where only one stone is present.
+    
+#     Args:
+#         data: List of validation samples
+#         vocab: Vocabulary dictionaries  
+#         stone_state_to_id: Mapping from stone state strings to class IDs
+#     """
+#     # I can first get all the samples that have the same support sentence - in the exact same order.
+#     # I should find 8 such samples because there are 8 such queries.
+    
+#     # First for all the samples, create a key based on the support sentence which is everything except the last 5 tokens of the sample.
+#     if exp_typ in ['decomposition', 'held_out']:
+#         hop = 1
+
+#     support_to_query_mappings = {}
+#     for i, sample in enumerate(data):
+#         encoder_input_ids = sample['encoder_input_ids']
+#         target_class_id = sample['target_class_id']
+#         support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens. works for decomposition too.
+#         # create a hashable string key
+#         support_key = tuple(support)
+        
+#         if support_key not in support_to_query_mappings: # this is for the input to the model. this will be the same for all epochs.
+#             support_to_query_mappings[support_key] = {}
+            
+            
+#     input_vocab = vocab['input_word2idx']
+#     feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+            
+#     for i, sample in enumerate(data):
+#         encoder_input_ids = sample['encoder_input_ids']
+#         target_class_id = sample['target_class_id']
+#         support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens. works for decomposition too.
+#         # create a hashable string key
+#         support_key = tuple(support)
+        
+#         if exp_typ == 'composition':
+#             # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
+#             query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+#             query_potion = query[-hop:]  # last hop tokens
+#             query_stones = query[:-hop]
+            
+#             # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+#             query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+#             query_potion = query_potion_str
+            
+#         else:
+#             # for decomposition and held_out experiments.
+#             query = encoder_input_ids[-5:]    # last 5 tokens
+#             query_potion = query[-1]
+#             query_stones = query[:-1]
+
+#         # first check if the query_potion key is already a list. if not, create an empty list.
+#         if exp_typ == 'composition':
+#             if query_potion not in support_to_query_mappings[support_key]:
+#                 support_to_query_mappings[support_key][query_potion] = [target_class_id]
+#             else:
+#                 support_to_query_mappings[support_key][query_potion].append(target_class_id)
+
+#         else:
+
+#             if feature_to_id_vocab[query_potion] not in support_to_query_mappings[support_key]:
+#                 support_to_query_mappings[support_key][feature_to_id_vocab[query_potion]] = [target_class_id]
+
+#             else:
+#                 support_to_query_mappings[support_key][feature_to_id_vocab[query_potion]].append(target_class_id)
+
+#     # store the predictions for each support key and query potion.
+
+#     support_to_query_per_epoch_predictions = {}
+
+#     for epoch in predictions_by_epoch.keys():
+#         support_to_query_per_epoch_predictions[epoch] = {}
+#         for support_key in support_to_query_mappings.keys():
+#             support_to_query_per_epoch_predictions[epoch][support_key] = {}
+#             for potion in support_to_query_mappings[support_key].keys(): # for the composition experiments, this will be multiple potions.
+#                 support_to_query_per_epoch_predictions[epoch][support_key][potion] = []
+
+
+#     # create another dict called composition_per_query_support_to_query_mappings that will store for each support_key, and each query_start_stone, the list of the target class ids for each potion combination.
+
+#     """
+#     the following code block stores the mapping from support sets to query stones and potions for composition experiments. for each support key, it organizes the target class ids based on the query stones and potions for that support key.
+#     """
+#     if exp_typ == 'composition':
+#         composition_per_query_support_to_query_mappings = {} # This is only for the subsampled data that was shown to the model.
+#         composition_full_target_per_query_support_to_query_mappings = {} # This is for the full data, to get the full target class ids for each support and query stone combination.
+#         for i, sample in enumerate(data):
+#             encoder_input_ids = sample['encoder_input_ids']
+#             target_class_id = sample['target_class_id']
+#             support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
+#             support_key = tuple(support)
+
+#             # Split the support key on '23' and sort the stones to create a normalized support key.
+#             support_key_string = ' '.join(str(token_id) for token_id in support_key)
+#             support_key = sorted([chunk.strip() for chunk in support_key_string.split('23')])
+
+#             support_key = tuple(support_key)
+
+            
+#             # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
+#             query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+#             query_potion = query[-hop:]  # last hop tokens
+#             query_stones = query[:-hop]
+            
+#             # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+#             query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+#             query_potion = query_potion_str
+            
+#             query_stone_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_stones])
+            
+#             if support_key not in composition_per_query_support_to_query_mappings:
+#                 composition_per_query_support_to_query_mappings[support_key] = {}
+#             if query_stone_str not in composition_per_query_support_to_query_mappings[support_key]:
+#                 composition_per_query_support_to_query_mappings[support_key][query_stone_str] = {}
+#             if query_potion not in composition_per_query_support_to_query_mappings[support_key][query_stone_str]:
+#                 composition_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion] = [target_class_id]
+#             else:
+#                 composition_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion].append(target_class_id)
+
+#         # now do the same for the full target data.
+#         for i, sample in enumerate(composition_full_target_data):
+#             encoder_input_ids = sample['encoder_input_ids']
+#             target_class_id = sample['target_class_id']
+#             support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
+#             support_key = tuple(support)
+
+#             # Split the support key on '23' and sort the stones to create a normalized support key.
+#             support_key_string = ' '.join(str(token_id) for token_id in support_key)
+#             support_key = sorted([chunk.strip() for chunk in support_key_string.split('23')])
+
+#             support_key = tuple(support_key)
+            
+#             # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
+#             query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+#             query_potion = query[-hop:]  # last hop tokens
+#             query_stones = query[:-hop]
+            
+#             # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+#             query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+#             query_potion = query_potion_str
+            
+#             query_stone_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_stones])
+            
+#             if support_key not in composition_full_target_per_query_support_to_query_mappings:
+#                 composition_full_target_per_query_support_to_query_mappings[support_key] = {}
+#             if query_stone_str not in composition_full_target_per_query_support_to_query_mappings[support_key]:
+#                 composition_full_target_per_query_support_to_query_mappings[support_key][query_stone_str] = {}
+#             if query_potion not in composition_full_target_per_query_support_to_query_mappings[support_key][query_stone_str]:
+#                 composition_full_target_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion] = [target_class_id]
+#             else:
+#                 composition_full_target_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion].append(target_class_id)
+
+#         target_support_keys = list(composition_full_target_per_query_support_to_query_mappings.keys())
+#         original_support_keys = list(composition_per_query_support_to_query_mappings.keys())
+#         test = [1 for key in target_support_keys if key not in original_support_keys]
+#         assert len(test) == 0, "Support keys in full target data do not match those in subsampled data."
+
+
+
+#         # Create the mapping for all possible outcomes for each query stone, organized by support_key
+#         per_query_reachable_stone_mapping = {}
+#         for support_key, query_stones_map in composition_full_target_per_query_support_to_query_mappings.items():
+#             per_query_reachable_stone_mapping[support_key] = defaultdict(set)
+#             for query_stone_str, potions_map in query_stones_map.items():
+#                 for full_potion_sequence, target_stones in potions_map.items():
+#                     per_query_reachable_stone_mapping[support_key][query_stone_str].update(target_stones)
+
+
+#         # BUG FIX: Pre-calculate the correct reachable stones for each prefix
+#         prefix_to_reachable_stones_mapping = {}
+#         for support_key, query_stones_map in composition_full_target_per_query_support_to_query_mappings.items():
+#             prefix_to_reachable_stones_mapping[support_key] = {}
+#             for query_stone_str, potions_map in query_stones_map.items():
+#                 prefix_to_reachable_stones_mapping[support_key][query_stone_str] = {}
+#                 for overlap_count in range(1, hop):
+#                     prefix_to_reachable_stones_mapping[support_key][query_stone_str][overlap_count] = defaultdict(set)
+
+#                 for full_potion_sequence, target_stones in potions_map.items():
+#                     potion_tokens = full_potion_sequence.split(' | ')
+#                     for overlap_count in range(1, hop):
+#                         potion_prefix = ' | '.join(potion_tokens[:overlap_count])
+#                         prefix_to_reachable_stones_mapping[support_key][query_stone_str][overlap_count][potion_prefix].update(target_stones)
+
+        
+#         # now, for each query_stone for that support key, we can also store the 'predictions' for each potion combination in a new dict.
+#         predictions_composition_per_query_support_to_query_mappings = {}
+#         for epoch in predictions_by_epoch.keys():
+#             predictions_composition_per_query_support_to_query_mappings[epoch] = {}
+#             for support_key in composition_per_query_support_to_query_mappings.keys():
+#                 predictions_composition_per_query_support_to_query_mappings[epoch][support_key] = {}
+#                 for query_stone_str in composition_per_query_support_to_query_mappings[support_key].keys():
+#                     predictions_composition_per_query_support_to_query_mappings[epoch][support_key][query_stone_str] = {}
+#                     for query_potion in composition_per_query_support_to_query_mappings[support_key][query_stone_str].keys():
+#                         predictions_composition_per_query_support_to_query_mappings[epoch][support_key][query_stone_str][query_potion] = []
+
+
+#         for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="organizing composition predictions by support, query stones, and potions"):
+#             for i, sample in enumerate(data):
+#                 encoder_input_ids = sample['encoder_input_ids']
+#                 target_class_id = sample['target_class_id']
+#                 predicted_class_id = predictions[i]
+#                 support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
+#                 support_key = tuple(support)
+
+#                 # Split the support key on '23' and sort the stones to create a normalized support key.
+#                 support_key_string = ' '.join(str(token_id) for token_id in support_key)
+#                 support_key = sorted([chunk.strip() for chunk in support_key_string.split('23')])
+#                 support_key = tuple(support_key)
+
+#                 # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
+#                 query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+#                 query_potion = query[-hop:]  # last hop tokens
+#                 query_stones = query[:-hop]
+#                 # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+#                 query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+#                 query_potion = query_potion_str
+#                 query_stone_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_stones])
+
+#                 # now directly store the predicted class id in the corresponding dict.
+#                 predictions_composition_per_query_support_to_query_mappings[epoch][support_key][query_stone_str][query_potion].append(predicted_class_id) # the dictionary is already created above.
+
+        
+
+#         # now we calculate metrics based on the above predictions and mappings.
+#         # 1. for each query stone and potion combination, calculate if the prediction was in the support set. the support set is union of all the target class ids for that support key.
+#         # 2. for each query stone and potion combination, calculate if the prediction was in the possible target class ids for that query stone (across all potion combinations) if the query output was in the support set.
+#         # import pdb; pdb.set_trace()
+
+#         predicted_in_context_accuracies = []
+#         predicted_in_context_correct_candidate_accuracies = []
+#         correct_within_candidates = []
+#         overlap_metrics_by_epoch = {}  # initialize here, populate in the main loop
+
+#         for pred_epoch in tqdm(predictions_composition_per_query_support_to_query_mappings.keys(), desc="analyzing composition epochs"):
+#             correct = 0
+#             correct_candidate = 0
+#             total = 0
+#             predicted_in_context_count = 0
+
+#             epoch_preds = predictions_composition_per_query_support_to_query_mappings[pred_epoch]
+            
+#             # initialize overlap analysis for this epoch
+#             epoch_overlap_analysis = {}
+
+#             for support_key in composition_per_query_support_to_query_mappings.keys():
+#                 # initialize for this support_key
+#                 if support_key not in epoch_overlap_analysis:
+#                     epoch_overlap_analysis[support_key] = {}
+#                     for overlap_count in range(1, hop):
+#                         epoch_overlap_analysis[support_key][overlap_count] = {}
+                
+#                 res = list(composition_per_query_support_to_query_mappings[support_key].values())
+#                 all_target_class_ids = set([v[0] for sublist in res for k, v in sublist.items()])
+#                 assert len(all_target_class_ids) == 8, f"expected 8 unique target class ids for support {support_key}, got {len(all_target_class_ids)}"
+
+#                 # for each query stone and potion combination, check the predictions
+#                 for query_stone_str in composition_per_query_support_to_query_mappings[support_key].keys():
+#                     for query_potion in composition_per_query_support_to_query_mappings[support_key][query_stone_str].keys():
+                        
+#                         pred = epoch_preds[support_key][query_stone_str][query_potion][0]
+#                         total += 1
+
+#                         # get the set of target_class_ids for this query_stone and all potion combinations.
+#                         possible_target_class_ids_for_this_query_stone = set([v for sublist in composition_per_query_support_to_query_mappings[support_key][query_stone_str].values() for v in sublist])
+
+#                         # calculate standard composition metrics
+#                         if pred in all_target_class_ids:
+#                             predicted_in_context_count += 1
+
+#                             if pred in possible_target_class_ids_for_this_query_stone:
+#                                 correct_candidate += 1
+
+#                                 if pred in composition_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion]:
+#                                     correct += 1
+
+#                         # populate overlap analysis - now organized by support_key
+#                         potion_tokens = query_potion.split(' | ')
+                        
+#                         for overlap_count in range(1, hop):
+#                             potion_prefix = ' | '.join(potion_tokens[:overlap_count])
+
+#                             # initialize query_stone_str dict if not exists for this support_key and overlap_count
+#                             if query_stone_str not in epoch_overlap_analysis[support_key][overlap_count]:
+#                                 epoch_overlap_analysis[support_key][overlap_count][query_stone_str] = {}
+                            
+#                             # initialize potion_prefix dict if not exists
+#                             if potion_prefix not in epoch_overlap_analysis[support_key][overlap_count][query_stone_str]:
+#                                 # Use the pre-calculated reachable stones
+#                                 reachable_stones_for_prefix = prefix_to_reachable_stones_mapping[support_key][query_stone_str][overlap_count][potion_prefix]
+#                                 epoch_overlap_analysis[support_key][overlap_count][query_stone_str][potion_prefix] = {
+#                                     'reachable_stones': reachable_stones_for_prefix,
+#                                     'full_sequences': [],
+#                                     'predictions': []
+#                                 }
+                            
+#                             # add full sequence
+#                             epoch_overlap_analysis[support_key][overlap_count][query_stone_str][potion_prefix]['full_sequences'].append(query_potion)
+                            
+#                             # add prediction
+#                             epoch_overlap_analysis[support_key][overlap_count][query_stone_str][potion_prefix]['predictions'].append(pred)
+#                             # import pdb; pdb.set_trace()
+                    
+
+
+            
+#             # calculate and store standard metrics
+#             predicted_in_context_accuracy = predicted_in_context_count / total if total > 0 else 0
+#             # predicted_in_context_accuracies.append(predicted_in_context_accuracy)
+            
+#             predicted_in_context_correct_candidate_accuracy = correct_candidate / predicted_in_context_count if predicted_in_context_count > 0 else 0
+#             # predicted_in_context_correct_candidate_accuracies.append(predicted_in_context_correct_candidate_accuracy)
+
+#             correct_within_candidate = correct / correct_candidate if correct_candidate > 0 else 0
+#             # correct_within_candidates.append(correct_within_candidate)
+
+
+#             # calculate overlap metrics for this epoch
+#             # now calculate per-support_key metrics and aggregated metrics
+#             epoch_overlap_metrics = {}
+
+#             for overlap_count in range(1, hop):
+#                 per_support_metrics = {}
+                
+#                 for support_key in epoch_overlap_analysis.keys():
+                    
+#                     # This dict will hold the accuracy for each query stone for the current overlap_count
+#                     per_query_accuracies = {}
+
+#                     for query_stone_str in epoch_overlap_analysis[support_key][overlap_count].keys():
+                        
+#                         # This list will hold the accuracy for each prefix of the current length
+#                         prefix_accuracies = []
+
+#                         for potion_prefix, data in epoch_overlap_analysis[support_key][overlap_count][query_stone_str].items():
+#                             predictions = data['predictions']
+#                             reachable_stones_k = data['reachable_stones'] # Reachable set for prefix of length k
+
+
+#                             # Determine the denominator set based on overlap_count
+#                             if overlap_count == 1:
+#                                 # For 1-potion overlap, the denominator is the set of all possible candidates for this query stone.
+#                                 denominator_set = per_query_reachable_stone_mapping[support_key][query_stone_str]
+#                             else:
+#                                 # For k > 1, the denominator is the reachable set from the (k-1) prefix.
+#                                 parent_prefix = ' | '.join(potion_prefix.split(' | ')[:-1])
+#                                 denominator_set = epoch_overlap_analysis[support_key][overlap_count - 1][query_stone_str][parent_prefix]['reachable_stones']
+
+#                             # Denominator: How many predictions fell into the denominator_set?
+#                             preds_in_denominator = [p for p in predictions if p in denominator_set]
+#                             denominator_count = len(preds_in_denominator)
+
+#                             if denominator_count > 0:
+#                                 # Numerator: Of those, how many also fell into the more constrained set for the current prefix?
+#                                 numerator_count = sum(1 for p in preds_in_denominator if p in reachable_stones_k)
+                                
+#                                 # Accuracy for this specific prefix
+#                                 prefix_accuracy = numerator_count / denominator_count
+#                                 prefix_accuracies.append(prefix_accuracy)
+#                             # if pred_epoch == '100':
+#                             #     import pdb; pdb.set_trace()
+
+#                         # Average the accuracies across all prefixes for this query stone
+#                         if prefix_accuracies:
+#                             per_query_accuracies[query_stone_str] = np.mean(prefix_accuracies)
+
+#                     # Calculate per-support metrics by averaging over query stones
+#                     per_support_metrics[support_key] = {
+#                         'incremental_learning_accuracy': np.mean(list(per_query_accuracies.values())) if per_query_accuracies else 0.0
+#                     }
+
+#                 epoch_overlap_metrics[overlap_count] = {
+#                     'per_support_metrics': per_support_metrics,
+#                 }
+                
+#             overlap_metrics_by_epoch[pred_epoch] = {
+#                 'epoch_overlap_metrics': epoch_overlap_metrics,
+#                 'predicted_in_context_accuracy': predicted_in_context_accuracy,
+#                 'predicted_in_context_correct_candidate_accuracy': predicted_in_context_correct_candidate_accuracy,
+#                 'correct_within_candidate': correct_within_candidate
+#             }
+
+#          # Extract standard metrics as lists for compatibility with plotting code
+#         predicted_in_context_accuracies = []
+#         predicted_in_context_correct_candidate_accuracies = []
+#         correct_within_candidates = []
+        
+#         for epoch_key in sorted(overlap_metrics_by_epoch.keys()):
+#             predicted_in_context_accuracies.append(overlap_metrics_by_epoch[epoch_key]['predicted_in_context_accuracy'])
+#             predicted_in_context_correct_candidate_accuracies.append(overlap_metrics_by_epoch[epoch_key]['predicted_in_context_correct_candidate_accuracy'])
+#             correct_within_candidates.append(overlap_metrics_by_epoch[epoch_key]['correct_within_candidate'])
+
+#         return (predicted_in_context_accuracies, predicted_in_context_correct_candidate_accuracies,
+#                 correct_within_candidates, overlap_metrics_by_epoch)
+
+
+#     # The following are the for the decomposition experiments and held-out experiments.
+
+#     # Now for each sample, we can store the prediction in the corresponding support key and query potion.
+#     print("Decomposition / Held-out experiment.")
+#     if exp_typ in ['decomposition', 'held_out']:
+#         hop = 1
+#         # For decomposition, precompute per-query adjacency from targets:
+#         # per_query_adjacent_mapping[support_key][query_stone_id][potion_str] = set(target_class_ids)
+#         per_query_adjacent_mapping = {}
+#         if exp_typ == 'decomposition':
+#             input_vocab = vocab['input_word2idx']
+#             feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+
+#             for sample in data:
+#                 encoder_input_ids = sample['encoder_input_ids']
+#                 target_class_id = sample['target_class_id']
+
+#                 # support and support_key
+#                 support = encoder_input_ids[:-(hop + 4)]  # hop forced to 1 for decomposition/held_out above
+#                 support_key = tuple(support)
+
+#                 # decode query (last 5 tokens = 4 features + potion)
+#                 query = encoder_input_ids[-5:]
+#                 query_feat_ids = query[:-1]
+#                 query_potion_id = query[-1]
+
+#                 query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+#                 q_color, q_size, q_round, q_reward = query_features
+#                 query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+#                 query_stone_id = stone_state_to_id[query_state_str]
+
+#                 query_potion_str = feature_to_id_vocab[query_potion_id]
+
+#                 if support_key not in per_query_adjacent_mapping:
+#                     per_query_adjacent_mapping[support_key] = {}
+#                 if query_stone_id not in per_query_adjacent_mapping[support_key]:
+#                     per_query_adjacent_mapping[support_key][query_stone_id] = {}
+#                 if query_potion_str not in per_query_adjacent_mapping[support_key][query_stone_id]:
+#                     per_query_adjacent_mapping[support_key][query_stone_id][query_potion_str] = set()
+
+#                 per_query_adjacent_mapping[support_key][query_stone_id][query_potion_str].add(target_class_id)
+            
+#             # Now for each support_key and query_stone_id, compute the union of all target_class_ids across potions and store it as the 'per_support_per_query_adjacent_all_potions_mapping'
+#             per_support_per_query_adjacent_all_potions_mapping = {}
+#             for support_key, query_stone_map in per_query_adjacent_mapping.items():
+#                 per_support_per_query_adjacent_all_potions_mapping[support_key] = {}
+#                 for query_stone_id, potion_map in query_stone_map.items():
+#                     all_target_ids = set()
+#                     for potion_str, target_ids in potion_map.items():
+#                         all_target_ids.update(target_ids)
+#                     per_support_per_query_adjacent_all_potions_mapping[support_key][query_stone_id] = all_target_ids
+
+
+#     # import pdb; pdb.set_trace()
+    
+#     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Organizing predictions by support and query"):
+#         for i, sample in enumerate(data):
+#             encoder_input_ids = sample['encoder_input_ids']
+#             target_class_id = sample['target_class_id']
+#             predicted_class_id = predictions[i]
+#             support = encoder_input_ids[:-(hop + 4)]  # Everything except last 5 tokens for decomposition and held_out.
+#             support_key = tuple(support)
+            
+#             # if exp_typ == 'composition':
+#             #     # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
+#             #     query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+#             #     query_potion = query[-hop:]  # Last hop tokens
+                
+#             #     # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
+#             #     query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
+#             #     query_potion = query_potion_str
+                
+#             # else:  
+#             query = encoder_input_ids[-(hop + 4):]    # Last 5 tokens for decomposition and held_out.
+#             query_potion = query[-1]
+#             # if exp_typ == 'composition':
+#             #     support_to_query_per_epoch_predictions[epoch][support_key][query_potion].append(predicted_class_id)
+
+#             # else:
+#             support_to_query_per_epoch_predictions[epoch][support_key][feature_to_id_vocab[query_potion]].append(predicted_class_id)
+    
+
+#     # Now for each of the predictions, we can check which half-chemistry for that support set does the true target belong to.
+    
+#     # Initialize accumulators for averaging
+#     predicted_in_context_accuracies = []
+#     predicted_in_context_correct_half_accuracies = []
+#     predicted_in_context_other_half_accuracies = []
+#     predicted_in_context_correct_half_exact_accuracies = []
+#     predicted_correct_within_context = []
+
+
+
+#     predicted_exact_out_of_all_108 = []
+
+#     predicted_in_adjacent_and_correct_half_accuracies = []
+#     predicted_correct_half_within_adjacent_and_correct_half_accuracies = []
+
+
+
+#     complete_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
+#     within_support_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
+#     within_support_within_half_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
+    
+#     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Analyzing epochs"):
+#         correct = 0
+#         other_half_correct = 0
+#         total = 0
+        
+        
+#         within_class_correct = 0
+#         within_class_total = 0
+
+#         predicted_in_context_count = 0
+#         correct_half_chemistry_count = 0
+
+#         predicted_correct_within_context_count = 0
+
+#         predicted_exact_out_of_all_108_count = 0
+
+#         predicted_in_adjacent_and_correct_half_count = 0
+#         predicted_correct_half_within_adjacent_and_correct_half_count = 0
+
+#         per_epoch_complete_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+#         per_epoch_within_support_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+#         per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+
+#         per_epoch_total_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+#         per_epoch_in_support_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+#         per_epoch_in_support_correct_half_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+
+
+        
+#         for i, sample in enumerate(data):
+#             encoder_input_ids = sample['encoder_input_ids']
+#             target_class_id = sample['target_class_id']
+#             predicted_class_id = predictions[i]
+#             support = encoder_input_ids[:-(hop + 4)]
+#             support_key = tuple(support)
+            
+#             query = encoder_input_ids[-5:]
+#             query_potion = query[-1]
+
+#             # Get the reward value for binning
+#             query_start_stone_reward = feature_to_id_vocab[query[-2]]  # second last token in the query is the reward of the stone.
+#             # import pdb; pdb.set_trace()
+
+#             # First we check if the predicted class ID is in any of the two half-chemistry sets for this support key.
+#             # import pdb; pdb.set_trace()
+
+#             potions_for_support = list(support_to_query_mappings[support_key].keys())
+#             # TODO: This will fail for composition experiments because the keys will be a combination of potions. Thus we need to adjust this.
+            
+#             # if exp_typ == 'composition':
+#             #     raise NotImplementedError("Half-chemistry analysis for composition experiments is not implemented yet.")
+            
+#             assert len(potions_for_support) in [2,6], f"Expected 2 or 6 potions."
+#             correct_half_chemistry = support_to_query_mappings[support_key][feature_to_id_vocab[query_potion]]
+#             other_half_chemistry = support_to_query_mappings[support_key][potions_for_support[0]] if potions_for_support[1] == feature_to_id_vocab[query_potion] else support_to_query_mappings[support_key][potions_for_support[1]]
+
+#             if exp_typ == 'decomposition': 
+#                 # Create a set of all stones in the support set.
+#                 all_stones_in_support = set()
+#                 for potion in potions_for_support:
+#                     all_stones_in_support.update(support_to_query_mappings[support_key][potion])
+#                 combined_set = all_stones_in_support
+#                 assert len(combined_set) == 8, f"Expected 8 unique stones for support {support_key}, got {len(combined_set)}"
+#             else:
+#                 combined_set = set(correct_half_chemistry + other_half_chemistry)
+#                 assert len(combined_set) <= 8, f"Expected 8 unique stones for support {support_key}, got {len(combined_set)}"
+            
+#             if exp_typ == 'decomposition':
+#                 # Decode query start stone id (same logic as in non-support analysis)
+#                 query_feat_ids = query[:-1]  # 4 feature token IDs
+#                 query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+#                 q_color, q_size, q_round, q_reward = query_features
+#                 query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+#                 query_stone_id = stone_state_to_id[query_state_str]
+
+#                 query_potion_str = feature_to_id_vocab[query_potion]
+
+#                 # Get adjacent stones for this (support_key, query_stone_id, potion)
+#                 adjacent_stones = per_support_per_query_adjacent_all_potions_mapping[support_key].get(query_stone_id, set())
+#                 adjacent_stones = set(adjacent_stones)
+
+#                 # Combine with correct half for this potion
+#                 adjacent_and_correct_half = set(correct_half_chemistry).union(adjacent_stones)
+
+#                 # Sanity: adjacency is fully connected; expect 6 unique stones 
+#                 # (4 in correct half, 3 adjacent, with 1 overlap)
+#                 if len(adjacent_and_correct_half) != 6:
+#                     # You can relax this assert if you're worried about data edge cases
+#                     raise AssertionError(
+#                         f"Expected 6 stones in adjacent_and_correct_half, "
+#                         f"got {len(adjacent_and_correct_half)} for support {support_key}"
+#                     )
+#             else:
+#                 adjacent_stones = set()
+#                 adjacent_and_correct_half = set()
+
+
+#             # First do the classification for 8 vs 108.
+
+#             per_epoch_total_samples_per_reward_bin[query_start_stone_reward] += 1
+
+#             # First classification: exact match out of 108
+#             if predicted_class_id == target_class_id:
+#                 predicted_exact_out_of_all_108_count += 1
+#                 per_epoch_complete_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
+            
+#             # Second classification: in-support
+#             if predicted_class_id in combined_set:
+#                 predicted_in_context_count += 1
+                
+#                 # NEW: Increment in-support total for this reward bin
+#                 per_epoch_in_support_samples_per_reward_bin[query_start_stone_reward] += 1
+
+#                 if predicted_class_id == target_class_id:
+#                     predicted_correct_within_context_count += 1
+#                     per_epoch_within_support_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
+                
+#                 # Third classification: correct half
+#                 if predicted_class_id in correct_half_chemistry:
+#                     correct_half_chemistry_count += 1
+                    
+#                     # NEW: Increment correct-half total for this reward bin
+#                     per_epoch_in_support_correct_half_samples_per_reward_bin[query_start_stone_reward] += 1
+
+#                     if predicted_class_id == target_class_id:
+#                         within_class_correct += 1
+#                         per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
+
+                
+#                 elif predicted_class_id in other_half_chemistry:
+#                     other_half_correct += 1
+                
+#                 if exp_typ == 'decomposition' and predicted_class_id in adjacent_and_correct_half:
+#                     predicted_in_adjacent_and_correct_half_count += 1
+#                     if predicted_class_id in correct_half_chemistry:
+#                         predicted_correct_half_within_adjacent_and_correct_half_count += 1
+
+#             total += 1
+
+#         # Now calculate accuracies and store them.
+
+#         predicted_in_context_accuracy = predicted_in_context_count / total if total > 0 else 0 # The chance is 8/108 here.
+#         predicted_in_context_accuracies.append(predicted_in_context_accuracy)
+
+#         # Now calculate the correct half-chemistry accuracy if predicted in context.
+#         predicted_in_context_correct_half_accuracy = correct_half_chemistry_count / predicted_in_context_count if predicted_in_context_count > 0 else 0 # The chance is 4/8 here.
+#         predicted_in_context_correct_half_accuracies.append(predicted_in_context_correct_half_accuracy)
+
+#         # Now calculate the other half-chemistry accuracy if predicted in context.
+#         predicted_in_context_other_half_accuracy = other_half_correct / predicted_in_context_count if predicted_in_context_count > 0 else 0 # The chance is 4/8 here.
+#         predicted_in_context_other_half_accuracies.append(predicted_in_context_other_half_accuracy)
+
+#         # Now calculate the within-class accuracy if predicted in context and in correct half-chemistry.
+#         predicted_in_context_correct_half_exact_accuracy = within_class_correct / correct_half_chemistry_count if correct_half_chemistry_count > 0 else 0 # The chance is 1/4 here.
+#         predicted_in_context_correct_half_exact_accuracies.append(predicted_in_context_correct_half_exact_accuracy)
+
+#         # Now calculate the correct within context accuracy.
+#         predicted_correct_within_context_accuracy = predicted_correct_within_context_count / predicted_in_context_count if predicted_in_context_count > 0 else 0 # The chance is 1/8 here.
+#         predicted_correct_within_context.append(predicted_correct_within_context_accuracy)
+
+#         # Now calculate the exact out of all 108 accuracy.
+#         predicted_exact_out_of_all_108_accuracy = predicted_exact_out_of_all_108_count / total if total > 0 else 0 # The chance is 1/108 here.
+#         predicted_exact_out_of_all_108.append(predicted_exact_out_of_all_108_accuracy)
+
+#         if exp_typ == 'decomposition':
+#             p_in_adjacent_and_correct_half = (
+#                 predicted_in_adjacent_and_correct_half_count / predicted_in_context_count
+#                 if predicted_in_context_count > 0 else 0.0
+#             )
+#             p_correct_half_given_adjacent_and_correct_half = (
+#                 predicted_correct_half_within_adjacent_and_correct_half_count / predicted_in_adjacent_and_correct_half_count
+#                 if predicted_in_adjacent_and_correct_half_count > 0 else 0.0
+#             )
+#         else:
+#             p_in_adjacent_and_correct_half = 0.0
+#             p_correct_half_given_adjacent_and_correct_half = 0.0
+
+
+#         predicted_in_adjacent_and_correct_half_accuracies.append(p_in_adjacent_and_correct_half)
+#         predicted_correct_half_within_adjacent_and_correct_half_accuracies.append(p_correct_half_given_adjacent_and_correct_half)
+
+
+#         # Assert that correct_half_chemistry_count is equal to the sum of per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts
+#         assert correct_half_chemistry_count == sum(per_epoch_in_support_correct_half_samples_per_reward_bin.values()), "Mismatch in correct half chemistry count."
+
+#         # import pdb; pdb.set_trace()
+
+
+
+#         # NOTE: The following is for the held_out experiments reward-binned analysis.
+#         # Add the per-epoch reward binned accuracies to the overall accumulators.
+#         # Add the per-epoch reward binned accuracies to the overall accumulators.
+#         for reward_bin in complete_query_stone_state_per_reward_binned_accuracy.keys():
+#             # Accuracy out of all 108
+#             total_for_bin = per_epoch_total_samples_per_reward_bin[reward_bin]
+#             if total_for_bin > 0:
+#                 accuracy1 = per_epoch_complete_query_stone_state_per_reward_binned_counts[reward_bin] / total_for_bin
+#             else:
+#                 accuracy1 = 0
+#             complete_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy1)
+
+#             in_support_for_bin = per_epoch_in_support_samples_per_reward_bin[reward_bin]
+#             if in_support_for_bin > 0:
+#                 # accuracy2 = in_support_for_bin / total_for_bin
+
+#                 # This is exactly the within-support accuracy.
+
+#                 accuracy2 = per_epoch_within_support_query_stone_state_per_reward_binned_counts[reward_bin] / in_support_for_bin
+#             else:
+#                 accuracy2 = 0
+#             within_support_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy2)
+
+#             # Accuracy within support and correct half (per reward bin)
+#             in_support_correct_half_for_bin = per_epoch_in_support_correct_half_samples_per_reward_bin[reward_bin]
+#             if in_support_correct_half_for_bin > 0:
+#                 accuracy3 = per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[reward_bin] / in_support_correct_half_for_bin
+#             else:
+#                 accuracy3 = 0
+#             within_support_within_half_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy3)
+
+#         # Compute weighted average across all bins (for validation only)
+#         # total_correct_in_bins = sum(per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts.values())
+#         # total_samples_in_bins = sum(per_epoch_in_support_correct_half_samples_per_reward_bin.values())
+
+#         # if total_samples_in_bins > 0:
+#         #     avg_within_support_within_half_accuracy = total_correct_in_bins / total_samples_in_bins
+#         # else:
+#         #     avg_within_support_within_half_accuracy = 0
+
+#         # assert abs(avg_within_support_within_half_accuracy - predicted_in_context_correct_half_exact_accuracy) < 1e-8, "Mismatch in weighted average accuracy calculation."
+            
+
+
+#     return (
+#         predicted_in_context_accuracies,
+#         predicted_in_context_correct_half_accuracies,
+#         predicted_in_context_other_half_accuracies,
+#         predicted_in_context_correct_half_exact_accuracies,
+#         predicted_correct_within_context,
+#         predicted_exact_out_of_all_108,
+#         predicted_in_adjacent_and_correct_half_accuracies,
+#         predicted_correct_half_within_adjacent_and_correct_half_accuracies,
+#         (
+#             complete_query_stone_state_per_reward_binned_accuracy,
+#             within_support_query_stone_state_per_reward_binned_accuracy,
+#             within_support_within_half_query_stone_state_per_reward_binned_accuracy,
+#         ),
+#     )
+
 def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions_by_epoch, exp_typ='held_out', hop=2,
-                                    composition_full_target_data=None, factorize_within_half_predictions=False):
+                                    composition_full_target_data=None, factorize_within_half_predictions=False,
+                                    input_format='features'):
     """
     Analyze model behavior on half-chemistry tasks where only one stone is present.
     
@@ -484,106 +1237,121 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         data: List of validation samples
         vocab: Vocabulary dictionaries  
         stone_state_to_id: Mapping from stone state strings to class IDs
+        input_format: 'features' (4 tokens per stone) or 'stone_states' (1 token per stone)
     """
-    # I can first get all the samples that have the same support sentence - in the exact same order.
-    # I should find 8 such samples because there are 8 such queries.
-    
-    # First for all the samples, create a key based on the support sentence which is everything except the last 5 tokens of the sample.
+    # ...existing code...
     if exp_typ in ['decomposition', 'held_out']:
         hop = 1
+
+    # Number of tokens used to represent a single stone in the input
+    stone_token_count = 4 if input_format == 'features' else 1
+    # Query length = stone_token_count + hop potion tokens
+    query_len = stone_token_count + hop
 
     support_to_query_mappings = {}
     for i, sample in enumerate(data):
         encoder_input_ids = sample['encoder_input_ids']
         target_class_id = sample['target_class_id']
-        support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens. works for decomposition too.
+        support = encoder_input_ids[:-query_len]
         # create a hashable string key
         support_key = tuple(support)
         
-        if support_key not in support_to_query_mappings: # this is for the input to the model. this will be the same for all epochs.
+        if support_key not in support_to_query_mappings:
             support_to_query_mappings[support_key] = {}
             
             
     input_vocab = vocab['input_word2idx']
     feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+
+    # For stone_states input format, build a reverse mapping from stone input token to reward value
+    if input_format == 'stone_states':
+        id_to_stone_state = {v: k for k, v in stone_state_to_id.items()}
+        # Map from input vocab token id (for a stone state token) -> reward string
+        def _get_reward_from_stone_token(token_id):
+            """Given an input vocab token id representing a stone state, return its reward string."""
+            token_str = feature_to_id_vocab[token_id]
+            # token_str should be the stone state key or a mapped name; look it up
+            if token_str in stone_state_to_id:
+                stone_class_id = stone_state_to_id[token_str]
+            else:
+                # try to find by class id directly 
+                print(f"Warning: token_str '{token_str}' not found in stone_state_to_id. Attempting to interpret token_id {token_id} as class id directly.") 
+                stone_class_id = token_id  # fallback
+            # Get the state string and extract reward
+            state_str = id_to_stone_state.get(stone_class_id, '')
+            r_match = re.search(r'reward: (\+?-?\d+)', state_str)
+            if r_match:
+                return str(int(r_match.group(1)))
+            raise ValueError(f"Could not extract reward from token id {token_id} with state string '{state_str}'")
+        
+        def _get_stone_class_id_from_token(token_id):
+            """Given an input vocab token id for a stone, return the stone class id."""
+            token_str = feature_to_id_vocab[token_id]
+            if token_str in stone_state_to_id:
+                return stone_state_to_id[token_str]
+            raise ValueError(f"Token id {token_id} with string '{token_str}' not found in stone_state_to_id mapping.")
             
     for i, sample in enumerate(data):
         encoder_input_ids = sample['encoder_input_ids']
         target_class_id = sample['target_class_id']
-        support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens. works for decomposition too.
-        # create a hashable string key
+        support = encoder_input_ids[:-query_len]
         support_key = tuple(support)
         
         if exp_typ == 'composition':
-            # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
-            query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
+            query = encoder_input_ids[-query_len:]
             query_potion = query[-hop:]  # last hop tokens
             query_stones = query[:-hop]
             
-            # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
             query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
             query_potion = query_potion_str
             
         else:
-            # for decomposition and held_out experiments.
-            query = encoder_input_ids[-5:]    # last 5 tokens
+            query = encoder_input_ids[-query_len:]
             query_potion = query[-1]
             query_stones = query[:-1]
 
-        # first check if the query_potion key is already a list. if not, create an empty list.
         if exp_typ == 'composition':
             if query_potion not in support_to_query_mappings[support_key]:
                 support_to_query_mappings[support_key][query_potion] = [target_class_id]
             else:
                 support_to_query_mappings[support_key][query_potion].append(target_class_id)
-
         else:
-
             if feature_to_id_vocab[query_potion] not in support_to_query_mappings[support_key]:
                 support_to_query_mappings[support_key][feature_to_id_vocab[query_potion]] = [target_class_id]
-
             else:
                 support_to_query_mappings[support_key][feature_to_id_vocab[query_potion]].append(target_class_id)
 
     # store the predictions for each support key and query potion.
-
     support_to_query_per_epoch_predictions = {}
 
     for epoch in predictions_by_epoch.keys():
         support_to_query_per_epoch_predictions[epoch] = {}
         for support_key in support_to_query_mappings.keys():
             support_to_query_per_epoch_predictions[epoch][support_key] = {}
-            for potion in support_to_query_mappings[support_key].keys(): # for the composition experiments, this will be multiple potions.
+            for potion in support_to_query_mappings[support_key].keys():
                 support_to_query_per_epoch_predictions[epoch][support_key][potion] = []
 
-
-    # create another dict called composition_per_query_support_to_query_mappings that will store for each support_key, and each query_start_stone, the list of the target class ids for each potion combination.
-
+    # ...existing code for composition branch...
     """
     the following code block stores the mapping from support sets to query stones and potions for composition experiments. for each support key, it organizes the target class ids based on the query stones and potions for that support key.
     """
     if exp_typ == 'composition':
-        composition_per_query_support_to_query_mappings = {} # This is only for the subsampled data that was shown to the model.
-        composition_full_target_per_query_support_to_query_mappings = {} # This is for the full data, to get the full target class ids for each support and query stone combination.
+        composition_per_query_support_to_query_mappings = {}
+        composition_full_target_per_query_support_to_query_mappings = {}
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
             target_class_id = sample['target_class_id']
-            support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
+            support = encoder_input_ids[:-query_len]
             support_key = tuple(support)
 
-            # Split the support key on '23' and sort the stones to create a normalized support key.
             support_key_string = ' '.join(str(token_id) for token_id in support_key)
             support_key = sorted([chunk.strip() for chunk in support_key_string.split('23')])
-
             support_key = tuple(support_key)
 
-            
-            # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
-            query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-            query_potion = query[-hop:]  # last hop tokens
+            query = encoder_input_ids[-query_len:]
+            query_potion = query[-hop:]
             query_stones = query[:-hop]
             
-            # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
             query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
             query_potion = query_potion_str
             
@@ -602,21 +1370,17 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         for i, sample in enumerate(composition_full_target_data):
             encoder_input_ids = sample['encoder_input_ids']
             target_class_id = sample['target_class_id']
-            support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
+            support = encoder_input_ids[:-query_len]
             support_key = tuple(support)
 
-            # Split the support key on '23' and sort the stones to create a normalized support key.
             support_key_string = ' '.join(str(token_id) for token_id in support_key)
             support_key = sorted([chunk.strip() for chunk in support_key_string.split('23')])
-
             support_key = tuple(support_key)
             
-            # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
-            query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-            query_potion = query[-hop:]  # last hop tokens
+            query = encoder_input_ids[-query_len:]
+            query_potion = query[-hop:]
             query_stones = query[:-hop]
             
-            # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
             query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
             query_potion = query_potion_str
             
@@ -631,14 +1395,12 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             else:
                 composition_full_target_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion].append(target_class_id)
 
+        # ...existing code for the rest of the composition branch (assertions, reachable stone mapping, etc.)...
         target_support_keys = list(composition_full_target_per_query_support_to_query_mappings.keys())
         original_support_keys = list(composition_per_query_support_to_query_mappings.keys())
         test = [1 for key in target_support_keys if key not in original_support_keys]
         assert len(test) == 0, "Support keys in full target data do not match those in subsampled data."
 
-
-
-        # Create the mapping for all possible outcomes for each query stone, organized by support_key
         per_query_reachable_stone_mapping = {}
         for support_key, query_stones_map in composition_full_target_per_query_support_to_query_mappings.items():
             per_query_reachable_stone_mapping[support_key] = defaultdict(set)
@@ -646,8 +1408,6 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 for full_potion_sequence, target_stones in potions_map.items():
                     per_query_reachable_stone_mapping[support_key][query_stone_str].update(target_stones)
 
-
-        # BUG FIX: Pre-calculate the correct reachable stones for each prefix
         prefix_to_reachable_stones_mapping = {}
         for support_key, query_stones_map in composition_full_target_per_query_support_to_query_mappings.items():
             prefix_to_reachable_stones_mapping[support_key] = {}
@@ -662,8 +1422,6 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                         potion_prefix = ' | '.join(potion_tokens[:overlap_count])
                         prefix_to_reachable_stones_mapping[support_key][query_stone_str][overlap_count][potion_prefix].update(target_stones)
 
-        
-        # now, for each query_stone for that support key, we can also store the 'predictions' for each potion combination in a new dict.
         predictions_composition_per_query_support_to_query_mappings = {}
         for epoch in predictions_by_epoch.keys():
             predictions_composition_per_query_support_to_query_mappings[epoch] = {}
@@ -674,43 +1432,34 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                     for query_potion in composition_per_query_support_to_query_mappings[support_key][query_stone_str].keys():
                         predictions_composition_per_query_support_to_query_mappings[epoch][support_key][query_stone_str][query_potion] = []
 
-
         for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="organizing composition predictions by support, query stones, and potions"):
             for i, sample in enumerate(data):
                 encoder_input_ids = sample['encoder_input_ids']
                 target_class_id = sample['target_class_id']
                 predicted_class_id = predictions[i]
-                support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
+                support = encoder_input_ids[:-query_len]
                 support_key = tuple(support)
 
-                # Split the support key on '23' and sort the stones to create a normalized support key.
                 support_key_string = ' '.join(str(token_id) for token_id in support_key)
                 support_key = sorted([chunk.strip() for chunk in support_key_string.split('23')])
                 support_key = tuple(support_key)
 
-                # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
-                query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-                query_potion = query[-hop:]  # last hop tokens
+                query = encoder_input_ids[-query_len:]
+                query_potion = query[-hop:]
                 query_stones = query[:-hop]
-                # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
                 query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
                 query_potion = query_potion_str
                 query_stone_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_stones])
 
-                # now directly store the predicted class id in the corresponding dict.
-                predictions_composition_per_query_support_to_query_mappings[epoch][support_key][query_stone_str][query_potion].append(predicted_class_id) # the dictionary is already created above.
+                predictions_composition_per_query_support_to_query_mappings[epoch][support_key][query_stone_str][query_potion].append(predicted_class_id)
 
-        
-
-        # now we calculate metrics based on the above predictions and mappings.
-        # 1. for each query stone and potion combination, calculate if the prediction was in the support set. the support set is union of all the target class ids for that support key.
-        # 2. for each query stone and potion combination, calculate if the prediction was in the possible target class ids for that query stone (across all potion combinations) if the query output was in the support set.
-        # import pdb; pdb.set_trace()
-
+        # ...existing code for composition metrics calculation (the entire block from
+        # "predicted_in_context_accuracies = []" through the return statement for composition)...
+        # This block does NOT reference stone features directly, so it works unchanged.
         predicted_in_context_accuracies = []
         predicted_in_context_correct_candidate_accuracies = []
         correct_within_candidates = []
-        overlap_metrics_by_epoch = {}  # initialize here, populate in the main loop
+        overlap_metrics_by_epoch = {}
 
         for pred_epoch in tqdm(predictions_composition_per_query_support_to_query_mappings.keys(), desc="analyzing composition epochs"):
             correct = 0
@@ -719,12 +1468,9 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             predicted_in_context_count = 0
 
             epoch_preds = predictions_composition_per_query_support_to_query_mappings[pred_epoch]
-            
-            # initialize overlap analysis for this epoch
             epoch_overlap_analysis = {}
 
             for support_key in composition_per_query_support_to_query_mappings.keys():
-                # initialize for this support_key
                 if support_key not in epoch_overlap_analysis:
                     epoch_overlap_analysis[support_key] = {}
                     for overlap_count in range(1, hop):
@@ -734,121 +1480,64 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 all_target_class_ids = set([v[0] for sublist in res for k, v in sublist.items()])
                 assert len(all_target_class_ids) == 8, f"expected 8 unique target class ids for support {support_key}, got {len(all_target_class_ids)}"
 
-                # for each query stone and potion combination, check the predictions
                 for query_stone_str in composition_per_query_support_to_query_mappings[support_key].keys():
                     for query_potion in composition_per_query_support_to_query_mappings[support_key][query_stone_str].keys():
-                        
                         pred = epoch_preds[support_key][query_stone_str][query_potion][0]
                         total += 1
-
-                        # get the set of target_class_ids for this query_stone and all potion combinations.
                         possible_target_class_ids_for_this_query_stone = set([v for sublist in composition_per_query_support_to_query_mappings[support_key][query_stone_str].values() for v in sublist])
 
-                        # calculate standard composition metrics
                         if pred in all_target_class_ids:
                             predicted_in_context_count += 1
-
                             if pred in possible_target_class_ids_for_this_query_stone:
                                 correct_candidate += 1
-
                                 if pred in composition_per_query_support_to_query_mappings[support_key][query_stone_str][query_potion]:
                                     correct += 1
 
-                        # populate overlap analysis - now organized by support_key
                         potion_tokens = query_potion.split(' | ')
-                        
                         for overlap_count in range(1, hop):
                             potion_prefix = ' | '.join(potion_tokens[:overlap_count])
-
-                            # initialize query_stone_str dict if not exists for this support_key and overlap_count
                             if query_stone_str not in epoch_overlap_analysis[support_key][overlap_count]:
                                 epoch_overlap_analysis[support_key][overlap_count][query_stone_str] = {}
-                            
-                            # initialize potion_prefix dict if not exists
                             if potion_prefix not in epoch_overlap_analysis[support_key][overlap_count][query_stone_str]:
-                                # Use the pre-calculated reachable stones
                                 reachable_stones_for_prefix = prefix_to_reachable_stones_mapping[support_key][query_stone_str][overlap_count][potion_prefix]
                                 epoch_overlap_analysis[support_key][overlap_count][query_stone_str][potion_prefix] = {
                                     'reachable_stones': reachable_stones_for_prefix,
                                     'full_sequences': [],
                                     'predictions': []
                                 }
-                            
-                            # add full sequence
                             epoch_overlap_analysis[support_key][overlap_count][query_stone_str][potion_prefix]['full_sequences'].append(query_potion)
-                            
-                            # add prediction
                             epoch_overlap_analysis[support_key][overlap_count][query_stone_str][potion_prefix]['predictions'].append(pred)
-                            # import pdb; pdb.set_trace()
-                    
 
-
-            
-            # calculate and store standard metrics
             predicted_in_context_accuracy = predicted_in_context_count / total if total > 0 else 0
-            # predicted_in_context_accuracies.append(predicted_in_context_accuracy)
-            
             predicted_in_context_correct_candidate_accuracy = correct_candidate / predicted_in_context_count if predicted_in_context_count > 0 else 0
-            # predicted_in_context_correct_candidate_accuracies.append(predicted_in_context_correct_candidate_accuracy)
-
             correct_within_candidate = correct / correct_candidate if correct_candidate > 0 else 0
-            # correct_within_candidates.append(correct_within_candidate)
 
-
-            # calculate overlap metrics for this epoch
-            # now calculate per-support_key metrics and aggregated metrics
             epoch_overlap_metrics = {}
-
             for overlap_count in range(1, hop):
                 per_support_metrics = {}
-                
                 for support_key in epoch_overlap_analysis.keys():
-                    
-                    # This dict will hold the accuracy for each query stone for the current overlap_count
                     per_query_accuracies = {}
-
                     for query_stone_str in epoch_overlap_analysis[support_key][overlap_count].keys():
-                        
-                        # This list will hold the accuracy for each prefix of the current length
                         prefix_accuracies = []
-
-                        for potion_prefix, data in epoch_overlap_analysis[support_key][overlap_count][query_stone_str].items():
-                            predictions = data['predictions']
-                            reachable_stones_k = data['reachable_stones'] # Reachable set for prefix of length k
-
-
-                            # Determine the denominator set based on overlap_count
+                        for potion_prefix, data_item in epoch_overlap_analysis[support_key][overlap_count][query_stone_str].items():
+                            predictions = data_item['predictions']
+                            reachable_stones_k = data_item['reachable_stones']
                             if overlap_count == 1:
-                                # For 1-potion overlap, the denominator is the set of all possible candidates for this query stone.
                                 denominator_set = per_query_reachable_stone_mapping[support_key][query_stone_str]
                             else:
-                                # For k > 1, the denominator is the reachable set from the (k-1) prefix.
                                 parent_prefix = ' | '.join(potion_prefix.split(' | ')[:-1])
                                 denominator_set = epoch_overlap_analysis[support_key][overlap_count - 1][query_stone_str][parent_prefix]['reachable_stones']
-
-                            # Denominator: How many predictions fell into the denominator_set?
                             preds_in_denominator = [p for p in predictions if p in denominator_set]
                             denominator_count = len(preds_in_denominator)
-
                             if denominator_count > 0:
-                                # Numerator: Of those, how many also fell into the more constrained set for the current prefix?
                                 numerator_count = sum(1 for p in preds_in_denominator if p in reachable_stones_k)
-                                
-                                # Accuracy for this specific prefix
                                 prefix_accuracy = numerator_count / denominator_count
                                 prefix_accuracies.append(prefix_accuracy)
-                            # if pred_epoch == '100':
-                            #     import pdb; pdb.set_trace()
-
-                        # Average the accuracies across all prefixes for this query stone
                         if prefix_accuracies:
                             per_query_accuracies[query_stone_str] = np.mean(prefix_accuracies)
-
-                    # Calculate per-support metrics by averaging over query stones
                     per_support_metrics[support_key] = {
                         'incremental_learning_accuracy': np.mean(list(per_query_accuracies.values())) if per_query_accuracies else 0.0
                     }
-
                 epoch_overlap_metrics[overlap_count] = {
                     'per_support_metrics': per_support_metrics,
                 }
@@ -860,7 +1549,6 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 'correct_within_candidate': correct_within_candidate
             }
 
-         # Extract standard metrics as lists for compatibility with plotting code
         predicted_in_context_accuracies = []
         predicted_in_context_correct_candidate_accuracies = []
         correct_within_candidates = []
@@ -875,13 +1563,11 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
 
     # The following are the for the decomposition experiments and held-out experiments.
-
-    # Now for each sample, we can store the prediction in the corresponding support key and query potion.
     print("Decomposition / Held-out experiment.")
     if exp_typ in ['decomposition', 'held_out']:
         hop = 1
-        # For decomposition, precompute per-query adjacency from targets:
-        # per_query_adjacent_mapping[support_key][query_stone_id][potion_str] = set(target_class_ids)
+        query_len = stone_token_count + hop  # recalculate after hop reset
+        
         per_query_adjacent_mapping = {}
         if exp_typ == 'decomposition':
             input_vocab = vocab['input_word2idx']
@@ -891,19 +1577,22 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 encoder_input_ids = sample['encoder_input_ids']
                 target_class_id = sample['target_class_id']
 
-                # support and support_key
-                support = encoder_input_ids[:-(hop + 4)]  # hop forced to 1 for decomposition/held_out above
+                support = encoder_input_ids[:-query_len]
                 support_key = tuple(support)
 
-                # decode query (last 5 tokens = 4 features + potion)
-                query = encoder_input_ids[-5:]
-                query_feat_ids = query[:-1]
+                query = encoder_input_ids[-query_len:]
                 query_potion_id = query[-1]
-
-                query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
-                q_color, q_size, q_round, q_reward = query_features
-                query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
-                query_stone_id = stone_state_to_id[query_state_str]
+                
+                if input_format == 'features':
+                    query_feat_ids = query[:-1]
+                    query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+                    q_color, q_size, q_round, q_reward = query_features
+                    query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+                    query_stone_id = stone_state_to_id[query_state_str]
+                else:
+                    # stone_states format: single token for the stone
+                    query_stone_token_id = query[0]
+                    query_stone_id = _get_stone_class_id_from_token(query_stone_token_id)
 
                 query_potion_str = feature_to_id_vocab[query_potion_id]
 
@@ -916,7 +1605,6 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
                 per_query_adjacent_mapping[support_key][query_stone_id][query_potion_str].add(target_class_id)
             
-            # Now for each support_key and query_stone_id, compute the union of all target_class_ids across potions and store it as the 'per_support_per_query_adjacent_all_potions_mapping'
             per_support_per_query_adjacent_all_potions_mapping = {}
             for support_key, query_stone_map in per_query_adjacent_mapping.items():
                 per_support_per_query_adjacent_all_potions_mapping[support_key] = {}
@@ -926,38 +1614,21 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                         all_target_ids.update(target_ids)
                     per_support_per_query_adjacent_all_potions_mapping[support_key][query_stone_id] = all_target_ids
 
-
-    # import pdb; pdb.set_trace()
     
     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Organizing predictions by support and query"):
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
             target_class_id = sample['target_class_id']
             predicted_class_id = predictions[i]
-            support = encoder_input_ids[:-(hop + 4)]  # Everything except last 5 tokens for decomposition and held_out.
+            support = encoder_input_ids[:-query_len]
             support_key = tuple(support)
             
-            # if exp_typ == 'composition':
-            #     # Based on the number of hops, we need to adjust the query parsing. The hops denote the number of potions in the query.
-            #     query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-            #     query_potion = query[-hop:]  # Last hop tokens
-                
-            #     # Create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
-            #     query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
-            #     query_potion = query_potion_str
-                
-            # else:  
-            query = encoder_input_ids[-(hop + 4):]    # Last 5 tokens for decomposition and held_out.
+            query = encoder_input_ids[-query_len:]
             query_potion = query[-1]
-            # if exp_typ == 'composition':
-            #     support_to_query_per_epoch_predictions[epoch][support_key][query_potion].append(predicted_class_id)
 
-            # else:
             support_to_query_per_epoch_predictions[epoch][support_key][feature_to_id_vocab[query_potion]].append(predicted_class_id)
     
 
-    # Now for each of the predictions, we can check which half-chemistry for that support set does the true target belong to.
-    
     # Initialize accumulators for averaging
     predicted_in_context_accuracies = []
     predicted_in_context_correct_half_accuracies = []
@@ -965,14 +1636,10 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     predicted_in_context_correct_half_exact_accuracies = []
     predicted_correct_within_context = []
 
-
-
     predicted_exact_out_of_all_108 = []
 
     predicted_in_adjacent_and_correct_half_accuracies = []
     predicted_correct_half_within_adjacent_and_correct_half_accuracies = []
-
-
 
     complete_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
     within_support_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
@@ -983,7 +1650,6 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         other_half_correct = 0
         total = 0
         
-        
         within_class_correct = 0
         within_class_total = 0
 
@@ -991,7 +1657,6 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         correct_half_chemistry_count = 0
 
         predicted_correct_within_context_count = 0
-
         predicted_exact_out_of_all_108_count = 0
 
         predicted_in_adjacent_and_correct_half_count = 0
@@ -1005,37 +1670,31 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         per_epoch_in_support_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
         per_epoch_in_support_correct_half_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
 
-
         
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
             target_class_id = sample['target_class_id']
             predicted_class_id = predictions[i]
-            support = encoder_input_ids[:-(hop + 4)]
+            support = encoder_input_ids[:-query_len]
             support_key = tuple(support)
             
-            query = encoder_input_ids[-5:]
+            query = encoder_input_ids[-query_len:]
             query_potion = query[-1]
 
             # Get the reward value for binning
-            query_start_stone_reward = feature_to_id_vocab[query[-2]]  # second last token in the query is the reward of the stone.
-            # import pdb; pdb.set_trace()
-
-            # First we check if the predicted class ID is in any of the two half-chemistry sets for this support key.
-            # import pdb; pdb.set_trace()
+            if input_format == 'features':
+                query_start_stone_reward = feature_to_id_vocab[query[-2]]  # second last token is reward feature
+            else:
+                # stone_states format: query[0] is the stone id token
+                query_start_stone_reward = _get_reward_from_stone_token(query[0])
 
             potions_for_support = list(support_to_query_mappings[support_key].keys())
-            # TODO: This will fail for composition experiments because the keys will be a combination of potions. Thus we need to adjust this.
-            
-            # if exp_typ == 'composition':
-            #     raise NotImplementedError("Half-chemistry analysis for composition experiments is not implemented yet.")
             
             assert len(potions_for_support) in [2,6], f"Expected 2 or 6 potions."
             correct_half_chemistry = support_to_query_mappings[support_key][feature_to_id_vocab[query_potion]]
             other_half_chemistry = support_to_query_mappings[support_key][potions_for_support[0]] if potions_for_support[1] == feature_to_id_vocab[query_potion] else support_to_query_mappings[support_key][potions_for_support[1]]
 
             if exp_typ == 'decomposition': 
-                # Create a set of all stones in the support set.
                 all_stones_in_support = set()
                 for potion in potions_for_support:
                     all_stones_in_support.update(support_to_query_mappings[support_key][potion])
@@ -1046,26 +1705,24 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 assert len(combined_set) <= 8, f"Expected 8 unique stones for support {support_key}, got {len(combined_set)}"
             
             if exp_typ == 'decomposition':
-                # Decode query start stone id (same logic as in non-support analysis)
-                query_feat_ids = query[:-1]  # 4 feature token IDs
-                query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
-                q_color, q_size, q_round, q_reward = query_features
-                query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
-                query_stone_id = stone_state_to_id[query_state_str]
+                if input_format == 'features':
+                    query_feat_ids = query[:-1]  # 4 feature token IDs
+                    query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+                    q_color, q_size, q_round, q_reward = query_features
+                    query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+                    query_stone_id = stone_state_to_id[query_state_str]
+                else:
+                    query_stone_token_id = query[0]
+                    query_stone_id = _get_stone_class_id_from_token(query_stone_token_id)
 
                 query_potion_str = feature_to_id_vocab[query_potion]
 
-                # Get adjacent stones for this (support_key, query_stone_id, potion)
                 adjacent_stones = per_support_per_query_adjacent_all_potions_mapping[support_key].get(query_stone_id, set())
                 adjacent_stones = set(adjacent_stones)
 
-                # Combine with correct half for this potion
                 adjacent_and_correct_half = set(correct_half_chemistry).union(adjacent_stones)
 
-                # Sanity: adjacency is fully connected; expect 6 unique stones 
-                # (4 in correct half, 3 adjacent, with 1 overlap)
                 if len(adjacent_and_correct_half) != 6:
-                    # You can relax this assert if you're worried about data edge cases
                     raise AssertionError(
                         f"Expected 6 stones in adjacent_and_correct_half, "
                         f"got {len(adjacent_and_correct_half)} for support {support_key}"
@@ -1074,39 +1731,29 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 adjacent_stones = set()
                 adjacent_and_correct_half = set()
 
-
-            # First do the classification for 8 vs 108.
-
+            # ...existing code for classification metrics (unchanged from here)...
             per_epoch_total_samples_per_reward_bin[query_start_stone_reward] += 1
 
-            # First classification: exact match out of 108
             if predicted_class_id == target_class_id:
                 predicted_exact_out_of_all_108_count += 1
                 per_epoch_complete_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
             
-            # Second classification: in-support
             if predicted_class_id in combined_set:
                 predicted_in_context_count += 1
-                
-                # NEW: Increment in-support total for this reward bin
                 per_epoch_in_support_samples_per_reward_bin[query_start_stone_reward] += 1
 
                 if predicted_class_id == target_class_id:
                     predicted_correct_within_context_count += 1
                     per_epoch_within_support_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
                 
-                # Third classification: correct half
                 if predicted_class_id in correct_half_chemistry:
                     correct_half_chemistry_count += 1
-                    
-                    # NEW: Increment correct-half total for this reward bin
                     per_epoch_in_support_correct_half_samples_per_reward_bin[query_start_stone_reward] += 1
 
                     if predicted_class_id == target_class_id:
                         within_class_correct += 1
                         per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
 
-                
                 elif predicted_class_id in other_half_chemistry:
                     other_half_correct += 1
                 
@@ -1117,29 +1764,23 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
             total += 1
 
-        # Now calculate accuracies and store them.
-
-        predicted_in_context_accuracy = predicted_in_context_count / total if total > 0 else 0 # The chance is 8/108 here.
+        # ...existing code for accuracy calculations and reward binning (unchanged)...
+        predicted_in_context_accuracy = predicted_in_context_count / total if total > 0 else 0
         predicted_in_context_accuracies.append(predicted_in_context_accuracy)
 
-        # Now calculate the correct half-chemistry accuracy if predicted in context.
-        predicted_in_context_correct_half_accuracy = correct_half_chemistry_count / predicted_in_context_count if predicted_in_context_count > 0 else 0 # The chance is 4/8 here.
+        predicted_in_context_correct_half_accuracy = correct_half_chemistry_count / predicted_in_context_count if predicted_in_context_count > 0 else 0
         predicted_in_context_correct_half_accuracies.append(predicted_in_context_correct_half_accuracy)
 
-        # Now calculate the other half-chemistry accuracy if predicted in context.
-        predicted_in_context_other_half_accuracy = other_half_correct / predicted_in_context_count if predicted_in_context_count > 0 else 0 # The chance is 4/8 here.
+        predicted_in_context_other_half_accuracy = other_half_correct / predicted_in_context_count if predicted_in_context_count > 0 else 0
         predicted_in_context_other_half_accuracies.append(predicted_in_context_other_half_accuracy)
 
-        # Now calculate the within-class accuracy if predicted in context and in correct half-chemistry.
-        predicted_in_context_correct_half_exact_accuracy = within_class_correct / correct_half_chemistry_count if correct_half_chemistry_count > 0 else 0 # The chance is 1/4 here.
+        predicted_in_context_correct_half_exact_accuracy = within_class_correct / correct_half_chemistry_count if correct_half_chemistry_count > 0 else 0
         predicted_in_context_correct_half_exact_accuracies.append(predicted_in_context_correct_half_exact_accuracy)
 
-        # Now calculate the correct within context accuracy.
-        predicted_correct_within_context_accuracy = predicted_correct_within_context_count / predicted_in_context_count if predicted_in_context_count > 0 else 0 # The chance is 1/8 here.
+        predicted_correct_within_context_accuracy = predicted_correct_within_context_count / predicted_in_context_count if predicted_in_context_count > 0 else 0
         predicted_correct_within_context.append(predicted_correct_within_context_accuracy)
 
-        # Now calculate the exact out of all 108 accuracy.
-        predicted_exact_out_of_all_108_accuracy = predicted_exact_out_of_all_108_count / total if total > 0 else 0 # The chance is 1/108 here.
+        predicted_exact_out_of_all_108_accuracy = predicted_exact_out_of_all_108_count / total if total > 0 else 0
         predicted_exact_out_of_all_108.append(predicted_exact_out_of_all_108_accuracy)
 
         if exp_typ == 'decomposition':
@@ -1155,23 +1796,12 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             p_in_adjacent_and_correct_half = 0.0
             p_correct_half_given_adjacent_and_correct_half = 0.0
 
-
         predicted_in_adjacent_and_correct_half_accuracies.append(p_in_adjacent_and_correct_half)
         predicted_correct_half_within_adjacent_and_correct_half_accuracies.append(p_correct_half_given_adjacent_and_correct_half)
 
-
-        # Assert that correct_half_chemistry_count is equal to the sum of per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts
         assert correct_half_chemistry_count == sum(per_epoch_in_support_correct_half_samples_per_reward_bin.values()), "Mismatch in correct half chemistry count."
 
-        # import pdb; pdb.set_trace()
-
-
-
-        # NOTE: The following is for the held_out experiments reward-binned analysis.
-        # Add the per-epoch reward binned accuracies to the overall accumulators.
-        # Add the per-epoch reward binned accuracies to the overall accumulators.
         for reward_bin in complete_query_stone_state_per_reward_binned_accuracy.keys():
-            # Accuracy out of all 108
             total_for_bin = per_epoch_total_samples_per_reward_bin[reward_bin]
             if total_for_bin > 0:
                 accuracy1 = per_epoch_complete_query_stone_state_per_reward_binned_counts[reward_bin] / total_for_bin
@@ -1181,35 +1811,17 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
             in_support_for_bin = per_epoch_in_support_samples_per_reward_bin[reward_bin]
             if in_support_for_bin > 0:
-                # accuracy2 = in_support_for_bin / total_for_bin
-
-                # This is exactly the within-support accuracy.
-
                 accuracy2 = per_epoch_within_support_query_stone_state_per_reward_binned_counts[reward_bin] / in_support_for_bin
             else:
                 accuracy2 = 0
             within_support_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy2)
 
-            # Accuracy within support and correct half (per reward bin)
             in_support_correct_half_for_bin = per_epoch_in_support_correct_half_samples_per_reward_bin[reward_bin]
             if in_support_correct_half_for_bin > 0:
                 accuracy3 = per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[reward_bin] / in_support_correct_half_for_bin
             else:
                 accuracy3 = 0
             within_support_within_half_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy3)
-
-        # Compute weighted average across all bins (for validation only)
-        # total_correct_in_bins = sum(per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts.values())
-        # total_samples_in_bins = sum(per_epoch_in_support_correct_half_samples_per_reward_bin.values())
-
-        # if total_samples_in_bins > 0:
-        #     avg_within_support_within_half_accuracy = total_correct_in_bins / total_samples_in_bins
-        # else:
-        #     avg_within_support_within_half_accuracy = 0
-
-        # assert abs(avg_within_support_within_half_accuracy - predicted_in_context_correct_half_exact_accuracy) < 1e-8, "Mismatch in weighted average accuracy calculation."
-            
-
 
     return (
         predicted_in_context_accuracies,
@@ -1226,7 +1838,6 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             within_support_within_half_query_stone_state_per_reward_binned_accuracy,
         ),
     )
-
 
 def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix='', file_paths = None, file_paths_non_subsampled = None,
                     frozen_layer = None):
@@ -1371,8 +1982,8 @@ def load_epoch_data_updated_single_seed(exp_typ: str = 'held_out', hop = 2, epoc
             continue
 
     predictions_by_epoch_by_seed[seed_number] = predictions_by_epoch
-    inputs_raw_file_path = f'{file_path}/inputs_classification_epoch_{epoch_number}.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs. 
-    targets_raw_file_path = f'{file_path}/targets_classification_epoch_{epoch_number}.npz' # Use the last epoch number loaded.
+    inputs_raw_file_path = f'{file_path}/inputs_classification_epoch_001.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs. 
+    targets_raw_file_path = f'{file_path}/targets_classification_epoch_001.npz' # Use the last epoch number loaded.
 
     inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
     targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
@@ -1431,6 +2042,7 @@ if __name__ == "__main__":
     parser.add_argument('--freeze_epoch', type=int, default=None, help="Specify the freeze epoch if getting the jobs for the frozen model experiments.")
     parser.add_argument('--data_split_seed', type=int, default=0, help="Data split seed.")
     parser.add_argument('--init_seed', type=int, default=42, help="Model initialization seed.")
+    parser.add_argument('--input_format', type=str, choices=['features', 'stone_states'], default='features', help="Input format for the model.")
 
 
 
@@ -1553,6 +2165,8 @@ if __name__ == "__main__":
                 
         elif exp_typ == 'held_out':
             updated_path = held_out_file_paths[hop][args.data_split_seed][args.init_seed]
+            if args.input_format == 'stone_states':
+                updated_path = held_out_file_paths_input_stone_ids[hop][args.data_split_seed][args.init_seed]
         start_epoch = hop_to_epoch_values[hop][0]
         frozen_layers = None
         
@@ -1639,11 +2253,17 @@ if __name__ == "__main__":
                     "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
                     "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
                 }
+                if args.input_format == 'stone_states':
+                    data_files = {
+                        "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/input_stone_states_shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_0_classification_filter_True_input_stone_states_output_stone_states_vocab.pkl",
+                        "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/input_stone_states_shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_0_classification_filter_True_input_stone_states_output_stone_states_metadata.json"
+                    }
             else:
                 data_files = {
                     "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced/normalized_compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
                     "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced/normalized_compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
                 }
+                
 
             vocab = pickle.load(open(data_files["vocab"], "rb"))
             # import pdb; pdb.set_trace()
@@ -1999,7 +2619,8 @@ if __name__ == "__main__":
         # Get half_chemistry_analysis results.
         half_chemistry_results = analyze_half_chemistry_behaviour(
             data_with_predictions, vocab, vocab['stone_state_to_id'], predictions_by_epoch, exp_typ=exp_typ, hop=hop,
-            composition_full_target_data = non_subsampled_composition_data[seed] if non_subsampled_composition_data is not None else None
+            composition_full_target_data = non_subsampled_composition_data[seed] if non_subsampled_composition_data is not None else None,
+            input_format = args.input_format
         )
         if exp_typ == 'composition':
             predicted_in_context_accuracies, \
@@ -2047,9 +2668,9 @@ if __name__ == "__main__":
 
     if args.save_stagewise_accuracies_only:
         if exp_typ == 'held_out':
-            # base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/'
+            base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/'
             # Base path for relative epoch frozen layer experiments.
-            base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_relative_epoch_frozen_layer_hop_4_exp_held_out/'
+            # base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_relative_epoch_frozen_layer_hop_4_exp_held_out/'
         elif exp_typ == 'decomposition':
             base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/'
         else:
@@ -2076,6 +2697,9 @@ if __name__ == "__main__":
                 output_file_name = args.custom_output_file
 
         # Create a pickle file with the output_file_name, sorted_epochs, and the metrics per_epoch for each seed.
+
+        if args.input_format == 'stone_states':
+            output_file_name = output_file_name.replace('.pkl', '_input_stone_states.pkl')
         with open(output_file_name, 'wb') as f:
             pickle.dump({
                 'epochs': np.arange(start_epoch, hop_to_epoch_values[hop][-1]+1),
@@ -2083,10 +2707,6 @@ if __name__ == "__main__":
             }, f)
         print(f"Saved stagewise accuracies to {output_file_name}")
         exit(0)
-
-
-
-
 
 
     # Now the plotting begins. First we need to average the result for each metric across seeds.

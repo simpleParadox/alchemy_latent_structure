@@ -228,7 +228,7 @@ def main():
     # parser.add_argument("--output_dir", type=str, default="src/data/subsampled_balanced_complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes",
                         # help="Directory to save preprocessed files")
     parser.add_argument("--output_dir", type=str, 
-                        # default="src/data/same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced",
+                    # default="src/data/same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced",
                         # default='src/data/decomposition_shuffled_support_preprocessed',
                         default='src/data/input_stone_states_complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed',
                         # default='src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes',

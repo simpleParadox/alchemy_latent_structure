@@ -74,11 +74,11 @@ DECOMPOSITION_METRICS: Tuple[str, ...] = (
 
 # Custom colors per metric (used in default mode).
 METRIC_COLORS: Dict[str, str] = {
-    "predicted_in_context_accuracies": "orange",
+    "predicted_in_context_accuracies": "blue",
     "predicted_in_context_correct_candidate_accuracies": "purple",
     "correct_within_candidates": "red",
-    "predicted_in_context_correct_half_accuracies": "purple",
-    "predicted_in_context_correct_half_exact_accuracies": "red", # Change this based on the hop length.
+    "predicted_in_context_correct_half_accuracies": "orange",
+    "predicted_in_context_correct_half_exact_accuracies": "green", # Change this based on the hop length.
     "predicted_in_context_other_half_accuracies": "red",
 
     "predicted_in_adjacent_and_correct_half_accuracies": "cyan",
