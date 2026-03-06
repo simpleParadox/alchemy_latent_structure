@@ -90,6 +90,58 @@ def extract_support_transitions(support_ids, input_vocab, stone_state_to_id):
     return transitions, stone_ids_in_support
 
 
+def extract_support_transitions_stone_states(support_ids, input_vocab, stone_state_to_id):
+    """
+    Parse transitions from the support segment when input_format='stone_states'.
+
+    Pattern (in tokens):
+        stone_id_token  potion_token  <io>  stone_id_token  <item_sep> ...
+
+    Each transition block is 4 tokens (stone + potion + <io> + stone) plus optional <item_sep>.
+
+    Returns:
+        transitions: list of (input_class_id, output_class_id)
+        stone_ids_in_support: set of all stone class_ids that appear as input/output
+    """
+    idx2word = {v: k for k, v in input_vocab.items()}
+    io_tok = '<io>'
+    item_sep_tok = '<item_sep>'
+
+    tokens = [idx2word[t] for t in support_ids]
+    transitions = []
+    stone_ids_in_support = set()
+
+    i = 0
+    while i + 3 < len(tokens):
+        # Need: stone_token, potion_token, <io>, stone_token
+        in_stone_str = tokens[i]
+        potion = tokens[i + 1]
+        sep = tokens[i + 2]
+        out_stone_str = tokens[i + 3]
+
+        if sep != io_tok:
+            i += 1
+            continue
+
+        in_id = stone_state_to_id.get(in_stone_str)
+        out_id = stone_state_to_id.get(out_stone_str)
+
+        if in_id is not None:
+            stone_ids_in_support.add(in_id)
+        if out_id is not None:
+            stone_ids_in_support.add(out_id)
+
+        if in_id is not None and out_id is not None:
+            transitions.append((in_id, out_id))
+
+        # Move past this transition: stone + potion + <io> + stone = 4 tokens
+        i += 4
+        # Skip <item_sep> if present
+        if i < len(tokens) and tokens[i] == item_sep_tok:
+            i += 1
+
+    return transitions, stone_ids_in_support
+
 
 def parse_stone_states_from_input(encoder_input_ids, input_vocab, stone_state_to_id):
     """
@@ -1614,7 +1666,33 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                         all_target_ids.update(target_ids)
                     per_support_per_query_adjacent_all_potions_mapping[support_key][query_stone_id] = all_target_ids
 
-    
+    # -----------------------------------------------------------------------
+    # Precompute support graph per chemistry (once, before the epoch loop).
+    # neighbors_per_chemistry[support_key][stone_id] = set of outgoing neighbor stone_ids
+    # This is only needed for exp_typ == 'held_out' (structural metrics).
+    # -----------------------------------------------------------------------
+    if exp_typ == 'held_out':
+        print("Precomputing support graphs per chemistry for structural metrics...")
+        neighbors_per_chemistry = {}
+        for sample in data:
+            encoder_input_ids = sample['encoder_input_ids']
+            support = encoder_input_ids[:-query_len]
+            support_key = tuple(support)
+
+            if support_key in neighbors_per_chemistry:
+                print(f"Support key {support_key} already processed, skipping graph extraction.")
+                continue  # already processed this chemistry
+
+            if input_format == 'features':
+                transitions, _ = extract_support_transitions(list(support), input_vocab, stone_state_to_id)
+            else:
+                transitions, _ = extract_support_transitions_stone_states(list(support), input_vocab, stone_state_to_id)
+
+            neighbors = defaultdict(set)
+            for in_id, out_id in transitions:
+                neighbors[in_id].add(out_id)
+            neighbors_per_chemistry[support_key] = neighbors
+
     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Organizing predictions by support and query"):
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
@@ -1644,7 +1722,17 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     complete_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
     within_support_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
     within_support_within_half_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
-    
+
+    # NEW: Structural metric accumulators (only for held_out)
+    if exp_typ == 'held_out':
+        # Same-half (query's half / other_half_chemistry) structural metrics
+        same_half_query_itself_accuracies = []
+        same_half_connected_to_query_accuracies = []
+        same_half_diagonal_to_query_accuracies = []
+        # Correct-half (target's half / correct_half_chemistry) structural metrics
+        correct_half_connected_to_target_accuracies = []
+        correct_half_diagonal_to_target_accuracies = []
+
     for epoch, predictions in tqdm(predictions_by_epoch.items(), desc="Analyzing epochs"):
         correct = 0
         other_half_correct = 0
@@ -1670,7 +1758,14 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         per_epoch_in_support_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
         per_epoch_in_support_correct_half_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
 
-        
+        # NEW: Per-epoch structural counters (only for held_out)
+        if exp_typ == 'held_out':
+            predicted_query_itself_count = 0
+            predicted_connected_to_query_count = 0
+            predicted_diagonal_to_query_count = 0
+            predicted_connected_to_target_count = 0
+            predicted_diagonal_to_target_count = 0
+
         for i, sample in enumerate(data):
             encoder_input_ids = sample['encoder_input_ids']
             target_class_id = sample['target_class_id']
@@ -1731,6 +1826,55 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 adjacent_stones = set()
                 adjacent_and_correct_half = set()
 
+            # NEW: Determine structural roles for held_out experiments
+            if exp_typ == 'held_out':
+                # Decode query stone id
+                if input_format == 'features':
+                    query_feat_ids = query[:-1]
+                    query_features = [feature_to_id_vocab[tok_id] for tok_id in query_feat_ids]
+                    q_color, q_size, q_round, q_reward = query_features
+                    query_state_str = f"{{color: {q_color}, size: {q_size}, roundness: {q_round}, reward: {q_reward}}}"
+                    query_stone_id = stone_state_to_id[query_state_str]
+                else:
+                    query_stone_token_id = query[0]
+                    query_stone_id = _get_stone_class_id_from_token(query_stone_token_id)
+
+                # Outgoing neighbors of query stone in the support graph
+                all_support_neighbors_of_query = neighbors_per_chemistry[support_key].get(query_stone_id, set())
+
+                # Filter to same-half (other_half_chemistry) only
+                same_half_set = set(other_half_chemistry)
+                same_half_neighbors_of_query = all_support_neighbors_of_query.intersection(same_half_set)
+                assert len(same_half_neighbors_of_query) == 2, (
+                    f"Expected exactly 2 same-half neighbors of query, "
+                    f"got {len(same_half_neighbors_of_query)} for support {support_key}, query_stone_id {query_stone_id}"
+                )
+
+                # Diagonal to query = same_half_set - same_half_neighbors_of_query - {query_stone_id}
+                diagonal_to_query = same_half_set - same_half_neighbors_of_query - {query_stone_id}
+                assert len(diagonal_to_query) == 1, (
+                    f"Expected exactly 1 diagonal-to-query stone, "
+                    f"got {len(diagonal_to_query)} for support {support_key}, query_stone_id {query_stone_id}"
+                )
+
+                # Outgoing neighbors of target stone in the support graph
+                all_support_neighbors_of_target = neighbors_per_chemistry[support_key].get(target_class_id, set())
+
+                # Filter to correct-half (correct_half_chemistry) only
+                correct_half_set = set(correct_half_chemistry)
+                same_half_neighbors_of_target = all_support_neighbors_of_target.intersection(correct_half_set)
+                assert len(same_half_neighbors_of_target) == 2, (
+                    f"Expected exactly 2 correct-half neighbors of target, "
+                    f"got {len(same_half_neighbors_of_target)} for support {support_key}, target_class_id {target_class_id}"
+                )
+
+                # Diagonal to target = correct_half_set - same_half_neighbors_of_target - {target_class_id}
+                diagonal_to_target = correct_half_set - same_half_neighbors_of_target - {target_class_id}
+                assert len(diagonal_to_target) == 1, (
+                    f"Expected exactly 1 diagonal-to-target stone, "
+                    f"got {len(diagonal_to_target)} for support {support_key}, target_class_id {target_class_id}"
+                )
+
             # ...existing code for classification metrics (unchanged from here)...
             per_epoch_total_samples_per_reward_bin[query_start_stone_reward] += 1
 
@@ -1754,9 +1898,25 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                         within_class_correct += 1
                         per_epoch_within_support_within_half_query_stone_state_per_reward_binned_counts[query_start_stone_reward] += 1
 
+                    # NEW: Structural metrics for correct half (non-target predictions)
+                    if exp_typ == 'held_out': # and predicted_class_id != target_class_id:
+                        if predicted_class_id in same_half_neighbors_of_target:
+                            predicted_connected_to_target_count += 1
+                        elif predicted_class_id in diagonal_to_target:
+                            predicted_diagonal_to_target_count += 1
+
                 elif predicted_class_id in other_half_chemistry:
                     other_half_correct += 1
-                
+
+                    # NEW: Structural metrics for same half (query's half)
+                    if exp_typ == 'held_out':
+                        if predicted_class_id == query_stone_id:
+                            predicted_query_itself_count += 1
+                        elif predicted_class_id in same_half_neighbors_of_query:
+                            predicted_connected_to_query_count += 1
+                        elif predicted_class_id in diagonal_to_query:
+                            predicted_diagonal_to_query_count += 1
+
                 if exp_typ == 'decomposition' and predicted_class_id in adjacent_and_correct_half:
                     predicted_in_adjacent_and_correct_half_count += 1
                     if predicted_class_id in correct_half_chemistry:
@@ -1801,6 +1961,33 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
         assert correct_half_chemistry_count == sum(per_epoch_in_support_correct_half_samples_per_reward_bin.values()), "Mismatch in correct half chemistry count."
 
+        # Sanity check and structural proportion computation (held_out only)
+        if exp_typ == 'held_out':
+            # Sanity check: same-half structural counts must sum to other_half_correct
+            assert (predicted_query_itself_count + predicted_connected_to_query_count + predicted_diagonal_to_query_count == other_half_correct), (
+                f"Mismatch in same-half structural counts: "
+                f"{predicted_query_itself_count} + {predicted_connected_to_query_count} + {predicted_diagonal_to_query_count} != {other_half_correct}"
+            )
+
+            # Given prediction in same half (other_half_chemistry / query's half)
+            p_query_itself = predicted_query_itself_count / other_half_correct if other_half_correct > 0 else 0.0
+            p_connected_to_query = predicted_connected_to_query_count / other_half_correct if other_half_correct > 0 else 0.0
+            p_diagonal_to_query = predicted_diagonal_to_query_count / other_half_correct if other_half_correct > 0 else 0.0
+
+            same_half_query_itself_accuracies.append(p_query_itself)
+            same_half_connected_to_query_accuracies.append(p_connected_to_query)
+            same_half_diagonal_to_query_accuracies.append(p_diagonal_to_query)
+
+            # Given prediction in correct half (correct_half_chemistry / target's half), for non-target predictions
+            non_target_in_correct_half = correct_half_chemistry_count - within_class_correct
+            # p_connected_to_target = predicted_connected_to_target_count / non_target_in_correct_half if non_target_in_correct_half > 0 else 0.0
+            # p_diagonal_to_target = predicted_diagonal_to_target_count / non_target_in_correct_half if non_target_in_correct_half > 0 else 0.0
+            p_connected_to_target = predicted_connected_to_target_count / correct_half_chemistry_count if non_target_in_correct_half > 0 else 0.0
+            p_diagonal_to_target = predicted_diagonal_to_target_count / correct_half_chemistry_count if non_target_in_correct_half > 0 else 0.0
+
+            correct_half_connected_to_target_accuracies.append(p_connected_to_target)
+            correct_half_diagonal_to_target_accuracies.append(p_diagonal_to_target)
+
         for reward_bin in complete_query_stone_state_per_reward_binned_accuracy.keys():
             total_for_bin = per_epoch_total_samples_per_reward_bin[reward_bin]
             if total_for_bin > 0:
@@ -1823,6 +2010,21 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 accuracy3 = 0
             within_support_within_half_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy3)
 
+    # Build structural metrics return dicts (held_out only)
+    if exp_typ == 'held_out':
+        same_half_structural_metrics = {
+            'predicted_query_itself': same_half_query_itself_accuracies,
+            'predicted_connected_to_query': same_half_connected_to_query_accuracies,
+            'predicted_diagonal_to_query': same_half_diagonal_to_query_accuracies,
+        }
+        correct_half_structural_metrics = {
+            'predicted_connected_to_target': correct_half_connected_to_target_accuracies,
+            'predicted_diagonal_to_target': correct_half_diagonal_to_target_accuracies,
+        }
+    else:
+        same_half_structural_metrics = {}
+        correct_half_structural_metrics = {}
+
     return (
         predicted_in_context_accuracies,
         predicted_in_context_correct_half_accuracies,
@@ -1837,6 +2039,8 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             within_support_query_stone_state_per_reward_binned_accuracy,
             within_support_within_half_query_stone_state_per_reward_binned_accuracy,
         ),
+        same_half_structural_metrics,
+        correct_half_structural_metrics,
     )
 
 def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix='', file_paths = None, file_paths_non_subsampled = None,
@@ -2043,6 +2247,8 @@ if __name__ == "__main__":
     parser.add_argument('--data_split_seed', type=int, default=0, help="Data split seed.")
     parser.add_argument('--init_seed', type=int, default=42, help="Model initialization seed.")
     parser.add_argument('--input_format', type=str, choices=['features', 'stone_states'], default='features', help="Input format for the model.")
+    parser.add_argument('--structural_analysis', action='store_true', default=False,
+                        help="Plot structural prediction breakdown metrics (same-half and correct-half) for held_out experiments.")
 
 
 
@@ -2645,6 +2851,8 @@ if __name__ == "__main__":
                 predicted_in_adjacent_and_correct_half_accuracies,
                 predicted_correct_half_within_adjacent_and_correct_half_accuracies,
                 query_start_stone_reward_binning_analysis,
+                same_half_structural_metrics,
+                correct_half_structural_metrics,
             ) = half_chemistry_results
 
             complete_query_stone_state_per_reward_binned_accuracy, within_support_query_stone_state_per_reward_binned_accuracy, within_support_within_half_query_stone_state_per_reward_binned_accuracy = query_start_stone_reward_binning_analysis
@@ -2662,7 +2870,9 @@ if __name__ == "__main__":
                 'predicted_correct_half_within_adjacent_and_correct_half_accuracies': predicted_correct_half_within_adjacent_and_correct_half_accuracies,
                 'complete_query_stone_state_per_reward_binned_accuracy': complete_query_stone_state_per_reward_binned_accuracy,
                 'within_support_query_stone_state_per_reward_binned_accuracy': within_support_query_stone_state_per_reward_binned_accuracy,
-                'within_support_within_half_query_stone_state_per_reward_binned_accuracy': within_support_within_half_query_stone_state_per_reward_binned_accuracy
+                'within_support_within_half_query_stone_state_per_reward_binned_accuracy': within_support_within_half_query_stone_state_per_reward_binned_accuracy,
+                'same_half_structural_metrics': same_half_structural_metrics,
+                'correct_half_structural_metrics': correct_half_structural_metrics,
             }
 
 
@@ -2930,6 +3140,61 @@ if __name__ == "__main__":
         std_errors[metric] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
         print(f"\nAveraged {metric} over seeds:")
 
+    # Average structural metrics across seeds (held_out only, when --structural_analysis is set)
+    structural_metrics_keys = []
+    if exp_typ == 'held_out' and args.structural_analysis:
+        # Flatten same_half_structural_metrics into top-level keys
+        for sub_key in ['predicted_query_itself', 'predicted_connected_to_query', 'predicted_diagonal_to_query']:
+            flat_key = f'same_half_{sub_key}'
+            structural_metrics_keys.append(flat_key)
+            all_seed_values = [seed_results[seed]['same_half_structural_metrics'][sub_key] for seed in seed_results.keys()]
+            max_length = max(len(values) for values in all_seed_values)
+            padded_seed_values = []
+            for values in all_seed_values:
+                if len(values) < max_length:
+                    padded_values = list(values)
+                    for epoch_idx in range(len(values), max_length):
+                        available_values = [seed_vals[epoch_idx] for seed_vals in all_seed_values if len(seed_vals) > epoch_idx]
+                        if available_values:
+                            imputed_value = np.mean(available_values)
+                        else:
+                            imputed_value = values[-1]
+                        padded_values.append(imputed_value)
+                    padded_seed_values.append(padded_values)
+                else:
+                    padded_seed_values.append(values)
+            all_seed_values = np.array(padded_seed_values)
+            averaged_results[flat_key] = np.mean(all_seed_values, axis=0)
+            individual_seed_results[flat_key] = all_seed_values
+            std_errors[flat_key] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
+            print(f"\nAveraged {flat_key} over seeds:")
+
+        # Flatten correct_half_structural_metrics into top-level keys
+        for sub_key in ['predicted_connected_to_target', 'predicted_diagonal_to_target']:
+            flat_key = f'correct_half_{sub_key}'
+            structural_metrics_keys.append(flat_key)
+            all_seed_values = [seed_results[seed]['correct_half_structural_metrics'][sub_key] for seed in seed_results.keys()]
+            max_length = max(len(values) for values in all_seed_values)
+            padded_seed_values = []
+            for values in all_seed_values:
+                if len(values) < max_length:
+                    padded_values = list(values)
+                    for epoch_idx in range(len(values), max_length):
+                        available_values = [seed_vals[epoch_idx] for seed_vals in all_seed_values if len(seed_vals) > epoch_idx]
+                        if available_values:
+                            imputed_value = np.mean(available_values)
+                        else:
+                            imputed_value = values[-1]
+                        padded_values.append(imputed_value)
+                    padded_seed_values.append(padded_values)
+                else:
+                    padded_seed_values.append(values)
+            all_seed_values = np.array(padded_seed_values)
+            averaged_results[flat_key] = np.mean(all_seed_values, axis=0)
+            individual_seed_results[flat_key] = all_seed_values
+            std_errors[flat_key] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
+            print(f"\nAveraged {flat_key} over seeds:")
+
     # Plot the averaged results with error bars using fill_between
     epochs = range(len(averaged_results['predicted_in_context_accuracies']))
 
@@ -3038,73 +3303,139 @@ if __name__ == "__main__":
         # Exit after plotting individual seeds
         exit()
 
-    fig = plt.figure(figsize=(12, 8))
-    for metric, label in metrics:
-        mean = averaged_results[metric]
-        sem = std_errors[metric]
-        # colors = held_out_colors if exp_typ == 'held_out' else colors
-        if exp_typ == 'composition':
-            colors = colors_composition
-        elif exp_typ == 'held_out':
-            colors = held_out_colors
-        else:
-            colors = colors
-        if exp_typ == 'held_out':
-            plt.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(metric, 'gold'))
-            plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(metric, 'gold'))
-        else:
-            # if metric == 'predicted_in_context_correct_half_exact_accuracies':
-            #     # For P(C | A ∩ B), use dashed line
-            #     plt.plot(epochs, mean, label=label, linewidth=2, linestyle='dashed', color=colors.get(hop, {}).get(metric, 'gold'))
-            #     plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(hop, {}).get(metric, 'gold'))
-            # else:
-            plt.plot(epochs, mean, label=label, linewidth=2, color=colors.get(hop, {}).get(metric, 'gold'), linestyle=args.custom_linestyle if args.custom_linestyle else linestyles.get(metric, 'solid'))
-            plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(hop, {}).get(metric, 'gold'))
-        # Add text annotations at specific epochs
-        if args.annotated_epochs:
-            annotate_epochs = hop_to_epoch_values[hop]
-            for anno_epoch in annotate_epochs:
-                if anno_epoch < len(mean):
-                    try:
-                        plt.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
-                                fontsize=20, ha='center', va='bottom',
-                                color='black')
-                    except:
-                        print(f"Could not annotate epoch {anno_epoch} for metric {metric}")
+    if exp_typ == 'held_out' and args.structural_analysis and len(structural_metrics_keys) > 0:
+        # Two-panel plot: original metrics on left, structural metrics on right
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 8))
 
-    plt.xlabel('Epoch', fontsize=26)
-    plt.ylabel('Accuracy', fontsize=26)
-    plt.xticks(fontsize=24)
-    plt.yticks(fontsize=24)
-    # if exp_typ == 'decomposition':
-    #     plt.title(f'Phasic learning of intermediate stone inference ({hop}-hop)', fontsize=24, pad=60)
-    # else:
-    #     plt.title(f'Phasic learning of latent structure learning', fontsize=24, pad=60)
-    plt.legend(fontsize=18, loc='center right', ncol=1, frameon=True)
-    plt.grid(True, alpha=0.3)
-    plt.ylim(0, 1)
-    # plt.tight_layout()
-    custom_output_file = args.custom_output_file
-    if custom_output_file is not None:
-        plt.savefig(f'{custom_output_file}.png')
-        plt.savefig(f'{custom_output_file}.pdf', bbox_inches='tight')
-    else:
-        if args.get_output_file_from_input_path:
-            file_paths = composition_file_paths if exp_typ == 'composition' else decomposition_file_paths if exp_typ == 'decomposition' else None
-            assert len(file_paths[hop]) == 1, "Currently only supports single file path to get output file name."
-            input_path = file_paths[hop][0]
-            # Extract only the 'complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_8.5e-05' and the seed value from the input path. Use regex.
-            match = re.search(r'complete_graph/(.+?)/seed_(\d+)', input_path)
-            if match:
-                # Make sure to replace '/' with '_' in the extracted part.
-                extracted_part = match.group(1).replace('/', '_')
-                seed_value = match.group(2)
-                output_file_name = f"{exp_typ}_{hop}hop_{extracted_part}_seed_{seed_value}_phasic_learning_of_latent_structure.png"
-                plt.savefig(output_file_name)
-                plt.savefig(output_file_name.replace('.png', '.pdf'), bbox_inches='tight')
+        # Left panel: original metrics
+        for metric, label in metrics:
+            mean = averaged_results[metric]
+            sem = std_errors[metric]
+            ax1.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=held_out_colors.get(metric, 'gold'))
+            ax1.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=held_out_colors.get(metric, 'gold'))
+            if args.annotated_epochs:
+                annotate_epochs = hop_to_epoch_values[hop]
+                for anno_epoch in annotate_epochs:
+                    if anno_epoch < len(mean):
+                        try:
+                            ax1.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}',
+                                    fontsize=14, ha='center', va='bottom', color='black')
+                        except:
+                            print(f"Could not annotate epoch {anno_epoch} for metric {metric}")
+
+        ax1.set_xlabel('Epoch', fontsize=22)
+        ax1.set_ylabel('Accuracy', fontsize=22)
+        ax1.tick_params(axis='x', labelsize=20)
+        ax1.tick_params(axis='y', labelsize=20)
+        ax1.legend(fontsize=14, loc='center right', ncol=1, frameon=True)
+        ax1.grid(True, alpha=0.3)
+        ax1.set_ylim(0, 1)
+        ax1.set_title('Half-Chemistry Metrics', fontsize=20)
+
+        # Right panel: structural metrics
+        structural_metric_labels = {
+            'same_half_predicted_query_itself': 'P(query itself | same half)',
+            'same_half_predicted_connected_to_query': 'P(connected to query | same half)',
+            'same_half_predicted_diagonal_to_query': 'P(diagonal to query | same half)',
+            'correct_half_predicted_connected_to_target': 'P(connected to target | correct half)',
+            'correct_half_predicted_diagonal_to_target': 'P(diagonal to target | correct half)',
+        }
+        structural_metric_colors = {
+            'same_half_predicted_query_itself': 'tab:purple',
+            'same_half_predicted_connected_to_query': 'black',
+            'same_half_predicted_diagonal_to_query': 'tab:brown',
+            'correct_half_predicted_connected_to_target': 'tab:blue',
+            'correct_half_predicted_diagonal_to_target': 'tab:cyan',
+        }
+        structural_metric_linestyles = {
+            'same_half_predicted_query_itself': 'solid',
+            'same_half_predicted_connected_to_query': 'solid',
+            'same_half_predicted_diagonal_to_query': 'solid',
+            'correct_half_predicted_connected_to_target': 'dashed',
+            'correct_half_predicted_diagonal_to_target': 'dashed',
+        }
+
+        for flat_key in structural_metrics_keys:
+            mean = averaged_results[flat_key]
+            sem = std_errors[flat_key]
+            label = structural_metric_labels.get(flat_key, flat_key)
+            color = structural_metric_colors.get(flat_key, 'black')
+            ls = structural_metric_linestyles.get(flat_key, 'solid')
+            ax2.plot(epochs, mean, label=label, linewidth=2, linestyle=ls, color=color)
+            ax2.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=color)
+
+        ax2.set_xlabel('Epoch', fontsize=22)
+        ax2.set_ylabel('Proportion', fontsize=22)
+        ax2.tick_params(axis='x', labelsize=20)
+        ax2.tick_params(axis='y', labelsize=20)
+        ax2.legend(fontsize=14, loc='best', ncol=1, frameon=True)
+        ax2.grid(True, alpha=0.3)
+        ax2.set_ylim(0, 1)
+        ax2.set_title('Structural Prediction Breakdown', fontsize=20)
+
+        plt.tight_layout()
+        custom_output_file = args.custom_output_file
+        if custom_output_file is not None:
+            plt.savefig(f'{custom_output_file}.png')
+            plt.savefig(f'{custom_output_file}.pdf', bbox_inches='tight')
         else:
-            plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_of_latent_structure.png')
-            plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inches='tight')
+            plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_with_structural_metrics.png')
+            plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_with_structural_metrics.pdf', bbox_inches='tight')
+
+    else:
+        fig = plt.figure(figsize=(12, 8))
+        for metric, label in metrics:
+            mean = averaged_results[metric]
+            sem = std_errors[metric]
+            if exp_typ == 'composition':
+                colors = colors_composition
+            elif exp_typ == 'held_out':
+                colors = held_out_colors
+            else:
+                colors = colors
+            if exp_typ == 'held_out':
+                plt.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(metric, 'gold'))
+                plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(metric, 'gold'))
+            else:
+                plt.plot(epochs, mean, label=label, linewidth=2, color=colors.get(hop, {}).get(metric, 'gold'), linestyle=args.custom_linestyle if args.custom_linestyle else linestyles.get(metric, 'solid'))
+                plt.fill_between(epochs, mean - sem, mean + sem, alpha=0.2, color=colors.get(hop, {}).get(metric, 'gold'))
+            if args.annotated_epochs:
+                annotate_epochs = hop_to_epoch_values[hop]
+                for anno_epoch in annotate_epochs:
+                    if anno_epoch < len(mean):
+                        try:
+                            plt.text(anno_epoch, mean[anno_epoch], f'{mean[anno_epoch]:.2f}', 
+                                    fontsize=20, ha='center', va='bottom',
+                                    color='black')
+                        except:
+                            print(f"Could not annotate epoch {anno_epoch} for metric {metric}")
+
+        plt.xlabel('Epoch', fontsize=26)
+        plt.ylabel('Accuracy', fontsize=26)
+        plt.xticks(fontsize=24)
+        plt.yticks(fontsize=24)
+        plt.legend(fontsize=18, loc='center right', ncol=1, frameon=True)
+        plt.grid(True, alpha=0.3)
+        plt.ylim(0, 1)
+        custom_output_file = args.custom_output_file
+        if custom_output_file is not None:
+            plt.savefig(f'{custom_output_file}.png')
+            plt.savefig(f'{custom_output_file}.pdf', bbox_inches='tight')
+        else:
+            if args.get_output_file_from_input_path:
+                file_paths = composition_file_paths if exp_typ == 'composition' else decomposition_file_paths if exp_typ == 'decomposition' else None
+                assert len(file_paths[hop]) == 1, "Currently only supports single file path to get output file name."
+                input_path = file_paths[hop][0]
+                match = re.search(r'complete_graph/(.+?)/seed_(\d+)', input_path)
+                if match:
+                    extracted_part = match.group(1).replace('/', '_')
+                    seed_value = match.group(2)
+                    output_file_name = f"{exp_typ}_{hop}hop_{extracted_part}_seed_{seed_value}_phasic_learning_of_latent_structure.png"
+                    plt.savefig(output_file_name)
+                    plt.savefig(output_file_name.replace('.png', '.pdf'), bbox_inches='tight')
+            else:
+                plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_of_latent_structure.png')
+                plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inches='tight')
 
 
 
