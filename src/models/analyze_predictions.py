@@ -11,7 +11,8 @@ import re
 
 from baseline_and_frozen_filepaths import held_out_file_paths, frozen_held_out_file_paths_per_layer_per_init_seed, composition_file_paths, composition_file_paths_non_subsampled, \
         decomposition_file_paths, decomposition_file_paths_non_subsampled, composition_baseline_file_paths, composition_non_subsampled_file_paths_dict, \
-        decomposition_baseline_file_paths, decomposition_non_subsampled_file_paths_dict, decomposition_baseline_pickle_file_paths, held_out_file_paths_input_stone_ids
+        decomposition_baseline_file_paths, decomposition_non_subsampled_file_paths_dict, decomposition_baseline_pickle_file_paths, held_out_file_paths_input_stone_ids, \
+        get_composition_cross_hop_prediction_path
 
 # Load the metadata, data, and vocab.
 if cluster == 'vulcan':
@@ -2091,7 +2092,6 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
             if file_paths_non_subsampled is not None:
                 non_subsampled_path = file_paths_non_subsampled[hop][i]
                 # Check if the seed in the non_subsampled_path matches the current seed
-                import pdb; pdb.set_trace()
                 match_non_subsampled = re.search(r'seed_(\d+)', non_subsampled_path)
                 if match_non_subsampled:
                     seed_non_subsampled = int(match_non_subsampled.group(1))
@@ -2247,6 +2247,10 @@ if __name__ == "__main__":
     parser.add_argument('--data_split_seed', type=int, default=0, help="Data split seed.")
     parser.add_argument('--init_seed', type=int, default=42, help="Model initialization seed.")
     parser.add_argument('--input_format', type=str, choices=['features', 'stone_states'], default='features', help="Input format for the model.")
+    parser.add_argument('--cross_hop', action='store_true', default=False,
+                        help="Enable cross-hop analysis. Uses train_hop model predictions on test_hop (--hop) val data.")
+    parser.add_argument('--train_hop', type=int, default=None,
+                        help="Training hop for cross-hop analysis. Required when --cross_hop is set.")
     parser.add_argument('--structural_analysis', action='store_true', default=False,
                         help="Plot structural prediction breakdown metrics (same-half and correct-half) for held_out experiments.")
 
@@ -2363,9 +2367,21 @@ if __name__ == "__main__":
     """
 
 
+    if args.cross_hop:
+        assert args.train_hop is not None, "--train_hop must be specified when --cross_hop is set."
+        assert exp_typ == 'composition', "--cross_hop is currently only supported for composition experiments."
+        print(f"Cross-hop mode: train_hop={args.train_hop}, test_hop={hop}")
+
     if args.save_stagewise_accuracies_only:
         if exp_typ == 'composition':
-            updated_path  = composition_baseline_file_paths[hop][args.data_split_seed][args.init_seed]
+            if args.cross_hop:
+                updated_path = get_composition_cross_hop_prediction_path(
+                    train_hop=args.train_hop, test_hop=hop,
+                    data_split_seed=args.data_split_seed, init_seed=args.init_seed
+                )
+                print(f"Cross-hop prediction path: {updated_path}")
+            else:
+                updated_path  = composition_baseline_file_paths[hop][args.data_split_seed][args.init_seed]
         elif exp_typ == 'decomposition':
             updated_path = decomposition_baseline_file_paths[hop][args.data_split_seed][args.init_seed]
                 
@@ -2883,6 +2899,8 @@ if __name__ == "__main__":
             # base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_relative_epoch_frozen_layer_hop_4_exp_held_out/'
         elif exp_typ == 'decomposition':
             base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/'
+        elif args.cross_hop:
+            base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_cross_hop_composition/'
         else:
             base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/'
 
@@ -2898,6 +2916,13 @@ if __name__ == "__main__":
                 f'data_split_seed_{args.data_split_seed}_init_seed_{args.init_seed}_hop_{hop}_exp_{exp_typ}_{suffix}.pkl'
             )
             start_epoch = args.freeze_epoch
+        elif args.cross_hop:
+            # Cross-hop filename: include both train_hop and test_hop
+            output_file_name = (
+                f'stagewise_accuracies_data_split_seed_{args.data_split_seed}_init_seed_{args.init_seed}'
+                f'_train_hop_{args.train_hop}_test_hop_{hop}_exp_{exp_typ}.pkl'
+            )
+            start_epoch = hop_to_epoch_values[hop][0]
         else:
             # Add data_split_seed and init_seed to the filename without frozen layer
             output_file_name = f'stagewise_accuracies_data_split_seed_{args.data_split_seed}_init_seed_{args.init_seed}_hop_{hop}_exp_{exp_typ}.pkl'

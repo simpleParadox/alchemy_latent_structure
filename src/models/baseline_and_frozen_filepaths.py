@@ -370,6 +370,10 @@ composition_baseline_pickle_file_paths = {
 }
 
 
+
+
+
+
 ### Decomposition file paths
 decomposition_baseline_file_paths = {
     2: {
@@ -670,3 +674,27 @@ decomposition_file_paths = {
         # '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_16/predictions/',
         ]
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cross-hop composition helpers
+# ─────────────────────────────────────────────────────────────────────────────
+def get_composition_cross_hop_prediction_path(train_hop, test_hop, data_split_seed, init_seed):
+    """
+    Derive the cross-hop prediction directory from the baseline composition paths.
+
+    For in-distribution (train_hop == test_hop) → returns the existing predictions/ dir.
+    For cross-hop → replaces predictions/ with val_predictions_shop_1_qhop_{test_hop}/.
+
+    The baseline prediction dir looks like:
+        .../shop_1_qhop_{train_hop}/seed_{data_split_seed}/init_seed_{init_seed}/predictions/
+    Cross-hop predictions saved by val.py live at:
+        .../shop_1_qhop_{train_hop}/seed_{data_split_seed}/init_seed_{init_seed}/val_predictions_shop_1_qhop_{test_hop}/
+    """
+    base_path = composition_baseline_file_paths[train_hop][data_split_seed][init_seed]
+    if train_hop == test_hop:
+        return base_path  # Already points to predictions/
+    else:
+        # Replace trailing predictions/ with val_predictions_shop_1_qhop_{test_hop}/
+        parent = base_path.rstrip('/').rsplit('/predictions', 1)[0]
+        return f"{parent}/val_predictions_shop_1_qhop_{test_hop}/predictions/"

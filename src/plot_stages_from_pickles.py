@@ -47,6 +47,10 @@ BASELINE_STAGEWISE_PICKLE_BASEDIR: Dict[str, str] = {
     "held_out": "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_hop_4_exp_held_out/",
 }
 
+CROSS_HOP_STAGEWISE_PICKLE_BASEDIR: str = (
+    "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_cross_hop_composition/"
+)
+
 
 # -------------------------
 # Metrics to plot (default mode)
@@ -154,6 +158,21 @@ def build_pickle_path(exp_typ: str, hop: int, data_split_seed: int, init_seed: i
     base = _ensure_dir_configured(exp_typ)
     fname = f"stagewise_accuracies_data_split_seed_{data_split_seed}_init_seed_{init_seed}_hop_{hop}_exp_{exp_typ}.pkl"
     return os.path.join(base, fname)
+
+
+def build_cross_hop_pickle_path(
+    train_hop: int, test_hop: int, data_split_seed: int, init_seed: int,
+    exp_typ: str = "composition",
+) -> str:
+    """
+    Matches the cross-hop filename pattern from analyze_predictions.py:
+      stagewise_accuracies_data_split_seed_{}_init_seed_{}_train_hop_{}_test_hop_{}_exp_composition.pkl
+    """
+    fname = (
+        f"stagewise_accuracies_data_split_seed_{data_split_seed}_init_seed_{init_seed}"
+        f"_train_hop_{train_hop}_test_hop_{test_hop}_exp_{exp_typ}.pkl"
+    )
+    return os.path.join(CROSS_HOP_STAGEWISE_PICKLE_BASEDIR, fname)
 
 
 def load_stagewise_pickle(path: str) -> dict:
@@ -271,10 +290,18 @@ def collect_series_default(
     strict: bool,
     max_points: Optional[int],
     custom_pkl_path = None,
+    cross_hop: bool = False,
+    train_hop: Optional[int] = None,
 ) -> List[SeriesSpec]:
     series: List[SeriesSpec] = []
     for init_seed in init_seeds:
-        if custom_pkl_path is None:
+        if cross_hop and train_hop is not None:
+            pkl_path = build_cross_hop_pickle_path(
+                train_hop=train_hop, test_hop=hop,
+                data_split_seed=data_split_seed, init_seed=init_seed,
+                exp_typ=exp_typ,
+            )
+        elif custom_pkl_path is None:
             pkl_path = build_pickle_path(exp_typ=exp_typ, hop=hop, data_split_seed=data_split_seed, init_seed=init_seed)
         else:
             pkl_path = custom_pkl_path
@@ -426,6 +453,7 @@ def plot_default(
                 label=(f"{disp}" if legend_mode in {"all", "mean_only"} else None),
             )
 
+    ax.set_title(title, fontsize=18)
     ax.set_xlabel("Epoch", fontsize=26)
     ax.set_ylabel("Accuracy", fontsize=26)
     if y_lim is not None:
@@ -434,7 +462,6 @@ def plot_default(
     # Set tick label font size
     ax.tick_params(axis='both', which='major', labelsize=24)
     if legend_mode != "none":
-
         # Reorder legend labels to be in a specific order. Used for composition plots.
         if exp_typ == "composition":
             handles, labels = ax.get_legend_handles_labels()
@@ -516,6 +543,7 @@ def plot_reward_binned(
                 )
 
     # ax.set_title(title)
+    ax.set_title(title, fontsize=18)
     ax.set_xlabel("Epoch", fontsize=26)
     ax.set_ylabel("Accuracy", fontsize=26)
 
@@ -568,6 +596,12 @@ def main():
     parser.add_argument("--ymax", type=float, default=1.0, help="Y-axis max (use -1 to disable y-lim).")
 
     parser.add_argument("--custom_pickle_path", type=str, default=None, help="Custom pickle path to use instead of building from exp_typ, hop, seeds.")
+
+    # Cross-hop analysis
+    parser.add_argument("--cross_hop", action="store_true", default=False,
+                        help="Use cross-hop pickle naming convention (train_hop/test_hop).")
+    parser.add_argument("--train_hop", type=int, default=None,
+                        help="Training hop for cross-hop analysis. --hop is used as the test hop.")
 
     # NEW: reward-binning feature (held_out only)
     parser.add_argument(
@@ -624,6 +658,9 @@ def main():
         )
         return
 
+    if args.cross_hop and args.train_hop is None:
+        raise ValueError("--train_hop must be specified when --cross_hop is set.")
+
     # Default (non reward-binned)
     metrics = list(choose_metrics(args.exp_typ))
     series = collect_series_default(
@@ -635,9 +672,14 @@ def main():
         strict=args.strict,
         max_points=max_points,
         custom_pkl_path=args.custom_pickle_path,
+        cross_hop=args.cross_hop,
+        train_hop=args.train_hop,
     )
 
-    title = f"Stages from pickles | exp_typ={args.exp_typ} | hop={args.hop} | data_split_seed={args.data_split_seed}"
+    if args.cross_hop:
+        title = f"Stages | train_hop={args.train_hop} → test_hop={args.hop} | data_split_seed={args.data_split_seed}"
+    else:
+        title = f"Stages from pickles | exp_typ={args.exp_typ} | hop={args.hop} | data_split_seed={args.data_split_seed}"
     plot_default(
         exp_typ=args.exp_typ,
         series=series,
