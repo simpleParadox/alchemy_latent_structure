@@ -437,7 +437,7 @@ def plot_default(
                 alpha=seed_alpha if plot_mean else 1.0,
                 linestyle=seed_to_ls[seed],
                 linewidth=1.75 if plot_mean else 2.0,
-                label=(f"{m} | init_seed={seed}" if legend_mode == "all" else None),
+                label=(f"{m}" if legend_mode == "all" else None),
             )
 
         # mean overlay
