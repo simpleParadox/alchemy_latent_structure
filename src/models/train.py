@@ -1075,6 +1075,7 @@ def main():
     elif cluster == 'cc':
         # Profile is cc.
         base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/projects/dm_alchemy/'
+        args.store_in_scratch = True
     elif cluster == 'rorqual':
         base_path = '/home/rsaha/links/projects/def-afyshe-ab/rsaha/projects/dm_alchemy/'
     elif cluster == 'vulcan':
@@ -1754,11 +1755,12 @@ def main():
                     best_val_loss = val_loss
                 if args.custom_checkpoint_dir is not None:
                     # Replace 'def-afyshe-ab' with 'aip-afyshe' in the custom checkpoint dir if needed
-                    args.save_dir = args.save_dir.replace('def-afyshe-ab', 'aip-afyshe')
+                    if cluster != 'cc':
+                        args.save_dir = args.save_dir.replace('def-afyshe-ab', 'aip-afyshe')
                 if args.store_in_scratch:
                     # Replace anything before 'dm_alchemy' with '/home/rsaha/scratch'
                     args.save_dir = re.sub(r'^.*dm_alchemy', '/home/rsaha/scratch/dm_alchemy', args.save_dir)
-                    # Check if updated args.save_dir exists, if not create it
+                # Check if updated args.save_dir exists, if not create it
                 if not os.path.exists(args.save_dir):
                     os.makedirs(args.save_dir)
                     print(f"Created custom checkpoint directory: {args.save_dir}")
