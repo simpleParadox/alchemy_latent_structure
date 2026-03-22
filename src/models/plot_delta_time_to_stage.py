@@ -7,9 +7,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 METRIC_KEYS = {
-    "p_b_given_a": "predicted_in_context_correct_half_accuracies",
+     
     "p_a": "predicted_in_context_accuracies",
-    "p_c_given_ab": "predicted_in_context_correct_half_exact_accuracies",
+
+    # Held out
+    # "p_b_given_a": "predicted_in_context_correct_half_accuracies",
+    # "p_c_given_ab": "predicted_in_context_correct_half_exact_accuracies",
+
+    # Composition
+    "p_b_given_a": "predicted_in_context_correct_candidate_accuracies",
+    "p_c_given_ab": "correct_within_candidates"
 }
 
 
@@ -105,6 +112,7 @@ def extract_plot_data_with_errorbars(
         for layer_name, epochs_data in exp_results.items():
             for epoch_str, metrics in epochs_data.items():
                 if target_metric_key not in metrics:
+                    print(f"Warning: target_metric_key '{target_metric_key}' not found for layer '{layer_name}' and epoch '{epoch_str}'. Skipping.")
                     continue
                 payload = metrics[target_metric_key]
 
@@ -125,6 +133,8 @@ def extract_plot_data_with_errorbars(
                     x_val = int(freeze_epoch)
 
                 elif x_mode == "relative":
+                    # print(anchor_metric_key)
+                    # print(x_mode)
                     if anchor_metric_key == target_metric_key:
                         t_base = _get_t_baseline_from_payload(payload)
                     else:

@@ -2045,7 +2045,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     )
 
 def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix='', file_paths = None, file_paths_non_subsampled = None,
-                    frozen_layer = None):
+                    frozen_layer = None, baseline_path_for_inputs = None):
     """
     Load predictions and inputs/targets/predictions for specified experiment type and hop (if applicable).
     
@@ -2131,8 +2131,10 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
                 continue
 
         predictions_by_epoch_by_seed[seed] = predictions_by_epoch 
-        inputs_raw_file_path = f'{path}/inputs_classification_epoch_001.npz' # Use the last epoch number loaded. Doesn't matter because inputs are same for all epochs.
-        targets_raw_file_path = f'{path}/targets_classification_epoch_001.npz' # Use the last epoch number loaded.
+        # For frozen-layer runs, inputs/targets only exist in the baseline dir, not the frozen dir.
+        inputs_source = baseline_path_for_inputs if baseline_path_for_inputs else path
+        inputs_raw_file_path = f'{inputs_source}/inputs_classification_epoch_001.npz'
+        targets_raw_file_path = f'{inputs_source}/targets_classification_epoch_001.npz'
 
         inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
         targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
@@ -2395,9 +2397,15 @@ if __name__ == "__main__":
         if args.frozen_layer is not None:
             assert args.freeze_epoch is not None, "If frozen_layer is specified, freeze_epoch must also be specified."
             if exp_typ == 'composition':
-                updated_base_path = composition_baseline_file_paths[hop][args.data_split_seed][args.init_seed]
+                # Strip trailing /predictions/ — resume_from_epoch dirs are siblings of predictions/, not children.
+                updated_base_path = composition_baseline_file_paths[hop][args.data_split_seed][args.init_seed].rstrip('/')
+                if updated_base_path.endswith('/predictions'):
+                    updated_base_path = updated_base_path[: -len('/predictions')]
             elif exp_typ == 'decomposition':
-                updated_base_path = decomposition_baseline_file_paths[hop][args.data_split_seed][args.init_seed]
+                # Same fix for decomposition.
+                updated_base_path = decomposition_baseline_file_paths[hop][args.data_split_seed][args.init_seed].rstrip('/')
+                if updated_base_path.endswith('/predictions'):
+                    updated_base_path = updated_base_path[: -len('/predictions')]
             elif exp_typ == 'held_out':
                 updated_base_path = frozen_held_out_file_paths_per_layer_per_init_seed[hop][args.data_split_seed][args.init_seed]['base_path']
 
@@ -2414,6 +2422,16 @@ if __name__ == "__main__":
                 frozen_layer = args.frozen_layer
             )
         elif exp_typ in ['composition', 'decomposition']:
+            # For frozen runs, inputs/targets must come from the baseline dir
+            # since the frozen dir only has predictions from freeze_epoch+1 onwards.
+            if args.frozen_layer is not None:
+                if exp_typ == 'composition':
+                    baseline_predictions_path = composition_baseline_file_paths[hop][args.data_split_seed][args.init_seed]
+                elif exp_typ == 'decomposition':
+                    baseline_predictions_path = decomposition_baseline_file_paths[hop][args.data_split_seed][args.init_seed]
+            else:
+                baseline_predictions_path = None
+
             predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_composition_data  = load_epoch_data(
                         exp_typ = exp_typ,
                         hop = hop,
@@ -2422,7 +2440,8 @@ if __name__ == "__main__":
                         scheduler_prefix = scheduler_prefix,
                         file_paths = [updated_path],
                         file_paths_non_subsampled = composition_non_subsampled_file_paths_dict if exp_typ == 'composition' else decomposition_non_subsampled_file_paths_dict if exp_typ == 'decomposition' else None,
-                        frozen_layer = args.frozen_layer
+                        frozen_layer = args.frozen_layer,
+                        baseline_path_for_inputs = baseline_predictions_path
                     )
             
     else:

@@ -85,6 +85,8 @@ def first_sustained_crossing(
     if epochs.ndim != 1 or values.ndim != 1:
         raise ValueError("epochs and values must be 1D arrays")
     if epochs.shape[0] != values.shape[0]:
+        print(epochs.shape)
+        print(values.shape)
         raise ValueError("epochs and values must have same length")
     if spec.consecutive <= 0:
         raise ValueError("consecutive must be >= 1")
@@ -221,12 +223,13 @@ def resolve_metric_keys(raw_keys: Iterable[str], exp_typ='held_out') -> List[str
 
 def collect_frozen_pickles(data_split_seed: int, init_seed: int,
     base_path: str, frozen_epochs: List[int], frozen_layers: List[str],
-    exp_typ: str) -> List[Dict[str, Any]]:
+    exp_typ: str, hop: int = 4) -> List[Dict[str, Any]]:
     
     results: List[Dict[str, Any]] = []
 
     """
-    Example: /home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/stagewise_accuracies_frozen_layer_transformer_layer_0_freeze_epoch_100_data_split_seed_0_init_seed_42_hop_4_exp_held_out.pkl
+    Example held_out: .../stagewise_accuracies_frozen_layer_transformer_layer_0_freeze_epoch_100_data_split_seed_0_init_seed_42_hop_4_exp_held_out_relative_epoch.pkl
+    Example composition: .../stagewise_accuracies_frozen_layer_embedding_layer_freeze_epoch_17_data_split_seed_0_init_seed_42_hop_2_exp_composition_absolute_epoch.pkl
     """
     
     # Generate list of (path, layer, epoch) tuples first
@@ -239,10 +242,16 @@ def collect_frozen_pickles(data_split_seed: int, init_seed: int,
                 candidates.append((path, layer, epoch))
                 
     elif exp_typ == 'composition':
-        raise NotImplementedError("Composition frozen pickle collection not implemented yet.")
+        for layer in frozen_layers:
+            for epoch in frozen_epochs:
+                path = f"{base_path}/stagewise_accuracies_frozen_layer_{layer}_freeze_epoch_{epoch}_data_split_seed_{data_split_seed}_init_seed_{init_seed}_hop_{hop}_exp_composition_absolute_epoch.pkl"
+                candidates.append((path, layer, epoch))
 
     elif exp_typ == 'decomposition':
-        raise NotImplementedError("Decomposition frozen pickle collection not implemented yet.")
+        for layer in frozen_layers:
+            for epoch in frozen_epochs:
+                path = f"{base_path}/stagewise_accuracies_frozen_layer_{layer}_freeze_epoch_{epoch}_data_split_seed_{data_split_seed}_init_seed_{init_seed}_hop_{hop}_exp_decomposition_absolute_epoch.pkl"
+                candidates.append((path, layer, epoch))
 
     for (path, layer, epoch) in candidates:
         if os.path.exists(path):
@@ -298,10 +307,29 @@ def compute_delta_t(
     if metric_key not in int_payload["seed_results"][data_split_seed]:
         raise KeyError(f"intervention pickle missing metric '{metric_key}'")
 
-    base_epochs = np.asarray(base_payload["epochs"]).astype(int)[1:]
-    int_epochs = np.asarray(int_payload["epochs"]).astype(int)[1:]
+    base_epochs_raw = np.asarray(base_payload["epochs"]).astype(int)
     base_values = np.asarray(base_payload["seed_results"][data_split_seed][metric_key]).astype(float)
-    int_values = np.asarray(int_payload["seed_results"][data_split_seed][metric_key]).astype(float)
+    # Align lengths by taking the last N elements of epochs, matching values. 
+    # (Typically epoch 0 is missing from values if its prediction file didn't exist).
+    base_epochs = base_epochs_raw[-len(base_values):] if len(base_epochs_raw) > len(base_values) else base_epochs_raw
+
+    int_epochs_raw = np.asarray(int_payload["epochs"]).astype(int)
+    int_values_raw = np.asarray(int_payload["seed_results"][data_split_seed][metric_key]).astype(float)
+    
+    # For intervention runs, if there are missing predictions (e.g., job killed early or missing files),
+    # pad the values array with the last observed value up to the length of epochs.
+    if len(int_epochs_raw) > len(int_values_raw):
+        if len(int_values_raw) > 0:
+            last_val = int_values_raw[-1]
+            pad_width = len(int_epochs_raw) - len(int_values_raw)
+            int_values = np.pad(int_values_raw, (0, pad_width), 'constant', constant_values=last_val)
+        else:
+            # Absolute worst case: no predictions at all
+            int_values = np.zeros_like(int_epochs_raw, dtype=float)
+    else:
+        int_values = int_values_raw
+        
+    int_epochs = int_epochs_raw
 
     t_base = first_sustained_crossing(base_epochs, base_values, spec)
     if t_base is None:
@@ -474,19 +502,82 @@ def main() -> None:
         # frozen_epochs = [100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200] # These were absolute epochs - do not use.
         # frozen_epochs = np.arange(100, 301, 10).tolist()
 
-        # init seed 42 relative epochs.
-        if args.init_seed == 42:
-            frozen_epochs = [68, 78, 88, 98, 108, 118, 128, 138, 148, 158, 168, 178, 188, 198, 208, 218, 228, 238, 248, 258, 268, 278, 288, 298, 308]
+        # ---- Frozen epoch lookup per (exp_typ, hop, init_seed) ----
+        # All relative to baseline p(a) — data split seed 0 — tau = 0.95 — consecutive 3.
+        # Source: wandb_sweep_config.yaml
 
-        # init seed 3 relative epochs.
-        elif args.init_seed == 3:
-            frozen_epochs = [72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312]
+        HELD_OUT_FROZEN_EPOCHS = {
+            4: {
+                42: [68, 78, 88, 98, 108, 118, 128, 138, 148, 158, 168, 178, 188, 198, 208, 218, 228, 238, 248, 258, 268, 278, 288, 298, 308],
+                1:  [82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312, 322],
+                3:  [72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312],
+            }
+        }
 
-        # init seed 1 relative epochs.
-        elif args.init_seed == 1:
-            frozen_epochs = [82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312, 322]
+        COMPOSITION_FROZEN_EPOCHS = {
+            2: {
+                42: [17, 27, 37, 47, 57, 67, 77, 87, 97, 107, 117, 127, 137, 147, 157, 167, 177, 187, 197, 207, 217, 227, 237, 247, 257, 267, 277, 287],
+                1:  [12, 22, 32, 42, 52, 62, 72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262],
+                3:  [13, 23, 33, 43, 53, 63, 73, 83, 93, 103, 113, 123, 133, 143, 153, 163, 173, 183],
+            },
+            3: {
+                42: [13, 23, 33, 43, 53, 63, 73, 83, 93, 103, 113, 123, 133, 143, 153, 163, 173],
+                1:  [14, 24, 34, 44, 54, 64, 74, 84, 94, 104, 114, 124, 134, 144, 154, 164, 174, 184, 194, 204],
+                3:  [11, 21, 31, 41, 51, 61, 71, 81, 91, 101, 111, 121, 131, 141, 151, 161, 171, 181, 191, 201, 211, 221],
+            },
+            4: {
+                42: [16, 26, 36, 46, 56, 66, 76, 86, 96, 106, 116, 126, 136, 146, 156, 166, 176, 186, 196, 206, 216, 226, 236, 246, 256],
+                1:  [14, 24, 34, 44, 54, 64, 74, 84, 94, 104, 114, 124, 134, 144, 154, 164],
+                3:  [15, 25, 35, 45, 55, 65, 75, 85, 95, 105, 115, 125, 135, 145, 155, 165, 175],
+            },
+            5: {
+                42: [12, 22, 32, 42, 52, 62, 72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222],
+                1:  [15, 25, 35, 45, 55, 65, 75, 85, 95, 105, 115, 125, 135, 145, 155, 165, 175],
+                3:  [13, 23, 33, 43, 53, 63, 73, 83, 93, 103, 113, 123, 133, 143, 153, 163, 173, 183],
+            },
+        }
+
+        DECOMPOSITION_FROZEN_EPOCHS = {
+            2: {
+                42: [32, 42, 52, 62, 72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312, 322, 332, 342, 352, 362],
+                1:  [48, 58, 68, 78, 88, 98, 108, 118, 128, 138, 148, 158, 168, 178, 188, 198, 208, 218, 228, 238, 248, 258, 268, 278, 288, 298, 308, 318, 328, 338, 348, 358, 368, 378],
+                3:  [32, 42, 52, 62, 72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312, 322, 332, 342, 352, 362, 372, 382, 392, 402, 412, 422, 432, 442, 452, 462, 472, 482, 492, 502, 512],
+            },
+            3: {
+                42: [46, 56, 66, 76, 86, 96, 106, 116, 126, 136, 146, 156, 166, 176, 186, 196, 206, 216, 226, 236, 246, 256, 266, 276, 286, 296, 306, 316, 326, 336, 346, 356, 366, 376, 386, 396, 406, 416, 426, 436, 446, 456, 466, 476, 486, 496, 506, 516, 526, 536, 546, 556, 566],
+                1:  [41, 51, 61, 71, 81, 91, 101, 111, 121, 131, 141, 151, 161, 171, 181, 191, 201, 211, 221, 231, 241, 251, 261, 271, 281, 291, 301, 311, 321, 331, 341, 351, 361, 371, 381, 391, 401, 411, 421, 431, 441, 451, 461, 471],
+                3:  [87, 97, 107, 117, 127, 137, 147, 157, 167, 177, 187, 197, 207, 217, 227, 237, 247, 257, 267, 277, 287, 297, 307, 317, 327, 337, 347, 357, 367, 377, 387, 397, 407, 417, 427, 437, 447, 457, 467],
+            },
+            4: {
+                42: [80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550],
+                1:  [40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550],
+                3:  [62, 72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312, 322, 332, 342, 352, 362, 372, 382, 392, 402, 412, 422, 432, 442, 452, 462, 472, 482, 492],
+            },
+            5: {
+                42: [124, 134, 144, 154, 164, 174, 184, 194, 204, 214, 224, 234, 244, 254, 264, 274, 284, 294, 304, 314, 324, 334, 344, 354, 364, 374, 384, 394, 404, 414, 424, 434, 444, 454, 464, 474, 484, 494, 504, 514, 524, 534, 544, 554, 564, 574, 584, 594, 604, 614, 624, 634, 644, 654, 664, 674, 684, 694, 704, 714, 724, 734],
+                2:  [120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700, 710, 720, 730],
+                3:  [128, 138, 148, 158, 168, 178, 188, 198, 208, 218, 228, 238, 248, 258, 268, 278, 288, 298, 308, 318, 328, 338, 348, 358, 368, 378, 388, 398, 408, 418, 428, 438, 448, 458, 468, 478, 488, 498, 508, 518, 528, 538, 548, 558, 568, 578, 588, 598, 608, 618, 628, 638, 648, 658, 668, 678, 688, 698, 708, 718, 728],
+            },
+        }
+
+        # Select frozen epochs based on experiment type
+        if args.exp_typ == 'held_out':
+            epoch_lookup = HELD_OUT_FROZEN_EPOCHS
+        elif args.exp_typ == 'composition':
+            epoch_lookup = COMPOSITION_FROZEN_EPOCHS
+        elif args.exp_typ == 'decomposition':
+            epoch_lookup = DECOMPOSITION_FROZEN_EPOCHS
         else:
-            raise ValueError(f"Relative frozen epochs not defined for init_seed {args.init_seed}")
+            raise ValueError(f"Unknown exp_typ '{args.exp_typ}'")
+
+        hop_key = args.hop if args.exp_typ != 'held_out' else 4
+        if hop_key not in epoch_lookup:
+            raise ValueError(f"Frozen epochs not defined for hop={hop_key} in {args.exp_typ}")
+        if args.init_seed not in epoch_lookup[hop_key]:
+            raise ValueError(f"Frozen epochs not defined for init_seed={args.init_seed} in {args.exp_typ} hop={hop_key}")
+
+        frozen_epochs = epoch_lookup[hop_key][args.init_seed]
+
         frozen_layers = [f"transformer_layer_{i}" for i in range(4)]
         frozen_layers.insert(0, "embedding_layer")
 
@@ -495,11 +586,9 @@ def main() -> None:
                 args.data_split_seed, {}
             ).get(args.init_seed)['base_path']
         elif args.exp_typ == 'composition':
-            base_path = None
-            raise NotImplementedError("Composition frozen pickle base path not implemented yet.")
+            base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/'
         elif args.exp_typ == 'decomposition':
-            base_path = None
-            raise NotImplementedError("Decomposition frozen pickle base path not implemented yet.")
+            base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/'
 
         assert base_path is not None, "Base path for frozen pickles not found in configuration."
 
@@ -508,7 +597,8 @@ def main() -> None:
             base_path=base_path,
             frozen_epochs=frozen_epochs,
             frozen_layers=frozen_layers,
-            exp_typ=args.exp_typ
+            exp_typ=args.exp_typ,
+            hop=args.hop,
         )
 
     if not intervention_items:
@@ -516,6 +606,9 @@ def main() -> None:
 
     # Ensure results container exists within this run
     run_json.setdefault("results", {})
+
+    total_runs = 0
+    incomplete_runs = 0
 
     for item in intervention_items:
         path = item["path"]
@@ -528,6 +621,17 @@ def main() -> None:
         except (FileNotFoundError, EOFError, pickle.UnpicklingError) as e:
             print(f"Error loading pickle {path}: {e}. Skipping.")
             continue
+
+        total_runs += 1
+        
+        # Check if the run was incomplete by comparing length of epochs vs length of the first available metric
+        if len(metric_keys) > 0 and metric_keys[0] in int_payload["seed_results"][args.data_split_seed]:
+            epochs_len = len(int_payload["epochs"]) - 1
+            values_len = len(int_payload["seed_results"][args.data_split_seed][metric_keys[0]])
+            if epochs_len > values_len:
+                print("Length of values: ", values_len)
+                print("Path: ", path)
+                incomplete_runs += 1
 
         exp_dict = run_json["results"].setdefault(exp_typ, {})
         layer_dict = exp_dict.setdefault(layer_name, {})
@@ -546,8 +650,10 @@ def main() -> None:
             epoch_dict[metric_key] = computed_result
 
     save_results_json(args.output_json, results_json)
-    print(f"Saved delta-t results to {args.output_json}")
-    # print(json.dumps(run_json, indent=2))
+    print(f"\n--- Run Summary ---")
+    print(f"Total frozen pickles processed: {total_runs}")
+    print(f"Incomplete runs (stopped before 999): {incomplete_runs}")
+    print(f"Saved delta-t results to {args.output_json}\n")
 
 
 if __name__ == "__main__":

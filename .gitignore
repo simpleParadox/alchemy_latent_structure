@@ -76,3 +76,5 @@ vllm_error.txt
 *.pdf
 *.md
 update_slurm_time.py
+*.txt
+*.sbatch
