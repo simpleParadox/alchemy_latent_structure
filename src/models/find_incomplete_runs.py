@@ -206,7 +206,7 @@ SLURM_MEM_COMPOSITION: Dict[int, str] = {2: "12G", 3: "12G", 4: "12G", 5: "12G"}
 SLURM_MEM_DECOMPOSITION: Dict[int, str] = {2: "12G", 3: "12G", 4: "14G", 5: "14G"}
 
 # Approximate seconds per epoch (used to compute dynamic SLURM --time)
-SECONDS_PER_EPOCH_COMPOSITION = 10.7
+SECONDS_PER_EPOCH_COMPOSITION = 10.8
 SECONDS_PER_EPOCH_DECOMPOSITION = 25  # adjust if needed
 
 STARTUP_OVERHEAD_SECONDS = 30  
@@ -463,7 +463,7 @@ def generate_sbatch_scripts(
             f"--padding_side=right "
             f"--use_flash_attention=True "
             f"--use_preprocessed=True "
-            f"--save_checkpoints=True "
+            f"--save_checkpoints=False "
             f"--store_predictions=True "
             f"--use_scheduler=True "
             f"--scheduler_type=cosine "

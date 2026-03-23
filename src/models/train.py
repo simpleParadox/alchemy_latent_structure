@@ -139,7 +139,7 @@ def parse_args():
     
     parser.add_argument("--save_checkpoints", type=str, default="False", choices=["True", "False"],
                         help="Whether to save model checkpoints during training. Default is True.")
-    parser.add_argument("--is_held_out_color_exp", type=str, default="True", choices=["True", "False"],
+    parser.add_argument("--is_held_out_color_exp", type=str, default="False", choices=["True", "False"],
                         help="Whether the dataset is a held-out color experiment. Default is True.")
     parser.add_argument("--prediction_type", type=str, default="default", choices=["default", "feature", "autoregressive"],
                         help="Type of prediction: 'default' for standard full stone state classification, 'feature' for feature-wise classification, 'autoregressive' for autoregressive generation.")
