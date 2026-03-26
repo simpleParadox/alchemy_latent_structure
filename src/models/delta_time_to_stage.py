@@ -374,7 +374,7 @@ def compute_delta_t(
             "metric_key": metric_key,
             "t_baseline": int(t_base),
             "t_intervention": None,
-            "delta_t": 100000,
+            "delta_t": 10000,
             "tau": spec.tau,
             "consecutive": spec.consecutive,
             "note": "intervention never reached stage within available epochs",

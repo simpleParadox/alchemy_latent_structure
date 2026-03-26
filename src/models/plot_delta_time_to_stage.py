@@ -127,6 +127,11 @@ def extract_plot_data_with_errorbars(
 
                 delta_t = _cap_delta_t(payload.get("delta_t"), cap_never_reached)
                 if delta_t is None:
+                    print(
+                        f"Warning: delta_t is None for layer='{layer_name}', "
+                        f"freeze_epoch={freeze_epoch}, init_seed={init_seed}. "
+                        f"Excluding this seed from the average for this point."
+                    )
                     continue
 
                 if x_mode == "absolute":
@@ -216,7 +221,6 @@ def extract_plot_data_with_errorbars(
             print(f"  points: total={total_points}, survive_min_n({min_n})={surviving} | {n_counts_str}")
 
     # Aggregate to mean + SEM
-    # import pdb; pdb.set_trace()
     layer_data: Dict[str, List[Tuple[int, float, float, int]]] = {}
     for layer_name, epoch_map in values.items():
         series = []
@@ -226,6 +230,7 @@ def extract_plot_data_with_errorbars(
                 continue
             arr = np.asarray(vals, dtype=float)
             mean = float(np.mean(arr))
+            import pdb; pdb.set_trace()
             # SEM: std / sqrt(n); use ddof=1 only if n>1
             std = float(np.std(arr, ddof=1)) if n > 1 else 0.0
             sem = float(std / np.sqrt(n)) if n > 1 else 0.0
@@ -239,6 +244,7 @@ def extract_plot_data_with_errorbars(
             series.sort(key=lambda x: x[0])
             layer_data[layer_name] = series
 
+    # import pdb; pdb.set_trace()
     return layer_data
 
 
@@ -426,7 +432,7 @@ def main():
     parser.add_argument(
         "--min_n",
         type=int,
-        default=1,
+        default=2,
         help="Only plot a point if at least min_n init seeds have data for that (layer, epoch).",
     )
     parser.add_argument(
