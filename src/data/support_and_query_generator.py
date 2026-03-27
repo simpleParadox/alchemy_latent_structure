@@ -61,6 +61,64 @@ def normalize_chemistry_graph(graph: Dict, normalized_value: int = -3) -> Dict:
     return new_graph
 
 
+def extract_reward_from_description(desc_str: str) -> int:
+    """
+    Extract the reward value from a stone description string.
+    E.g., '{color: red, size: small, roundness: pointy, reward: 3}' -> 3
+    """
+    match = re.search(r'reward:\s*(-?\d+)', desc_str)
+    if match:
+        return int(match.group(1))
+    raise ValueError(f"Could not extract reward from description: {desc_str}")
+
+
+def set_reward_in_description(desc_str: str, new_reward: int) -> str:
+    """
+    Replace the reward value in a stone description string with a new value.
+    """
+    return re.sub(r'reward:\s*-?\d+', f'reward: {new_reward}', desc_str)
+
+
+def randomize_chemistry_graph(graph: Dict) -> Dict:
+    """
+    Randomly permute the reward values across the stones within a chemistry graph.
+    
+    This breaks the latent structure's reward assignment while preserving:
+    - The multiset of reward values (same distribution, just shuffled)
+    - The graph topology (which stone transitions to which via which potion)
+    - The (color, size, roundness) features of each stone
+    
+    Uses random.shuffle, so the caller should set random.seed() beforehand
+    for reproducibility.
+    
+    Returns a new modified graph dict (does not mutate the original).
+    """
+    node_ids = list(graph.keys())
+    
+    # Extract current reward values from all stones
+    rewards = []
+    for node_id in node_ids:
+        desc = graph[node_id].get('current_stone_description', '')
+        rewards.append(extract_reward_from_description(desc))
+        import pdb; pdb.set_trace()
+    
+    # Shuffle the rewards (permutation without replacement)
+    random.shuffle(rewards)
+    
+    # Reassign shuffled rewards to stones
+    new_graph = {}
+    for i, node_id in enumerate(node_ids):
+        new_node_data = dict(graph[node_id])  # shallow copy
+        if 'current_stone_description' in new_node_data:
+            new_node_data['current_stone_description'] = set_reward_in_description(
+                new_node_data['current_stone_description'], rewards[i]
+            )
+        new_graph[node_id] = new_node_data
+        import pdb; pdb.set_trace()
+        
+    return new_graph
+
+
 def chemistry_to_canonical_key(graph: Dict) -> str:
     """
     Produce a canonical string that uniquely identifies a chemistry graph
@@ -663,8 +721,18 @@ def main():
                              "When enabled: normalizes rewards -> deduplicates identical chemistries -> splits -> generates samples.")
     parser.add_argument("--normalized_reward_value", type=int, default=-3,
                         help="The constant reward value to use when --normalize_reward is enabled. Default is -3.")
+    
+    # Reward randomization ablation
+    parser.add_argument("--randomize_reward", action="store_true", default=False,
+                        help="Randomly permute reward values across stones within each chemistry BEFORE splitting. "
+                             "Breaks the latent structure's reward assignment while preserving the reward distribution. "
+                             "Mutually exclusive with --normalize_reward.")
 
     args = parser.parse_args()
+    
+    # Validate mutually exclusive flags
+    if args.normalize_reward and args.randomize_reward:
+        parser.error("--normalize_reward and --randomize_reward are mutually exclusive. Use one or the other.")
     
     output_file = args.output
     
@@ -719,6 +787,69 @@ def main():
         
         print(f"Deduplication: removed {duplicate_count} duplicate chemistries")
         print(f"Unique chemistries after normalization: {len(chemistry_graphs)}")
+        num_episodes = len(chemistry_graphs)
+        print(f"{'='*60}\n")
+    
+    # --- Reward randomization ablation: randomize and deduplicate BEFORE splitting ---
+    if args.randomize_reward:
+        print(f"\n{'='*60}")
+        print(f"REWARD RANDOMIZATION ABLATION ENABLED")
+        print(f"Randomly permuting reward values within each chemistry")
+        print(f"{'='*60}")
+        
+        # Step 1: Filter to complete graphs only (since all experiments use complete graphs)
+        if args.process_complete_graph_only:
+            original_count = len(chemistry_graphs)
+            chemistry_graphs = {
+                ep_id: ep_data for ep_id, ep_data in chemistry_graphs.items()
+                if ep_id != '_metadata' and ep_data.get('is_complete', False)
+            }
+            print(f"Filtered to complete graphs: {original_count} -> {len(chemistry_graphs)}")
+        
+        # Step 2: Set seed for reproducibility and randomize reward values
+        # Use a fixed seed (42) for the randomization step so it's reproducible
+        # regardless of the per-run seed used for the train/val split.
+        randomization_rng = random.Random(42)
+        for ep_id in chemistry_graphs:
+            if ep_id == '_metadata':
+                continue
+            # Use the dedicated RNG for reproducible randomization
+            node_ids = list(chemistry_graphs[ep_id]['graph'].keys())
+            rewards = [
+                extract_reward_from_description(
+                    chemistry_graphs[ep_id]['graph'][nid].get('current_stone_description', '')
+                )
+                for nid in node_ids
+            ]
+            randomization_rng.shuffle(rewards)
+            new_graph = {}
+            for i, nid in enumerate(node_ids):
+                new_node_data = dict(chemistry_graphs[ep_id]['graph'][nid])
+                if 'current_stone_description' in new_node_data:
+                    new_node_data['current_stone_description'] = set_reward_in_description(
+                        new_node_data['current_stone_description'], rewards[i]
+                    )
+                new_graph[nid] = new_node_data
+            chemistry_graphs[ep_id]['graph'] = new_graph
+        print(f"Randomized reward values in {len(chemistry_graphs)} chemistry graphs")
+        
+        # Step 3: Deduplicate chemistries by canonical transition key
+        canonical_to_episodes = {}
+        duplicate_count = 0
+        for ep_id, ep_data in chemistry_graphs.items():
+            if ep_id == '_metadata':
+                continue
+            canonical_key = chemistry_to_canonical_key(ep_data['graph'])
+            if canonical_key not in canonical_to_episodes:
+                canonical_to_episodes[canonical_key] = ep_id
+            else:
+                duplicate_count += 1
+        
+        unique_episode_ids = set(canonical_to_episodes.values())
+        chemistry_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in unique_episode_ids}
+        
+        print(f"Deduplication: removed {duplicate_count} duplicate chemistries")
+        print(f"Unique chemistries after randomization: {len(chemistry_graphs)}")
         num_episodes = len(chemistry_graphs)
         print(f"{'='*60}\n")
     
@@ -812,6 +943,7 @@ def main():
                     "dataset_type": "train",
                     "reward_normalized": args.normalize_reward,
                     "normalized_reward_value": args.normalized_reward_value if args.normalize_reward else None,
+                    "reward_randomized": args.randomize_reward,
                 },
                 "episodes": {}
             }
@@ -827,8 +959,8 @@ def main():
                 # Extract the graph for this episode
                 
                 # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
-                # Skip this check if normalize_reward is enabled (already filtered above).
-                if not args.normalize_reward and args.process_complete_graph_only and not episode_data.get("is_complete", False):
+                # Skip this check if normalize_reward or randomize_reward is enabled (already filtered above).
+                if not (args.normalize_reward or args.randomize_reward) and args.process_complete_graph_only and not episode_data.get("is_complete", False):
                     # print(f"Skipping episode {episode_id} as it is not a complete graph.")
                     continue
                 # print(f"Processing Training Episode {episode_id}...")
@@ -912,6 +1044,7 @@ def main():
                     "dataset_type": "val",
                     "reward_normalized": args.normalize_reward,
                     "normalized_reward_value": args.normalized_reward_value if args.normalize_reward else None,
+                    "reward_randomized": args.randomize_reward,
                 },
                 "episodes": {}
             }
@@ -923,8 +1056,8 @@ def main():
                 # print(f"Processing Validation Episode {episode_id}...")
                 
                 # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
-                # Skip this check if normalize_reward is enabled (already filtered above).
-                if not args.normalize_reward and args.process_complete_graph_only and not episode_data.get("is_complete", False):
+                # Skip this check if normalize_reward or randomize_reward is enabled (already filtered above).
+                if not (args.normalize_reward or args.randomize_reward) and args.process_complete_graph_only and not episode_data.get("is_complete", False):
                     # print(f"Skipping episode {episode_id} as it is not a complete graph.")
                     continue
                 # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
