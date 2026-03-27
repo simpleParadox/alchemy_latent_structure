@@ -7,9 +7,11 @@ of stone transformations when applying different potions.
 
 import json
 import random
+import re
 import argparse
 import os
 import gzip
+import hashlib
 from typing import Dict, List, Tuple, Set, Any, Union
 from tqdm import tqdm
 import pickle
@@ -26,6 +28,60 @@ def load_chemistry_graph(file_path: str) -> Dict[str, Dict]:
     else:
         with open(file_path, 'r') as f:
             return json.load(f)
+
+
+def normalize_reward_in_description(desc_str: str, normalized_value: int = -3) -> str:
+    """
+    Normalize the reward value in a stone description string.
+    E.g., '{color: red, size: small, roundness: pointy, reward: 3}' -> '{color: red, size: small, roundness: pointy, reward: -3}'
+    """
+    return re.sub(r'reward:\s*(-3|-1|1|3)', f'reward: {normalized_value}', desc_str)
+
+
+def normalize_chemistry_graph(graph: Dict, normalized_value: int = -3) -> Dict:
+    """
+    Normalize all reward values in a chemistry graph's stone descriptions.
+    Also remaps node IDs if the original node string contained reward info,
+    but since node keys are opaque graph-node strings (not stone descriptions),
+    we only need to normalize the 'current_stone_description' field.
+    
+    Returns a new modified graph dict (does not mutate the original).
+    """
+    new_graph = {}
+    for node_id, node_data in graph.items():
+        new_node_data = dict(node_data)  # shallow copy
+        # Normalize the stone description
+        if 'current_stone_description' in new_node_data:
+            new_node_data['current_stone_description'] = normalize_reward_in_description(
+                new_node_data['current_stone_description'], normalized_value
+            )
+        # Transitions reference other nodes by their original node_id strings,
+        # which don't contain reward info, so no remapping needed.
+        new_graph[node_id] = new_node_data
+    return new_graph
+
+
+def chemistry_to_canonical_key(graph: Dict) -> str:
+    """
+    Produce a canonical string that uniquely identifies a chemistry graph
+    based on its transitions (start_stone_desc, potion, end_stone_desc).
+    
+    Two chemistries with the same canonical key are functionally identical
+    (they define the same transformation rules over the same stone descriptions).
+    """
+    transitions = set()
+    for node_id, node_data in graph.items():
+        start_desc = node_data.get('current_stone_description', '')
+        for transition in node_data.get('transitions', []):
+            potion = transition['potion_color']
+            next_node_id = transition['next_node_str']
+            if next_node_id in graph:
+                end_desc = graph[next_node_id]['current_stone_description']
+                transitions.add((start_desc, potion, end_desc))
+    # Sort for deterministic ordering
+    sorted_transitions = sorted(transitions)
+    canonical_str = '|'.join(f'{s}->{p}->{e}' for s, p, e in sorted_transitions)
+    return hashlib.sha256(canonical_str.encode('utf-8')).hexdigest()
 
 
 def get_stone_description(node_data: Dict) -> str:
@@ -596,10 +652,17 @@ def main():
     parser.add_argument("--held_out_color_exp", action="store_true",
                         help="Generate data for the held-out color pair experiment.", default=False)
     parser.add_argument("--num_held_out_edges", type=int, default=4,
-                        help="Number of edges to hold out for the held-out color pair experiment. Default is 1. Ignored if --held_out_color_exp is not set.")
+                        help="Number of edges to hold out for the held-out color pair experiment. Default is 4. Ignored if --held_out_color_exp is not set.")
 
     parser.add_argument("--max_queries_per_start_node", type=int, default=10000,
                         help="Maximum number of query samples to generate per start node. Default is 6.")
+    
+    # Reward normalization ablation
+    parser.add_argument("--normalize_reward", action="store_true", default=False,
+                        help="Normalize reward values BEFORE splitting into train/val to prevent data leakage. "
+                             "When enabled: normalizes rewards -> deduplicates identical chemistries -> splits -> generates samples.")
+    parser.add_argument("--normalized_reward_value", type=int, default=-3,
+                        help="The constant reward value to use when --normalize_reward is enabled. Default is -3.")
 
     args = parser.parse_args()
     
@@ -612,6 +675,52 @@ def main():
     chemistry_graphs = load_chemistry_graph(args.input)
     num_episodes = len(chemistry_graphs)
     print(f"Loaded data for {num_episodes} episodes")
+    
+    # --- Reward normalization ablation: normalize and deduplicate BEFORE splitting ---
+    if args.normalize_reward:
+        print(f"\n{'='*60}")
+        print(f"REWARD NORMALIZATION ABLATION ENABLED")
+        print(f"Normalizing all reward values to: {args.normalized_reward_value}")
+        print(f"{'='*60}")
+        
+        # Step 1: Filter to complete graphs only (since all experiments use complete graphs)
+        if args.process_complete_graph_only:
+            original_count = len(chemistry_graphs)
+            chemistry_graphs = {
+                ep_id: ep_data for ep_id, ep_data in chemistry_graphs.items()
+                if ep_id != '_metadata' and ep_data.get('is_complete', False)
+            }
+            print(f"Filtered to complete graphs: {original_count} -> {len(chemistry_graphs)}")
+        
+        # Step 2: Normalize reward values in every chemistry graph
+        for ep_id in chemistry_graphs:
+            if ep_id == '_metadata':
+                continue
+            chemistry_graphs[ep_id]['graph'] = normalize_chemistry_graph(
+                chemistry_graphs[ep_id]['graph'], args.normalized_reward_value
+            )
+        print(f"Normalized reward values in {len(chemistry_graphs)} chemistry graphs")
+        
+        # Step 3: Deduplicate chemistries by canonical transition key
+        canonical_to_episodes = {}  # canonical_key -> first episode_id that has this key
+        duplicate_count = 0
+        for ep_id, ep_data in chemistry_graphs.items():
+            if ep_id == '_metadata':
+                continue
+            canonical_key = chemistry_to_canonical_key(ep_data['graph'])
+            if canonical_key not in canonical_to_episodes:
+                canonical_to_episodes[canonical_key] = ep_id
+            else:
+                duplicate_count += 1
+        
+        # Keep only unique chemistries (first representative per canonical key)
+        unique_episode_ids = set(canonical_to_episodes.values())
+        chemistry_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in unique_episode_ids}
+        
+        print(f"Deduplication: removed {duplicate_count} duplicate chemistries")
+        print(f"Unique chemistries after normalization: {len(chemistry_graphs)}")
+        num_episodes = len(chemistry_graphs)
+        print(f"{'='*60}\n")
     
     # seeds = [0, 1, 2, 3, 4]
     # seeds = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
@@ -700,7 +809,9 @@ def main():
                     "support-steps": args.support_steps,
                     "query-steps": args.query_steps,
                     "seed": seed,
-                    "dataset_type": "train"
+                    "dataset_type": "train",
+                    "reward_normalized": args.normalize_reward,
+                    "normalized_reward_value": args.normalized_reward_value if args.normalize_reward else None,
                 },
                 "episodes": {}
             }
@@ -716,7 +827,8 @@ def main():
                 # Extract the graph for this episode
                 
                 # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
-                if args.process_complete_graph_only and not episode_data.get("is_complete", False):
+                # Skip this check if normalize_reward is enabled (already filtered above).
+                if not args.normalize_reward and args.process_complete_graph_only and not episode_data.get("is_complete", False):
                     # print(f"Skipping episode {episode_id} as it is not a complete graph.")
                     continue
                 # print(f"Processing Training Episode {episode_id}...")
@@ -797,7 +909,9 @@ def main():
                     "support-steps": args.support_steps,
                     "query-steps": args.query_steps,
                     "seed": seed,
-                    "dataset_type": "val"
+                    "dataset_type": "val",
+                    "reward_normalized": args.normalize_reward,
+                    "normalized_reward_value": args.normalized_reward_value if args.normalize_reward else None,
                 },
                 "episodes": {}
             }
@@ -809,7 +923,8 @@ def main():
                 # print(f"Processing Validation Episode {episode_id}...")
                 
                 # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
-                if args.process_complete_graph_only and not episode_data.get("is_complete", False):
+                # Skip this check if normalize_reward is enabled (already filtered above).
+                if not args.normalize_reward and args.process_complete_graph_only and not episode_data.get("is_complete", False):
                     # print(f"Skipping episode {episode_id} as it is not a complete graph.")
                     continue
                 # Continue only if the graph is complete. Each graph should have an 'is_complete' key.
