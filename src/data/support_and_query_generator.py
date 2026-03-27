@@ -306,7 +306,7 @@ def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, seed=0) -
     color_pairs = [('RED', 'GREEN'), ('PINK', 'CYAN'), ('ORANGE', 'YELLOW')] # They must be exactly these pairs. Capitalization matters.
     
     # 1. Randomly select one color pair to hold out
-    print("Seed for held-out color pair generation:", seed)
+    # print("Seed for held-out color pair generation:", seed)
     held_out_pair = random.choice(color_pairs)
     support_colors = [color for pair in color_pairs if pair != held_out_pair for color in pair]
     

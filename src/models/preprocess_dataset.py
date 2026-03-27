@@ -210,7 +210,9 @@ def main():
                         # default="/home/rsaha/projects/dm_alchemy/src/data/subsampled_balanced_complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_3_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/same_reward_shuffled_held_out_exps_generated_data_enhanced/normalized_compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
-                        default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_4_seed_.json',
+                        # default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_4_seed_.json',
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_reward_ablation_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/held_out_randomized_reward_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
                         # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_.json",
@@ -219,7 +221,9 @@ def main():
                         # default="/home/rsaha/projects/dm_alchemy/src/data/subsampled_balanced_complete_graph_generated_data_enhanced_qnodes_in_snodes/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_3_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/shuffled_held_out_exps_generated_data_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/same_reward_shuffled_held_out_exps_generated_data_enhanced/normalized_compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
-                        default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_4_seed_.json',
+                        # default='/home/rsaha/projects/dm_alchemy/src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_4_seed_.json',
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_reward_ablation_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/dm_alchemy/src/data/held_out_randomized_reward_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
@@ -230,9 +234,11 @@ def main():
     parser.add_argument("--output_dir", type=str, 
                     # default="src/data/same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced",
                         # default='src/data/decomposition_shuffled_support_preprocessed',
-                        default='src/data/input_stone_states_complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed',
+                        # default='src/data/input_stone_states_complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed',
                         # default='src/data/complete_graph_preprocessed_separate_enhanced_qnodes_in_snodes',
                         # default='src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed',
+                        # default='src/data/held_out_reward_ablation_preprocessed_separate_enhanced',
+                        default='src/data/held_out_randomized_reward_preprocessed_separate_enhanced',
                         help="Directory to save preprocessed files")
     parser.add_argument("--filter_query_from_support", action="store_true", default=True,
                         help="Filter query examples from support sets")
@@ -260,7 +266,8 @@ def main():
     # for seed in [0, 1, 2]:
     # seeds = [0, 16, 29]
     # seeds = [0, 16, 29]
-    seeds = [0,1,2,3,4]
+    # seeds = [0,1,2,3,4]
+    seeds = [0]
     for seed in seeds:
         train_json_file = args.train_json_file.replace(f"seed_", f"seed_{seed}")
         val_json_file = args.val_json_file.replace(f"seed_", f"seed_{seed}")
