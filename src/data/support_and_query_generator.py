@@ -100,7 +100,6 @@ def randomize_chemistry_graph(graph: Dict) -> Dict:
     for node_id in node_ids:
         desc = graph[node_id].get('current_stone_description', '')
         rewards.append(extract_reward_from_description(desc))
-        import pdb; pdb.set_trace()
     
     # Shuffle the rewards (permutation without replacement)
     random.shuffle(rewards)
@@ -114,7 +113,6 @@ def randomize_chemistry_graph(graph: Dict) -> Dict:
                 new_node_data['current_stone_description'], rewards[i]
             )
         new_graph[node_id] = new_node_data
-        import pdb; pdb.set_trace()
         
     return new_graph
 
@@ -728,6 +726,9 @@ def main():
                              "Breaks the latent structure's reward assignment while preserving the reward distribution. "
                              "Mutually exclusive with --normalize_reward.")
 
+    parser.add_argument("--match_episodes_from_json", type=str, default=None,
+                        help="Path to an existing generated JSON. If provided, the script will ONLY process the episodes found in that JSON, and will disable train/val splitting (--create_val_from_train will be forced to False).")
+
     args = parser.parse_args()
     
     # Validate mutually exclusive flags
@@ -743,6 +744,25 @@ def main():
     chemistry_graphs = load_chemistry_graph(args.input)
     num_episodes = len(chemistry_graphs)
     print(f"Loaded data for {num_episodes} episodes")
+
+    if args.match_episodes_from_json:
+        print(f"\n{'='*60}")
+        print(f"MATCHING EPISODES FROM JSON")
+        print(f"Loading target episodes from: {args.match_episodes_from_json}")
+        with open(args.match_episodes_from_json, 'r') as f:
+            target_data = json.load(f)
+        target_episodes = set(target_data.get('episodes', {}).keys())
+        print(f"Found {len(target_episodes)} target episodes in JSON")
+        
+        # Filter chemistry_graphs to only those in the target set
+        chemistry_graphs = {ep_id: ep_data for ep_id, ep_data in chemistry_graphs.items() if ep_id in target_episodes or ep_id == '_metadata'}
+        num_episodes = len(chemistry_graphs) - (1 if '_metadata' in chemistry_graphs else 0)
+        print(f"Filtered down to exactly {num_episodes} matching episodes")
+        
+        # Force create_val_from_train to False since we want a 1:1 match without re-splitting
+        args.create_val_from_train = False
+        print("Forced --create_val_from_train to False for 1:1 exact mapping.")
+        print(f"{'='*60}\n")
     
     # --- Reward normalization ablation: normalize and deduplicate BEFORE splitting ---
     if args.normalize_reward:
@@ -829,6 +849,8 @@ def main():
                     new_node_data['current_stone_description'] = set_reward_in_description(
                         new_node_data['current_stone_description'], rewards[i]
                     )
+                else:
+                    raise ValueError(f"Node {nid} does not have a stone description.")
                 new_graph[nid] = new_node_data
             chemistry_graphs[ep_id]['graph'] = new_graph
         print(f"Randomized reward values in {len(chemistry_graphs)} chemistry graphs")

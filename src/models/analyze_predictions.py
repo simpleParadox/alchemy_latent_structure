@@ -12,7 +12,7 @@ import re
 from baseline_and_frozen_filepaths import held_out_file_paths, frozen_held_out_file_paths_per_layer_per_init_seed, composition_file_paths, composition_file_paths_non_subsampled, \
         decomposition_file_paths, decomposition_file_paths_non_subsampled, composition_baseline_file_paths, composition_non_subsampled_file_paths_dict, \
         decomposition_baseline_file_paths, decomposition_non_subsampled_file_paths_dict, decomposition_baseline_pickle_file_paths, held_out_file_paths_input_stone_ids, \
-        get_composition_cross_hop_prediction_path
+        get_composition_cross_hop_prediction_path, held_out_randomized_reward_file_paths
 
 # Load the metadata, data, and vocab.
 if cluster == 'vulcan':
@@ -2229,6 +2229,8 @@ if __name__ == "__main__":
 
     parser.add_argument('--normalized_reward', action='store_true',
                         help="Flag to indicate if normalized reward should be used for the held_out exp type.", default=False)
+    parser.add_argument('--randomized_reward', action='store_true',
+                        help="Flag to indicate if randomized reward (ablation) should be used for the held_out exp type.", default=False)
 
     parser.add_argument('--annotated_epochs', action='store_true',
                         help="Flag to indicate if annotated epochs should be used for plotting.", default=False)
@@ -2268,7 +2270,7 @@ if __name__ == "__main__":
     four_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
     five_hop_epoch_values_text = [0, 200, 600, 800, 999]
 
-    four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 500] #, 999]
+    four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 500, 999]
 
     # Create a dictionary mapping hop counts to their hop-specific epoch values
     hop_to_epoch_values = {
@@ -2388,9 +2390,12 @@ if __name__ == "__main__":
             updated_path = decomposition_baseline_file_paths[hop][args.data_split_seed][args.init_seed]
                 
         elif exp_typ == 'held_out':
-            updated_path = held_out_file_paths[hop][args.data_split_seed][args.init_seed]
-            if args.input_format == 'stone_states':
-                updated_path = held_out_file_paths_input_stone_ids[hop][args.data_split_seed][args.init_seed]
+            if args.randomized_reward:
+                updated_path = held_out_randomized_reward_file_paths[hop][args.data_split_seed][args.init_seed]
+            else:
+                updated_path = held_out_file_paths[hop][args.data_split_seed][args.init_seed]
+                if args.input_format == 'stone_states':
+                    updated_path = held_out_file_paths_input_stone_ids[hop][args.data_split_seed][args.init_seed]
         start_epoch = hop_to_epoch_values[hop][0]
         frozen_layers = None
         
@@ -2449,8 +2454,12 @@ if __name__ == "__main__":
         if args.data_split_seed is not None:
             if exp_typ == 'held_out':
                 updated_held_out_file_paths = {}
-                for seed in [42, 1, 3]:
-                    updated_held_out_file_paths[seed] = held_out_file_paths[hop][args.data_split_seed][seed]
+                # for seed in [42, 1, 3]:
+                for seed in [3]:
+                    if args.randomized_reward:
+                        updated_held_out_file_paths[seed] = held_out_randomized_reward_file_paths[hop][args.data_split_seed][seed]
+                    else:
+                        updated_held_out_file_paths[seed] = held_out_file_paths[hop][args.data_split_seed][seed]
             elif exp_typ == 'composition':
                 updated_composition_file_paths = {}
                 for seed in [42, 1, 3]:
@@ -2461,7 +2470,10 @@ if __name__ == "__main__":
                     updated_decomposition_file_path[seed] = decomposition_baseline_file_paths[hop][args.data_split_seed][seed]
                 
         else:
-            updated_held_out_file_paths = held_out_file_paths[hop]
+            if args.randomized_reward:
+                updated_held_out_file_paths = held_out_randomized_reward_file_paths[hop]
+            else:
+                updated_held_out_file_paths = held_out_file_paths[hop]
 
         # predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_composition_data  = load_epoch_data(
         #     exp_typ = exp_typ,
@@ -2489,7 +2501,12 @@ if __name__ == "__main__":
     data_seeds = list(predictions_by_epoch_by_seed.keys()) if args.data_split_seed is None else [args.data_split_seed]
     for seed in data_seeds:
         if exp_typ == 'held_out':
-            if not args.normalized_reward:
+            if args.randomized_reward:
+                data_files = {
+                    "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/held_out_randomized_reward_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
+                    "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/held_out_randomized_reward_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
+                }
+            elif not args.normalized_reward:
                 data_files = {
                     "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
                     "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"

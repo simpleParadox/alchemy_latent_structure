@@ -78,3 +78,14 @@ vllm_error.txt
 update_slurm_time.py
 *.txt
 *.sbatch
+
+
+src/check_json.py
+src/check_stones.py
+src/check_vocab.py
+src/compare_eps.py
+src/compare_vocabs.py
+src/reward_variants.py
+src/test_dataloaders.py
+src/test_regex.py
+src/trace_dataloader.py

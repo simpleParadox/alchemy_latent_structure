@@ -1,5 +1,16 @@
 # The first key is the hop. The second key is data split seed, the third key is model init seed.
 # Best runs from the hyperparameter tuning.
+
+held_out_randomized_reward_file_paths = {
+    4: {
+        0: {
+            # TODO: USER needs to provide the path to the predictions for the randomized reward run(s).
+            # e.g., 42: '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/...predictions/'
+            3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/all_graphs/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/init_seed_3/predictions/"
+        }
+    }
+}
+
 held_out_file_paths = {
         # Normalized reward paths.
         # 4: [
