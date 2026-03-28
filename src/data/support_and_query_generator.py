@@ -1067,7 +1067,7 @@ def main():
             # Ensure the output directory exists
             # args.output_dir = os.getcwd() + '/' + args.output_dir if not args.output_dir == '.' else args.output_dir
             # os.makedirs(os.path.dirname(args.output_dir), exist_ok=True)
-            train_output_file = os.path.join(args.output_dir, train_output_file)
+            # train_output_file = os.path.join(args.output_dir, train_output_file)
             with open(train_output_file, 'w') as f:
                 json.dump(train_output_data, f)
             
