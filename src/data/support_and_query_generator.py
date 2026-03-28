@@ -697,7 +697,7 @@ def main():
     # parser.add_argument("--seed", type=int, default=0,
     #                     help="Random seed for reproducibility")
     parser.add_argument("--create_val_from_train", action="store_true",
-                        help="Create a validation set from the training set", default=True)
+                        help="Create a validation set from the training set", default=False)
     parser.add_argument("--process_complete_graph_only", action="store_true",
                         help="Process the complete graphs only", default=True)
     parser.add_argument("--output_dir", type=str, default="src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes",
