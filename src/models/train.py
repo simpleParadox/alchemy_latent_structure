@@ -1103,6 +1103,7 @@ def main():
     args.train_data_path = os.path.join(base_path, args.train_data_path)
     args.val_data_path = os.path.join(base_path, args.val_data_path)
     args.save_dir = os.path.join(base_path, args.save_dir)
+    args.save_dir = args.save_dir + args.preprocessed_dir.split('/')[-1]
     print("Updated train data path: ", args.train_data_path)
     print("Updated validation data path: ", args.val_data_path if args.val_data_path else "None")
 
