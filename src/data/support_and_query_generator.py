@@ -745,6 +745,7 @@ def main():
     num_episodes = len(chemistry_graphs)
     print(f"Loaded data for {num_episodes} episodes")
 
+    target_data = {}
     if args.match_episodes_from_json:
         print(f"\n{'='*60}")
         print(f"MATCHING EPISODES FROM JSON")
@@ -1002,17 +1003,43 @@ def main():
                 # if args.samples_per_episode > max_unique_query:
                     # print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
                 
-                if args.held_out_color_exp:
-                    support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=seed)
+                if args.match_episodes_from_json and episode_id in target_data.get('episodes', {}):
+                    target_ep = target_data['episodes'][episode_id]
+                    
+                    def reconstruct_samples(info_list):
+                        reconstructed = []
+                        for s_info in info_list:
+                            start_node = s_info["start_node"]
+                            end_node = s_info["end_node"]
+                            potions = " ".join(s_info["potions"])
+                            start_desc = get_stone_description(graph[start_node])
+                            end_desc = get_stone_description(graph[end_node])
+                            reconstructed.append(f"{start_desc} {potions} -> {end_desc}")
+                        return reconstructed
+
+                    support_samples = reconstruct_samples(target_ep.get("support_samples_info", []))
+                    query_samples = reconstruct_samples(target_ep.get("query_samples_info", []))
+                    
+                    support_and_query_samples = {
+                        "support": support_samples,
+                        "query": query_samples,
+                        "support_num_generated": len(support_samples),
+                        "query_num_generated": len(query_samples),
+                        "support_samples_info": target_ep.get("support_samples_info", []),
+                        "query_samples_info": target_ep.get("query_samples_info", []),
+                    }
                 else:
-                    support_and_query_samples = generate_support_and_query_examples(
-                        graph, 
-                        args.samples_per_episode,
-                        args.support_steps,
-                        args.query_steps,
-                        args.shuffle_support,
-                        args.max_queries_per_start_node
-                    )
+                    if args.held_out_color_exp:
+                        support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=seed)
+                    else:
+                        support_and_query_samples = generate_support_and_query_examples(
+                            graph, 
+                            args.samples_per_episode,
+                            args.support_steps,
+                            args.query_steps,
+                            args.shuffle_support,
+                            args.max_queries_per_start_node
+                        )
                 
                 # Store the episode samples
                 train_output_data["episodes"][episode_id] = {
@@ -1095,17 +1122,43 @@ def main():
                     # print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
                 
                 
-                if args.held_out_color_exp:
-                    support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=seed)
+                if args.match_episodes_from_json and episode_id in target_data.get('episodes', {}):
+                    target_ep = target_data['episodes'][episode_id]
+                    
+                    def reconstruct_samples(info_list):
+                        reconstructed = []
+                        for s_info in info_list:
+                            start_node = s_info["start_node"]
+                            end_node = s_info["end_node"]
+                            potions = " ".join(s_info["potions"])
+                            start_desc = get_stone_description(graph[start_node])
+                            end_desc = get_stone_description(graph[end_node])
+                            reconstructed.append(f"{start_desc} {potions} -> {end_desc}")
+                        return reconstructed
+
+                    support_samples = reconstruct_samples(target_ep.get("support_samples_info", []))
+                    query_samples = reconstruct_samples(target_ep.get("query_samples_info", []))
+                    
+                    support_and_query_samples = {
+                        "support": support_samples,
+                        "query": query_samples,
+                        "support_num_generated": len(support_samples),
+                        "query_num_generated": len(query_samples),
+                        "support_samples_info": target_ep.get("support_samples_info", []),
+                        "query_samples_info": target_ep.get("query_samples_info", []),
+                    }
                 else:
-                    support_and_query_samples = generate_support_and_query_examples(
-                        graph, 
-                        args.samples_per_episode,
-                        args.support_steps,
-                        args.query_steps,
-                        args.shuffle_support,
-                        max_queries_per_start_node=args.max_queries_per_start_node
-                    )
+                    if args.held_out_color_exp:
+                        support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=seed)
+                    else:
+                        support_and_query_samples = generate_support_and_query_examples(
+                            graph, 
+                            args.samples_per_episode,
+                            args.support_steps,
+                            args.query_steps,
+                            args.shuffle_support,
+                            max_queries_per_start_node=args.max_queries_per_start_node
+                        )
                 
                 # Store the episode samples
                 val_output_data["episodes"][episode_id] = {
