@@ -96,3 +96,7 @@ src/models/__pycache__/analyze_predictions.cpython-310.pyc
 src/models/__pycache__/data_loaders.cpython-311.pyc
 test_padding_bug.py
 test_vocab_parsing.py
+*.csv
+
+src/models/fetch_wandb_stage_analysis.py
+src/models/wandb_stage_filters.py
