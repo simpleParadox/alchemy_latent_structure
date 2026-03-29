@@ -12,7 +12,7 @@ import re
 from baseline_and_frozen_filepaths import held_out_file_paths, frozen_held_out_file_paths_per_layer_per_init_seed, composition_file_paths, composition_file_paths_non_subsampled, \
         decomposition_file_paths, decomposition_file_paths_non_subsampled, composition_baseline_file_paths, composition_non_subsampled_file_paths_dict, \
         decomposition_baseline_file_paths, decomposition_non_subsampled_file_paths_dict, decomposition_baseline_pickle_file_paths, held_out_file_paths_input_stone_ids, \
-        get_composition_cross_hop_prediction_path, held_out_randomized_reward_file_paths
+        get_composition_cross_hop_prediction_path, held_out_randomized_reward_file_paths, held_out_normalized_reward_file_paths, held_out_baseline_normalized_reward_file_paths
 
 # Load the metadata, data, and vocab.
 if cluster == 'vulcan':
@@ -1681,7 +1681,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             support_key = tuple(support)
 
             if support_key in neighbors_per_chemistry:
-                print(f"Support key {support_key} already processed, skipping graph extraction.")
+                # print(f"Support key {support_key} already processed, skipping graph extraction.")
                 continue  # already processed this chemistry
 
             if input_format == 'features':
@@ -2231,6 +2231,8 @@ if __name__ == "__main__":
                         help="Flag to indicate if normalized reward should be used for the held_out exp type.", default=False)
     parser.add_argument('--randomized_reward', action='store_true',
                         help="Flag to indicate if randomized reward (ablation) should be used for the held_out exp type.", default=False)
+    parser.add_argument('--baseline_normalized_reward', action='store_true',
+                        help="Flag to indicate if baseline normalized reward should be used for the held_out exp type.", default=False)
 
     parser.add_argument('--annotated_epochs', action='store_true',
                         help="Flag to indicate if annotated epochs should be used for plotting.", default=False)
@@ -2270,7 +2272,7 @@ if __name__ == "__main__":
     four_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
     five_hop_epoch_values_text = [0, 200, 600, 800, 999]
 
-    four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 500, 999]
+    four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 5000] #, 999]
 
     # Create a dictionary mapping hop counts to their hop-specific epoch values
     hop_to_epoch_values = {
@@ -2455,9 +2457,13 @@ if __name__ == "__main__":
             if exp_typ == 'held_out':
                 updated_held_out_file_paths = {}
                 # for seed in [42, 1, 3]:
-                for seed in [3]:
+                for seed in [42]:
                     if args.randomized_reward:
                         updated_held_out_file_paths[seed] = held_out_randomized_reward_file_paths[hop][args.data_split_seed][seed]
+                    elif args.normalized_reward:
+                        updated_held_out_file_paths[seed] = held_out_normalized_reward_file_paths[hop][args.data_split_seed][seed]
+                    elif args.baseline_normalized_reward:
+                        updated_held_out_file_paths[seed] = held_out_baseline_normalized_reward_file_paths[hop][args.data_split_seed][seed]
                     else:
                         updated_held_out_file_paths[seed] = held_out_file_paths[hop][args.data_split_seed][seed]
             elif exp_typ == 'composition':
@@ -2472,6 +2478,10 @@ if __name__ == "__main__":
         else:
             if args.randomized_reward:
                 updated_held_out_file_paths = held_out_randomized_reward_file_paths[hop]
+            elif args.baseline_normalized_reward:
+                updated_held_out_file_paths = held_out_baseline_normalized_reward_file_paths[hop]
+            elif args.normalized_reward:
+                updated_held_out_file_paths = held_out_normalized_reward_file_paths[hop]
             else:
                 updated_held_out_file_paths = held_out_file_paths[hop]
 
@@ -2502,25 +2512,35 @@ if __name__ == "__main__":
     for seed in data_seeds:
         if exp_typ == 'held_out':
             if args.randomized_reward:
-                data_files = {
-                    "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/held_out_randomized_reward_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
-                    "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/held_out_randomized_reward_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
-                }
-            elif not args.normalized_reward:
-                data_files = {
-                    "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
-                    "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
-                }
-                if args.input_format == 'stone_states':
-                    data_files = {
-                        "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/input_stone_states_shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_0_classification_filter_True_input_stone_states_output_stone_states_vocab.pkl",
-                        "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/input_stone_states_shuffled_held_out_exps_preprocessed_separate_enhanced/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_0_classification_filter_True_input_stone_states_output_stone_states_metadata.json"
-                    }
+                print("Using randomized reward")
+                data_dir = "held_out_randomized_reward_preprocessed_separate_enhanced"
+                file_prefix = f"compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}"
+                suffix = "classification_filter_True_input_features_output_stone_states"
+            elif args.baseline_normalized_reward:
+                print("Using baseline normalized reward")
+                data_dir = "baseline_preprocessed_from_normalized_reward"
+                file_prefix = f"compositional_baseline_compositional_chemistry_samples_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_0"
+                suffix = "classification_filter_True_input_features_output_stone_states"
+            elif args.normalized_reward:
+                print("Using normalized reward")
+                data_dir = "same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced"
+                file_prefix = f"normalized_compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}"
+                suffix = "classification_filter_True_input_features_output_stone_states"
             else:
-                data_files = {
-                    "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced/normalized_compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_vocab.pkl",
-                    "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/same_reward_shuffled_held_out_exps_preprocessed_separate_enhanced/normalized_compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}_classification_filter_True_input_features_output_stone_states_metadata.json"
-                }
+                print("Using shuffled held out exps")
+                if args.input_format == 'stone_states':
+                    data_dir = "input_stone_states_shuffled_held_out_exps_preprocessed_separate_enhanced"
+                    file_prefix = "compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_0"
+                    suffix = "classification_filter_True_input_stone_states_output_stone_states"
+                else:
+                    data_dir = "shuffled_held_out_exps_preprocessed_separate_enhanced"
+                    file_prefix = f"compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_{seed}"
+                    suffix = "classification_filter_True_input_features_output_stone_states"
+
+            data_files = {
+                "vocab": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/{data_dir}/{file_prefix}_{suffix}_vocab.pkl",
+                "metadata": f"/home/rsaha/projects/{infix}dm_alchemy/src/data/{data_dir}/{file_prefix}_{suffix}_metadata.json"
+            }
                 
 
             vocab = pickle.load(open(data_files["vocab"], "rb"))
@@ -3332,9 +3352,17 @@ if __name__ == "__main__":
             ax.set_ylim(0, 1)
         # plt.suptitle(f'Phasic learning of latent structure learning ({hop}-hop) - Individual Seeds', fontsize=20, y=1.02)
         plt.tight_layout()
+        filename_suffix = ""
         if args.normalized_reward:
-            plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds_normalized_reward.png')
-            plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds_normalized_reward.pdf', bbox_inches='tight')
+            filename_suffix = "_normalized_reward"
+        elif args.baseline_normalized_reward:
+            filename_suffix = "_baseline_normalized_reward"
+        elif args.randomized_reward:
+            filename_suffix = "_randomized_reward"
+
+        if filename_suffix != "":
+            plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds{filename_suffix}.png')
+            plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds{filename_suffix}.pdf', bbox_inches='tight')
         else:
             plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds.png')
             plt.savefig(f'{exp_typ}_{hop}_staged_learning_of_individual_seeds.pdf', bbox_inches='tight')
@@ -3354,9 +3382,9 @@ if __name__ == "__main__":
         plt.grid(True, alpha=0.3)
         plt.ylim(0, 1)
         plt.tight_layout()
-        if args.normalized_reward:
-            plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds_normalized_reward.png')
-            plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds_normalized_reward.pdf', bbox_inches='tight')
+        if filename_suffix != "":
+            plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds{filename_suffix}.png')
+            plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds{filename_suffix}.pdf', bbox_inches='tight')
         else:
             plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds.png')
             plt.savefig(f'{exp_typ}_{hop}_exact_accuracy_across_seeds.pdf', bbox_inches='tight')
@@ -3492,11 +3520,13 @@ if __name__ == "__main__":
                     extracted_part = match.group(1).replace('/', '_')
                     seed_value = match.group(2)
                     output_file_name = f"{exp_typ}_{hop}hop_{extracted_part}_seed_{seed_value}_phasic_learning_of_latent_structure.png"
+                    if filename_suffix != "":
+                        output_file_name = output_file_name.replace('.png', f'{filename_suffix}.png')
                     plt.savefig(output_file_name)
                     plt.savefig(output_file_name.replace('.png', '.pdf'), bbox_inches='tight')
             else:
-                plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_of_latent_structure.png')
-                plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_of_latent_structure.pdf', bbox_inches='tight')
+                plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_of_latent_structure{filename_suffix}.png')
+                plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_of_latent_structure{filename_suffix}.pdf', bbox_inches='tight')
 
 
 

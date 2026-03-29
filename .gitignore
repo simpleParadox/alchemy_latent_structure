@@ -89,3 +89,10 @@ src/reward_variants.py
 src/test_dataloaders.py
 src/test_regex.py
 src/trace_dataloader.py
+src/check_baseline.py
+src/check_baseline_stones.py
+src/check_baseline_vocab.py
+src/models/__pycache__/analyze_predictions.cpython-310.pyc
+src/models/__pycache__/data_loaders.cpython-311.pyc
+test_padding_bug.py
+test_vocab_parsing.py

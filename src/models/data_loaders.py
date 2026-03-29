@@ -586,11 +586,23 @@ class AlchemyDataset(Dataset):
         """Initialize dataset from scratch with separate input/output vocabularies."""
         
         if vocab_word2idx and vocab_idx2word:
-            # Use provided vocabulary for both input and output (unified approach)
+            # Use provided vocabulary for input 
             self.input_word2idx = vocab_word2idx
             self.input_idx2word = vocab_idx2word
-            self.output_word2idx = vocab_word2idx  # Use same vocabulary for output when provided
-            self.output_idx2word = vocab_idx2word
+            
+            # Handle output vocabulary cautiously to not overwrite stone states
+            if self.output_format == "stone_states":
+                if stone_state_to_id:
+                    self.output_word2idx = stone_state_to_id
+                    self.output_idx2word = {v: k for k, v in stone_state_to_id.items()}
+                else:
+                    word2idx, idx2word = self._build_stone_state_vocab(json_file_path)
+                    self.output_word2idx = word2idx
+                    self.output_idx2word = idx2word
+            else:
+                self.output_word2idx = vocab_word2idx  # Use same vocabulary for output when provided
+                self.output_idx2word = vocab_idx2word
+                
             # For backward compatibility, also set the old names
             self.word2idx = vocab_word2idx  
             self.idx2word = vocab_idx2word
