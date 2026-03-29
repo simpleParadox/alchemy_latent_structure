@@ -700,8 +700,10 @@ def main():
                         help="Create a validation set from the training set", default=False)
     parser.add_argument("--process_complete_graph_only", action="store_true",
                         help="Process the complete graphs only", default=True)
-    parser.add_argument("--output_dir", type=str, default="src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes",
+    parser.add_argument("--output_dir", type=str, 
+                        # default="src/data/complete_graph_generated_data_enhanced_qnodes_in_snodes",
         # "--output_dir", default="src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_generated_data",
+                        default='src/data/baseline_normalized_held_out_subset_of_original',
                         help="Directory to save the output files. Default is current directory.") # held_out_exps_generated_data_enhanced, generated_data_enhanced_qnodes_in_snodes_complete_graphs_only
     
     # Add a new argument for your experiment
@@ -728,6 +730,9 @@ def main():
 
     parser.add_argument("--match_episodes_from_json", type=str, default=None,
                         help="Path to an existing generated JSON. If provided, the script will ONLY process the episodes found in that JSON, and will disable train/val splitting (--create_val_from_train will be forced to False).")
+
+    parser.add_argument("--subset_episodes", type=int, default=None,
+                        help="Randomly subsample the total number of episodes to this exact number BEFORE train/val split. Useful for creating reduced dataset size baselines.")
 
     args = parser.parse_args()
     
@@ -886,26 +891,57 @@ def main():
     
         random.seed(seed)
 
+        # Make a local copy of chemistry_graphs to not mutate across seeds
+        current_chemistry_graphs = dict(chemistry_graphs)
+
+        # Subsample episodes if requested
+        if args.subset_episodes is not None and not args.match_episodes_from_json:
+            # Gather valid ones so we don't accidentally sample incomplete graphs 
+            # if we are later going to filter incomplete graphs out.
+            if args.process_complete_graph_only and not (args.normalize_reward or args.randomize_reward):
+                available_eps = [
+                    ep_id for ep_id, ep_data in current_chemistry_graphs.items()
+                    if ep_id != '_metadata' and ep_data.get('is_complete', False)
+                ]
+            else:
+                available_eps = [ep_id for ep_id in current_chemistry_graphs.keys() if ep_id != '_metadata']
+                
+            if len(available_eps) > args.subset_episodes:
+                selected_eps = set(random.sample(available_eps, args.subset_episodes))
+                if '_metadata' in current_chemistry_graphs:
+                    selected_eps.add('_metadata')
+                current_chemistry_graphs = {ep_id: ep_data for ep_id, ep_data in current_chemistry_graphs.items() if ep_id in selected_eps}
+                print(f"Subsampled dataset to {args.subset_episodes} chemistries using seed {seed}.")
+            else:
+                print(f"Warning: Requested subset_episodes {args.subset_episodes} is >= available episodes {len(available_eps)}. Using all available.")
+
+        # Update num_episodes for calculating train/val split size
+        current_num_episodes = sum(1 for k in current_chemistry_graphs.keys() if k != '_metadata')
+
         # Split episodes into training and validation sets if requested
         if args.create_val_from_train:
             # Determine the number of episodes for validation (10%)
-            num_val_episodes = max(1, int(num_episodes * 0.1))
-            num_train_episodes = num_episodes - num_val_episodes
+            num_val_episodes = max(1, int(current_num_episodes * 0.1))
+            num_train_episodes = current_num_episodes - num_val_episodes
             
             print(f"Creating {num_train_episodes} training episodes and {num_val_episodes} validation episodes")
             
             # Randomly select episodes for validation
-            episode_ids = list(chemistry_graphs.keys())
+            episode_ids = [k for k in current_chemistry_graphs.keys() if k != '_metadata']
             random.shuffle(episode_ids)
             val_episode_ids = set(episode_ids[:num_val_episodes])
             train_episode_ids = set(episode_ids[num_val_episodes:])
             
-            ordered_train_episode_ids = sorted(list(train_episode_ids))
-            ordered_val_episode_ids = sorted(list(val_episode_ids))
+            if '_metadata' in current_chemistry_graphs:
+                train_episode_ids.add('_metadata')
+                val_episode_ids.add('_metadata')
+            
+            ordered_train_episode_ids = sorted([k for k in train_episode_ids if k != '_metadata'])
+            ordered_val_episode_ids = sorted([k for k in val_episode_ids if k != '_metadata'])
             
             # Create separate dictionaries for training and validation
-            train_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in train_episode_ids}
-            val_graphs = {ep_id: chemistry_graphs[ep_id] for ep_id in val_episode_ids}
+            train_graphs = {ep_id: current_chemistry_graphs[ep_id] for ep_id in train_episode_ids}
+            val_graphs = {ep_id: current_chemistry_graphs[ep_id] for ep_id in val_episode_ids}
             
             # Output file names
             support_hop = args.support_steps
@@ -941,7 +977,7 @@ def main():
             print(f"Validation data will be saved to: {output_file}")
         else:
             # Use all episodes for training
-            train_graphs = chemistry_graphs
+            train_graphs = current_chemistry_graphs
             val_graphs = {}
             train_output_file = output_file
             
@@ -1067,7 +1103,7 @@ def main():
             # Ensure the output directory exists
             # args.output_dir = os.getcwd() + '/' + args.output_dir if not args.output_dir == '.' else args.output_dir
             # os.makedirs(os.path.dirname(args.output_dir), exist_ok=True)
-            # train_output_file = os.path.join(args.output_dir, train_output_file)
+            train_output_file = os.path.join(args.output_dir, train_output_file)
             with open(train_output_file, 'w') as f:
                 json.dump(train_output_data, f)
             
