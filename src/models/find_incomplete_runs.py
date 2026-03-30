@@ -262,6 +262,7 @@ def check_run_completeness(
     #   <checkpoint_base>/resume_from_epoch_<N>__freeze_<layer>/predictions/
     resume_subdir = f"resume_from_epoch_{freeze_epoch}__freeze_{frozen_layer}"
     pred_dir = os.path.join(checkpoint_base_path, resume_subdir, "predictions")
+    # print(pred_dir)
 
     # Expected: predictions from epoch (freeze_epoch+1) through epoch 999
     expected_files = TOTAL_EPOCHS - 1 - freeze_epoch  # epoch 0 has no prediction
@@ -272,6 +273,7 @@ def check_run_completeness(
         status = "missing"
     elif actual_files < expected_files:
         status = "incomplete"
+        print(pred_dir)
     else:
         status = "complete"
 
