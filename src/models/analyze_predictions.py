@@ -2456,8 +2456,7 @@ if __name__ == "__main__":
         if args.data_split_seed is not None:
             if exp_typ == 'held_out':
                 updated_held_out_file_paths = {}
-                # for seed in [42, 1, 3]:
-                for seed in [42]:
+                for seed in [42, 1, 3]:
                     if args.randomized_reward:
                         updated_held_out_file_paths[seed] = held_out_randomized_reward_file_paths[hop][args.data_split_seed][seed]
                     elif args.normalized_reward:
