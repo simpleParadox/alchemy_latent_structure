@@ -2097,20 +2097,19 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
                     seed_non_subsampled = int(match_non_subsampled.group(1))
                     # import pdb; pdb.set_trace()
                     if seed_non_subsampled != seed:
-                        raise ValueError(f"Seed mismatch between subsampled and non-subsampled paths: {seed} vs {seed_non_subsampled}")
-                    else:
-                        non_subsampled_path_val_data = pickle.load(open(non_subsampled_path, 'rb'))
-                        # Iterate through the non-subsampled data to extract inputs and targets
-                        inputs_raw = []
-                        targets_raw = []
-                        for sample in non_subsampled_path_val_data:
-                            inputs_raw.append(sample['encoder_input_ids'])
-                            targets_raw.append(sample['target_class_id'])
-                        
-                        # Create a data_with_targets list
-                        data_with_targets_non_subsampled = [{'encoder_input_ids': inputs_raw[i], 'target_class_id': targets_raw[i]} for i in range(len(targets_raw))]
-                        print("Created non-subsampled data for seed ", seed, " with ", len(data_with_targets_non_subsampled), " samples.")
-                        non_subsampled_targets_by_seed[seed] = data_with_targets_non_subsampled
+                        print(f"Warning: Seed mismatch between subsampled and non-subsampled paths: {seed} vs {seed_non_subsampled}. This is expected if 'seed' is init_seed and 'seed_non_subsampled' is data_split_seed.")
+                    non_subsampled_path_val_data = pickle.load(open(non_subsampled_path, 'rb'))
+                    # Iterate through the non-subsampled data to extract inputs and targets
+                    inputs_raw = []
+                    targets_raw = []
+                    for sample in non_subsampled_path_val_data:
+                        inputs_raw.append(sample['encoder_input_ids'])
+                        targets_raw.append(sample['target_class_id'])
+                    
+                    # Create a data_with_targets list
+                    data_with_targets_non_subsampled = [{'encoder_input_ids': inputs_raw[i], 'target_class_id': targets_raw[i]} for i in range(len(targets_raw))]
+                    print("Created non-subsampled data for seed ", seed, " with ", len(data_with_targets_non_subsampled), " samples.")
+                    non_subsampled_targets_by_seed[seed] = data_with_targets_non_subsampled
                 else:
                     raise ValueError(f"Seed not found in the provided non-subsampled file path: {non_subsampled_path}")
                     
@@ -2217,6 +2216,8 @@ if __name__ == "__main__":
                         help="Hop count for decomposition and composition experiments (ignored for held_out)")
     parser.add_argument('--custom_output_file', type=str, default=None,
                         help="Custom output file name for saving results")
+    parser.add_argument('--custom_predictions_path', type=str, default=None,
+                        help="Directly provide the path to the predictions folder for a specific run.")
     parser.add_argument('--get_output_file_from_input_path', action='store_true',
                         help="Flag to generate output file name based on input file paths", default=False)
 
@@ -2418,6 +2419,9 @@ if __name__ == "__main__":
 
             updated_path = f"{updated_base_path}/resume_from_epoch_{str(args.freeze_epoch)}__freeze_{args.frozen_layer}/predictions/"
             start_epoch = args.freeze_epoch + 1
+            
+        if args.custom_predictions_path:
+            updated_path = args.custom_predictions_path
         
         if exp_typ == 'held_out':
             predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_composition_data  = load_epoch_data_updated_single_seed(
@@ -2453,7 +2457,7 @@ if __name__ == "__main__":
             
     else:
         start_epoch = hop_to_epoch_values[hop][0]
-        if args.data_split_seed is not None:
+        if args.data_split_seed is not None and not args.custom_predictions_path:
             if exp_typ == 'held_out':
                 updated_held_out_file_paths = {}
                 for seed in [42, 1, 3]:
@@ -2470,19 +2474,24 @@ if __name__ == "__main__":
                 for seed in [42, 1, 3]:
                     updated_composition_file_paths[seed] = composition_baseline_file_paths[hop][args.data_split_seed][seed]
             elif exp_typ == 'decomposition':
-                updated_decomposition_file_path = {}
+                updated_decomposition_file_paths = {}
                 for seed in [42, 1, 3]:
-                    updated_decomposition_file_path[seed] = decomposition_baseline_file_paths[hop][args.data_split_seed][seed]
+                    updated_decomposition_file_paths[seed] = decomposition_baseline_file_paths[hop][args.data_split_seed][seed]
                 
-        else:
-            if args.randomized_reward:
-                updated_held_out_file_paths = held_out_randomized_reward_file_paths[hop]
-            elif args.baseline_normalized_reward:
-                updated_held_out_file_paths = held_out_baseline_normalized_reward_file_paths[hop]
-            elif args.normalized_reward:
-                updated_held_out_file_paths = held_out_normalized_reward_file_paths[hop]
-            else:
-                updated_held_out_file_paths = held_out_file_paths[hop]
+        elif not args.custom_predictions_path:
+            if exp_typ == 'held_out':
+                if args.randomized_reward:
+                    updated_held_out_file_paths = held_out_randomized_reward_file_paths[hop]
+                elif args.baseline_normalized_reward:
+                    updated_held_out_file_paths = held_out_baseline_normalized_reward_file_paths[hop]
+                elif args.normalized_reward:
+                    updated_held_out_file_paths = held_out_normalized_reward_file_paths[hop]
+                else:
+                    updated_held_out_file_paths = held_out_file_paths[hop]
+            elif exp_typ == 'composition':
+                updated_composition_file_paths = composition_file_paths[hop]
+            elif exp_typ == 'decomposition':
+                updated_decomposition_file_paths = decomposition_file_paths[hop]
 
         # predictions_by_epoch_by_seed, inputs_by_seed, non_subsampled_composition_data  = load_epoch_data(
         #     exp_typ = exp_typ,
@@ -2500,7 +2509,7 @@ if __name__ == "__main__":
             epoch_range = (start_epoch, hop_to_epoch_values[hop][-1]),
             seeds = seed_values_hop_dict[hop] if args.init_seed is None else [args.init_seed],
             scheduler_prefix = scheduler_prefix,
-            file_paths = updated_composition_file_paths if exp_typ == 'composition' else updated_decomposition_file_paths if exp_typ == 'decomposition' else updated_held_out_file_paths,
+            file_paths = {args.init_seed: args.custom_predictions_path} if args.custom_predictions_path else (updated_composition_file_paths if exp_typ == 'composition' else updated_decomposition_file_paths if exp_typ == 'decomposition' else updated_held_out_file_paths),
             file_paths_non_subsampled = composition_non_subsampled_file_paths_dict if exp_typ == 'composition' else decomposition_non_subsampled_file_paths_dict if exp_typ == 'decomposition' else None,
             frozen_layer = args.frozen_layer
         )

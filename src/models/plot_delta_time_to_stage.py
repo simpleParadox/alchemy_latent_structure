@@ -11,12 +11,12 @@ METRIC_KEYS = {
     "p_a": "predicted_in_context_accuracies",
 
     # Held out
-    # "p_b_given_a": "predicted_in_context_correct_half_accuracies",
-    # "p_c_given_ab": "predicted_in_context_correct_half_exact_accuracies",
+    "p_b_given_a": "predicted_in_context_correct_half_accuracies",
+    "p_c_given_ab": "predicted_in_context_correct_half_exact_accuracies",
 
     # Composition
-    "p_b_given_a": "predicted_in_context_correct_candidate_accuracies",
-    "p_c_given_ab": "correct_within_candidates"
+    # "p_b_given_a": "predicted_in_context_correct_candidate_accuracies",
+    # "p_c_given_ab": "correct_within_candidates"
 }
 
 
@@ -65,7 +65,9 @@ def extract_plot_data_with_errorbars(
     x_mode: str = "absolute",
     bin_width: int = 1,  # CHANGED: default no binning
     anchor_metric_key: Optional[str] = None,
-    debug_relative: bool = False,  # NEW
+    debug_relative: bool = False,  
+    min_x: Optional[int] = None,
+    max_x: Optional[int] = None,
 ) -> Dict[str, List[Tuple[int, float, float, int]]]:
     """
     Returns:
@@ -165,6 +167,11 @@ def extract_plot_data_with_errorbars(
                 else:
                     raise ValueError(f"Unknown x_mode={x_mode}. Use 'absolute' or 'relative'.")
 
+                if min_x is not None and x_val < min_x:
+                    continue
+                if max_x is not None and x_val > max_x:
+                    continue
+
                 values.setdefault(layer_name, {}).setdefault(int(x_val), []).append(float(delta_t))
 
     if debug_relative and x_mode == "relative":
@@ -230,7 +237,7 @@ def extract_plot_data_with_errorbars(
                 continue
             arr = np.asarray(vals, dtype=float)
             mean = float(np.mean(arr))
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
             # SEM: std / sqrt(n); use ddof=1 only if n>1
             std = float(np.std(arr, ddof=1)) if n > 1 else 0.0
             sem = float(std / np.sqrt(n)) if n > 1 else 0.0
@@ -264,6 +271,10 @@ def plot_deltas_with_errorbars(
     anchor_metric: Optional[str] = None,
     anchor_key: Optional[str] = None,
     debug_relative: bool = False,  # NEW
+    min_x: Optional[int] = None,
+    max_x: Optional[int] = None,
+    y_min: Optional[int] = None,
+    y_max: Optional[int] = None,
 ):
     layer_data = extract_plot_data_with_errorbars(
         results_json_path=results_path,
@@ -277,6 +288,8 @@ def plot_deltas_with_errorbars(
         bin_width=bin_width,
         anchor_metric_key=anchor_metric,
         debug_relative=debug_relative,
+        min_x=min_x,
+        max_x=max_x,
     )
 
     if not layer_data:
@@ -340,9 +353,8 @@ def plot_deltas_with_errorbars(
         ax.set_xlabel("Freeze Epoch", fontsize=18)
     else:
         if bin_width > 1:
-            xlabel = f"Relative Freeze Epoch (t_f - t_base[{anchor_key or stage_key}]) [bin={bin_width}]"
+            xlabel = f"Relative Freeze Epoch (t_f - t_base[{anchor_key or stage_key}])" 
         else:
-            # xlabel = f"Relative Freeze Epoch (t_f - t_base[{anchor_key or stage_key}])"
             xlabel = f"Relative Freeze Epoch"
         ax.set_xlabel(xlabel, fontsize=18)
         ax.axvline(x=0, color="black", linestyle=":", alpha=1.0)
@@ -362,13 +374,14 @@ def plot_deltas_with_errorbars(
     #     fontsize=20,
     # )
     # ax.legend(title="Frozen Layer", bbox_to_anchor=(1.05, 1), loc="upper left")
-    ax.legend(title="Frozen Layer", loc="upper right")
+    ax.legend(title="Frozen Layer", loc="lower left")
     # ax.grid(True, linestyle=":", alpha=0.6)
     ax.grid(True)
 
     # x-ticks font size
     plt.xticks(fontsize=18)
     plt.yticks(fontsize=18)
+    plt.ylim(y_min, y_max)
 
 
     plt.tight_layout()
@@ -465,6 +478,30 @@ def main():
         action="store_true",
         help="Print per-init_seed coverage of relative x-values (checks that x=0 exists, etc.).",
     )
+    parser.add_argument(
+        "--min_x",
+        type=int,
+        default=None,
+        help="Minimum value on the x-axis to plot.",
+    )
+    parser.add_argument(
+        "--max_x",
+        type=int,
+        default=None,
+        help="Maximum value on the x-axis to plot.",
+    )
+    parser.add_argument(
+        "--y_min",
+        type=int,
+        default=None,
+        help="Minimum value on the y-axis to plot.",
+    )
+    parser.add_argument(
+        "--y_max",
+        type=int,
+        default=None,
+        help="Maximum value on the y-axis to plot.",
+    )
 
     args = parser.parse_args()
 
@@ -491,6 +528,10 @@ def main():
         anchor_metric=anchor_metric,
         anchor_key=anchor_alias,
         debug_relative=args.debug_relative,
+        min_x=args.min_x,
+        max_x=args.max_x,
+        y_min=args.y_min,
+        y_max=args.y_max,
     )
 
 
