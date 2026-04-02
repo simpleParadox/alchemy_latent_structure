@@ -38,7 +38,8 @@ def _cap_delta_t(delta_t: Optional[float], cap: float) -> Optional[float]:
 def _bin_center(x: float, bin_width: int) -> int:
     if bin_width <= 0:
         raise ValueError("bin_width must be >= 1")
-    return int(np.round(x / bin_width) * bin_width)
+    # Standard binning: map x to the nearest multiple of bin_width
+    return int(np.floor((x + bin_width / 2) / bin_width) * bin_width)
 
 
 def _get_t_baseline_from_payload(payload: dict) -> Optional[int]:
@@ -366,7 +367,7 @@ def plot_deltas_with_errorbars(
     }
 
     init_seed_str = ",".join(str(s) for s in (init_seeds if init_seeds is not None else [1, 3, 42]))
-    ax.set_ylabel(f"Δt for event {stage_key_map.get(stage_key, stage_key)})", fontsize=18)
+    ax.set_ylabel(f"Δt for event {stage_key_map.get(stage_key, stage_key)}", fontsize=18)
     # ax.set_title(
     #     "Impact of Freezing on the Delay of Event 'k'\n"
     #     # f"exp_typ={exp_typ} | metric={stage_key} | data_split_seed={data_split_seed} | init_seeds=[{init_seed_str}]"
@@ -374,7 +375,7 @@ def plot_deltas_with_errorbars(
     #     fontsize=20,
     # )
     # ax.legend(title="Frozen Layer", bbox_to_anchor=(1.05, 1), loc="upper left")
-    ax.legend(title="Frozen Layer", loc="lower left")
+    ax.legend(title="Frozen Layer", loc="upper right")
     # ax.grid(True, linestyle=":", alpha=0.6)
     ax.grid(True)
 
@@ -388,7 +389,7 @@ def plot_deltas_with_errorbars(
     if output_path:
         plt.savefig(output_path, dpi=200)
         plt.savefig(output_path.replace(".png", ".pdf"), dpi=200)
-        print(f"Plot saved to {output_path}")
+        print(f"Plot saved to {output_path}.png")
     else:
         plt.show()
 
