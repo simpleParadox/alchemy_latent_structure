@@ -344,7 +344,7 @@ class StoneStateDecoderClassifier(nn.Module):
                  src_vocab_size: int, num_classes: int,
                  dim_feedforward: int = 512, dropout: float = 0.1,
                 max_len: int = 5000, prediction_type=None, padding_side: str = "right", use_flash_attention: bool = False,
-                batch_size: int = 32): 
+                batch_size: int = 32, vocab: dict = None): 
         super(StoneStateDecoderClassifier, self).__init__()
         self.emb_size = emb_size
         self.architecture = "decoder"  # Add architecture attribute
@@ -364,6 +364,7 @@ class StoneStateDecoderClassifier(nn.Module):
 
         self.use_flash_attention = use_flash_attention
         self.batch_size = batch_size
+        self.vocab = vocab
         print(f"Using flash attention: {self.use_flash_attention}")
 
     def _generate_causal_mask(self, sz: int, device: torch.device) -> torch.Tensor:
@@ -375,7 +376,7 @@ class StoneStateDecoderClassifier(nn.Module):
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
-    def forward(self, src: torch.Tensor, src_padding_mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, src: torch.Tensor, src_padding_mask: torch.Tensor = None, ablation_type: str = None) -> torch.Tensor:
         """
         Forward pass for the StoneStateDecoderClassifier.
         Args:
@@ -385,8 +386,62 @@ class StoneStateDecoderClassifier(nn.Module):
         Returns:
             Output tensor of shape (batch_size, num_classes) representing logits.
         """
-        # Embed and apply positional encoding
+        
+        seq_len = src.size(1)
+        batch_size = src.size(0)
+        query_reward_idx = seq_len - 2
+
+        # STEP 1: Implement ablation BEFORE embedding
+        if ablation_type == 'replace_reward_with_unk':
+            # print("Replacing reward tokens with <unk>. Must not be used during training.")
+            # Direct IDs from your vocab: {'-1': 0, '-3': 1, '1': 2, '3': 3}
+            reward_strs = ['-1', '-3', '1', '3']
+            reward_ids = [self.vocab[s] if s in self.vocab else None for s in reward_strs]
+            if None in reward_ids:
+                raise ValueError(f"Reward tokens {reward_strs} not found in vocabulary.")
+            
+            unk_id = self.vocab.get('<unk>', None)
+            if unk_id is None:
+                raise ValueError("UNK token not found in vocabulary.")
+            
+            # Replace each reward ID with the <unk> ID in the source tensor
+            for r_id in reward_ids:
+                src = torch.where(src == r_id, torch.tensor(unk_id, device=src.device), src)
+                
+                
+        elif ablation_type == 'replace_query_reward_with_unk':
+            unk_id = self.vocab.get('<unk>', None)
+            if unk_id is None:
+                raise ValueError("UNK token not found in vocabulary.")
+            
+            src = src.clone() # Clone to avoid mutating the original batch tensor
+            src[:, query_reward_idx] = unk_id
+
+
+        # # Embed and apply positional encoding
         src_emb = self.src_tok_emb(src) * math.sqrt(self.emb_size)
+
+        if ablation_type in ['replace_reward_with_zero', 'replace_query_reward_with_zero']:
+            if ablation_type == 'replace_reward_with_zero':
+                # Global: Zero out ALL reward embeddings
+                reward_strs = ['-1', '-3', '1', '3']
+                reward_ids = [self.vocab[s] if s in self.vocab else None for s in reward_strs]
+                if None in reward_ids:
+                    raise ValueError("Reward tokens not found in vocabulary.")
+                
+                reward_mask = torch.zeros_like(src, dtype=torch.bool)
+                for r_id in reward_ids:
+                    reward_mask |= (src == r_id)
+                
+                # Unsqueeze to target the embedding dimension
+                src_emb = src_emb.masked_fill(reward_mask.unsqueeze(-1), 0.0)
+
+            elif ablation_type == 'replace_query_reward_with_zero':
+                # Local: Zero out ONLY the query reward embedding.
+                # Note: query_reward_idx is in dim 1 (Sequence Position).
+                src_emb[:, query_reward_idx, :] = 0.0        
+        
+        
         src_emb_permuted = src_emb.permute(1, 0, 2)
         src_emb_pe = self.positional_encoding(src_emb_permuted)
         src_emb = src_emb_pe.permute(1, 0, 2)
@@ -395,7 +450,6 @@ class StoneStateDecoderClassifier(nn.Module):
         # Note: We create the mask for the full sequence length (including padding).
         # The padding mask will handle masking out padding tokens separately.
         # PyTorch's attention mechanism combines both masks correctly.
-        seq_len = src.size(1)
         causal_mask = None
         
         # Pass through the transformer encoder layers with causal mask
@@ -407,12 +461,50 @@ class StoneStateDecoderClassifier(nn.Module):
             # Using a boolean mask allows PyTorch to use the optimized SDPA kernel
 
             causal_mask = torch.triu(torch.ones((seq_len, seq_len), device=src.device), diagonal=1).bool()
+            causal_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1).clone()
+            is_causal_hint = True
+            # 2. Apply Global Attention Masking Ablation
+            if ablation_type in ['mask_reward_at_attention', 'mask_query_reward_at_attention']:
+                # print("Applying Global Attention Masking to all reward tokens.")
+                
+                if ablation_type == 'mask_reward_at_attention':
+                    reward_strs = ['-1', '-3', '1', '3']
+                    reward_ids = [self.vocab[s] if s in self.vocab else None for s in reward_strs]
+                    if None in reward_ids:
+                        raise ValueError(f"Reward tokens {reward_strs} not found in vocabulary.")
+
+                    # Expand 2D mask to 3D for batch-specific masking: (Batch, Seq, Seq)
+                    # .clone() is critical here because .expand() returns a view, and we need to modify it
+
+                    # Find where the rewards are in the sequence
+                    reward_mask = torch.zeros_like(src, dtype=torch.bool)
+                    
+                    for r_id in reward_ids:
+                        reward_mask |= (src == r_id)
+                    # Apply the mask: For every sequence in the batch, prevent ALL tokens (row :)
+                    # from attending to the reward tokens (column reward_mask[b])
+                    for b in range(batch_size):
+                        causal_mask[b, :, reward_mask[b]] = True
+
+                elif ablation_type == 'mask_query_reward_at_attention':
+                    query_reward_idx = seq_len - 2
+                    # Mask the column so no token can attend to the query's reward
+                    causal_mask[:, :, query_reward_idx] = True
+
+                # We must set this to False so PyTorch backend actually uses our custom 3D mask
+                is_causal_hint = False
+                nhead = self.transformer_encoder.layers[0].self_attn.num_heads
+                causal_mask = causal_mask.repeat_interleave(nhead, dim=0)
+            else:
+                # For baseline AND input-space ablations (Zeroing/UNK), use the standard 2D mask
+                causal_mask = torch.triu(torch.ones((seq_len, seq_len), device=src.device, dtype=torch.bool), diagonal=1)
+                is_causal_hint = True 
 
             decoder_output = self.transformer_encoder(
                 src=src_emb, 
                 mask=causal_mask,           # Boolean causal mask NOTE: Because we are using right padding, we do not need to provide src_key_padding_mask.
                 src_key_padding_mask=None,  # No padding mask - fastest path
-                is_causal=True              # Hint for optimized kernel
+                is_causal=is_causal_hint              # Hint for optimized kernel
             )
         else:
             # print("Using standard attention with additive causal mask.")
@@ -812,7 +904,7 @@ def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: 
         max_len=max_len,
         pooling_strategy=pooling_strategy,
         item_sep_token_id=item_sep_token_id,
-        io_sep_token_id=io_sep_token_id
+        io_sep_token_id=io_sep_token_id,
     )
     
     model.to(device)
@@ -823,7 +915,8 @@ def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: 
     return model
 
 def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048, 
-                                    prediction_type=None, padding_side: str = "left", use_flash_attention: bool = False, batch_size: int = 32):
+                                    prediction_type=None, padding_side: str = "left", use_flash_attention: bool = False, batch_size: int = 32,
+                                    vocab: dict = None):
     """
     Creates a StoneStateDecoderClassifier model based on a configuration name.
     
@@ -883,7 +976,8 @@ def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_c
         prediction_type=prediction_type,
         padding_side=padding_side,
         use_flash_attention=use_flash_attention,
-        batch_size=batch_size
+        batch_size=batch_size,
+        vocab=vocab
     )
     
     model.to(device)

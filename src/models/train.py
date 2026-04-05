@@ -671,7 +671,7 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
     return avg_epoch_loss, avg_epoch_accuracy
 
 
-def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_token_id, args):
+def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_token_id, args, ablation_type=None):
     if dataloader is None:
         return None, None, None if args.task_type == "seq2seq" else None
 
@@ -775,8 +775,9 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             elif args.task_type == "classification":
                 target_class_ids = batch["target_class_id"]
                 src_padding_mask = (encoder_input_ids == pad_token_id)
+                # print("Ablation type in validation:", ablation_type)
                 
-                output_logits = unwrapped_model(encoder_input_ids, src_padding_mask=src_padding_mask)
+                output_logits = unwrapped_model(encoder_input_ids, src_padding_mask=src_padding_mask, ablation_type=ablation_type)
                 loss = criterion(output_logits, target_class_ids)
                 acc, correct, considered = calculate_accuracy_classification(output_logits, target_class_ids)
                 
@@ -990,6 +991,7 @@ def validate_scheduler_resume_compatibility(checkpoint_args, args):
 
 def main():
     args = parse_args()
+    print("Hello, World!")
 
     args.store_in_scratch = str(args.store_in_scratch).lower() == "true"
     args.allow_data_path_mismatch = str(args.allow_data_path_mismatch).lower() == "true"
@@ -1104,7 +1106,7 @@ def main():
     args.val_data_path = os.path.join(base_path, args.val_data_path)
     args.save_dir = os.path.join(base_path, args.save_dir)
     if args.is_held_out_color_exp:
-        args.save_dir = args.save_dir + args.preprocessed_dir.split('/')[-1]
+        args.save_dir = args.save_dir + args.preprocessed_dir.split('/')[-1] +"_new"
     print("Updated train data path: ", args.train_data_path)
     print("Updated validation data path: ", args.val_data_path if args.val_data_path else "None")
 
@@ -1274,6 +1276,7 @@ def main():
     # Get vocabulary info from the main dataset
     pad_token_id = full_dataset.pad_token_id
     src_vocab_size = len(full_dataset.input_word2idx)  # Use input vocabulary size
+    # import pdb; pdb.set_trace()
 
     print(f"Source (Input) Vocabulary size: {src_vocab_size}")
     print(f"Pad token ID for encoder inputs: {pad_token_id}")
@@ -1355,7 +1358,8 @@ def main():
                 prediction_type=args.prediction_type,
                 padding_side=args.padding_side,
                 use_flash_attention=args.use_flash_attention,
-                batch_size=args.batch_size
+                batch_size=args.batch_size,
+                vocab=full_dataset.input_word2idx
             )
         elif args.model_architecture == 'linear':
             print("Using linear classifier architecture for classification task.")

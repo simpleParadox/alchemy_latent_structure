@@ -141,7 +141,7 @@ def parse_args():
 
     # ── Data pre-processing ──────────────────────────────────────────────
     parser.add_argument("--preprocessed_dir", type=str,
-                        default="src/data/complete_graph_composition_fully_shuffled_balanced_grouped_by_unique_end_state_preprocessed")
+                        default="src/data/shuffled_held_out_exps_preprocessed_separate_enhanced")
     parser.add_argument("--use_preprocessed", type=str, default="True",
                         choices=["True", "False"])
 
@@ -158,6 +158,10 @@ def parse_args():
     parser.add_argument("--wandb_mode", type=str, default="online",
                         choices=["online", "offline"])
 
+    parser.add_argument("--ablation_type", type=str, default='nothing',
+                        choices=["replace_reward_with_unk", 'replace_reward_with_zero', 'mask_reward_at_attention', 
+                                 'mask_query_reward_at_attention', 'replace_query_reward_with_zero', 'replace_query_reward_with_unk', 'nothing'])
+
     # ── Train data path (needed to build vocabulary from the training set) ──
     parser.add_argument(
         "--train_data_path",
@@ -170,6 +174,8 @@ def parse_args():
             "first checkpoint."
         ),
     )
+    parser.add_argument("--is_held_out_color_exp", type=str, default="False",
+                        choices=["True", "False"])
 
     return parser.parse_args()
 
@@ -242,11 +248,37 @@ def main():
     args.use_preprocessed = str(args.use_preprocessed).lower() == "true"
     args.flatten_linear_model_input = str(args.flatten_linear_model_input).lower() == "true"
     args.include_nonlinearity = str(args.include_nonlinearity).lower() == "true"
+    args.ablation_type = args.ablation_type if args.ablation_type != 'nothing' else None
 
     # ── Cluster-aware paths ──────────────────────────────────────────────
     base_path = resolve_base_path()
     print(f"Base path: {base_path}")
     print(f"Cluster profile: {cluster}")
+
+    # ── Boolean conversions ──────────────────────────────────────────────
+    args.use_flash_attention = str(args.use_flash_attention) == "True"
+    args.use_truncation = str(args.use_truncation) == "True"
+    args.fp16 = str(args.fp16) == "True"
+    args.filter_query_from_support = str(args.filter_query_from_support) == "True"
+    args.include_nonlinearity = str(args.include_nonlinearity) == "True"
+    args.flatten_linear_model_input = str(args.flatten_linear_model_input) == "True"
+    args.use_preprocessed = str(args.use_preprocessed) == "True"
+    args.store_predictions = str(args.store_predictions) == "True"
+    args.is_held_out_color_exp = str(args.is_held_out_color_exp) in ["True", "true"]
+
+    if args.is_held_out_color_exp:
+        print("Running held-out color experiment validation.")
+        # Attempt to extract num_held_out_edges from val_data_path or use a default
+        try:
+            # Look for number before 'edges' in the path
+            match = re.search(r'(\d+)_edges', args.val_data_path)
+            if match:
+                args.num_held_out_edges = int(match.group(1))
+                print(f"Extracted num_held_out_edges: {args.num_held_out_edges}")
+            else:
+                args.num_held_out_edges = 4 # Default fallback
+        except Exception:
+            args.num_held_out_edges = 4 # Default fallback
 
     # Append data_split_seed to val_data_path
     args.val_data_path = f"{args.val_data_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
@@ -288,11 +320,21 @@ def main():
     vocab_idx2word = first_ckpt.get("src_vocab_idx2word", None)
     stone_state_to_id = first_ckpt.get("stone_state_to_id", None)
     
-    # 1. Extract target vocabularies if they exist (crucial for seq2seq tasks)
-    tgt_vocab_word2idx = first_ckpt.get("tgt_vocab_word2idx", None)
-    tgt_vocab_idx2word = first_ckpt.get("tgt_vocab_idx2word", None)
-
     checkpoint_args = first_ckpt.get("args", None)
+    if checkpoint_args is not None:
+        print("Restoring critical model and dataset args from checkpoint...")
+        # Sync architectural and validation arguments perfectly with training parameters
+        args.max_seq_len = getattr(checkpoint_args, 'max_seq_len', args.max_seq_len)
+        args.use_truncation = getattr(checkpoint_args, 'use_truncation', args.use_truncation)
+        args.pooling_strategy = getattr(checkpoint_args, 'pooling_strategy', args.pooling_strategy)
+        args.padding_side = getattr(checkpoint_args, 'padding_side', args.padding_side)
+        args.filter_query_from_support = getattr(checkpoint_args, 'filter_query_from_support', args.filter_query_from_support)
+        args.use_flash_attention = getattr(checkpoint_args, 'use_flash_attention', args.use_flash_attention)
+        
+        if hasattr(checkpoint_args, 'input_format'):
+            args.input_format = checkpoint_args.input_format
+        if hasattr(checkpoint_args, 'output_format'):
+            args.output_format = checkpoint_args.output_format
 
     if vocab_word2idx is None:
         raise ValueError(
@@ -357,6 +399,7 @@ def main():
         prediction_type=args.prediction_type,
         max_seq_len=args.max_seq_len,
         truncate=args.use_truncation,
+        padding_side=args.padding_side,
     )
     val_dataloader = DataLoader(
         val_dataset,
@@ -411,6 +454,7 @@ def main():
                 padding_side=args.padding_side,
                 use_flash_attention=args.use_flash_attention,
                 batch_size=args.batch_size,
+                vocab=vocab_word2idx
             )
         elif args.model_architecture == "linear":
             model = create_linear_model(
@@ -483,6 +527,8 @@ def main():
         args.checkpoint_dir,
         f"val_predictions_shop_{val_shop}_qhop_{val_qhop}",
     )
+    if args.ablation_type is not None:
+        args.save_dir += f"_ablation_{args.ablation_type}"
     if accelerator.is_local_main_process:
         os.makedirs(args.save_dir, exist_ok=True)
 
@@ -518,21 +564,26 @@ def main():
         disable=not accelerator.is_local_main_process,
     ):
         # Load checkpoint weights
+        print("Ablation type:", args.ablation_type)
         checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         unwrapped_model = accelerator.unwrap_model(model)
         unwrapped_model.load_state_dict(checkpoint["model_state_dict"])
+
+        # Print first five weights after loading to verify that weights are changing per checkpoint
+        first_layer_weights = list(model.parameters())[0].cpu().detach().numpy()
+        print(f"Epoch {epoch_num}: First layer weights sample: {first_layer_weights.flatten()[:5]}")
 
         # Run validation
         with accelerator.autocast():
             if args.task_type == "seq2seq":
                 val_loss, val_acc, val_batch_accs = validate_epoch(
                     model, val_dataloader, criterion, accelerator,
-                    epoch_num, pad_token_id, args,
+                    epoch_num, pad_token_id, args
                 )
             else:
                 val_loss, val_acc = validate_epoch(
-                    model, val_dataloader, criterion, accelerator,
-                    epoch_num, pad_token_id, args,
+                    unwrapped_model, val_dataloader, criterion, accelerator,
+                    epoch_num, pad_token_id, args, ablation_type=args.ablation_type
                 )
 
         # Log to wandb

@@ -213,6 +213,25 @@ def analyze_non_support_transition_behavior(data, vocab, stone_state_to_id, pred
     reverse_stone_mapping = create_reverse_stone_mapping(stone_state_to_id)
     input_vocab = vocab['input_word2idx']
     feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+    id_to_stone_state = {v: k for k, v in stone_state_to_id.items()}
+
+    def _normalize_reward_bin(reward_value):
+        """Normalize rewards to bins used in this script: {'-3', '-1', '1', '3'}.
+        Handles representations like +15 -> '3'.
+        """
+        r = int(reward_value)
+        if r == 15:
+            r = 3
+        elif r == -15:
+            r = -3
+        return str(r)
+
+    def _get_reward_bin_from_class_id(class_id):
+        state_str = id_to_stone_state.get(class_id, '')
+        r_match = re.search(r'reward: (\+?-?\d+)', state_str)
+        if not r_match:
+            raise ValueError(f"Could not extract reward from class id {class_id} with state string '{state_str}'")
+        return _normalize_reward_bin(r_match.group(1))
 
     # ----------------------------------------------------------
     # 1) Precompute transitions and neighbor sets per chemistry
@@ -733,7 +752,7 @@ def analyze_adjacency_behavior(data, vocab, stone_state_to_id, predictions_by_ep
 #                 encoder_input_ids = sample['encoder_input_ids']
 #                 target_class_id = sample['target_class_id']
 #                 predicted_class_id = predictions[i]
-#                 support = encoder_input_ids[:-(hop + 4)]  # everything except last 5 tokens
+#                 support = encoder_input_ids[:-query_len]
 #                 support_key = tuple(support)
 
 #                 # Split the support key on '23' and sort the stones to create a normalized support key.
@@ -742,8 +761,8 @@ def analyze_adjacency_behavior(data, vocab, stone_state_to_id, predictions_by_ep
 #                 support_key = tuple(support_key)
 
 #                 # based on the number of hops, we need to adjust the query parsing. the hops denote the number of potions in the query.
-#                 query = encoder_input_ids[-(hop + 4):] # 4 featuresd + hop potions.
-#                 query_potion = query[-hop:]  # last hop tokens
+#                 query = encoder_input_ids[-query_len:]
+#                 query_potion = query[-hop:]
 #                 query_stones = query[:-hop]
 #                 # create a string representation of the query potion sequence from the feature_to_id_vocab and join them.
 #                 query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query_potion])
@@ -865,9 +884,9 @@ def analyze_adjacency_behavior(data, vocab, stone_state_to_id, predictions_by_ep
 #                         # This list will hold the accuracy for each prefix of the current length
 #                         prefix_accuracies = []
 
-#                         for potion_prefix, data in epoch_overlap_analysis[support_key][overlap_count][query_stone_str].items():
-#                             predictions = data['predictions']
-#                             reachable_stones_k = data['reachable_stones'] # Reachable set for prefix of length k
+#                         for potion_prefix, data_item in epoch_overlap_analysis[support_key][overlap_count][query_stone_str].items():
+#                             predictions = data_item['predictions']
+#                             reachable_stones_k = data_item['reachable_stones'] # Reachable set for prefix of length k
 
 
 #                             # Determine the denominator set based on overlap_count
@@ -1315,10 +1334,29 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             
     input_vocab = vocab['input_word2idx']
     feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+    id_to_stone_state = {v: k for k, v in stone_state_to_id.items()}
+
+    def _normalize_reward_bin(reward_value):
+        """Normalize rewards to bins used in this script: {'-3', '-1', '1', '3'}.
+        Handles representations like +15 -> '3'.
+        """
+        r = int(reward_value)
+        if r == 15:
+            r = 3
+        elif r == -15:
+            r = -3
+        return str(r)
+
+    def _get_reward_bin_from_class_id(class_id):
+        state_str = id_to_stone_state.get(class_id, '')
+        r_match = re.search(r'reward: (\+?-?\d+)', state_str)
+        if not r_match:
+            # Fallback for some potential error cases
+            return '-3' 
+        return _normalize_reward_bin(r_match.group(1))
 
     # For stone_states input format, build a reverse mapping from stone input token to reward value
     if input_format == 'stone_states':
-        id_to_stone_state = {v: k for k, v in stone_state_to_id.items()}
         # Map from input vocab token id (for a stone state token) -> reward string
         def _get_reward_from_stone_token(token_id):
             """Given an input vocab token id representing a stone state, return its reward string."""
@@ -1334,7 +1372,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             state_str = id_to_stone_state.get(stone_class_id, '')
             r_match = re.search(r'reward: (\+?-?\d+)', state_str)
             if r_match:
-                return str(int(r_match.group(1)))
+                return _normalize_reward_bin(r_match.group(1))
             raise ValueError(f"Could not extract reward from token id {token_id} with state string '{state_str}'")
         
         def _get_stone_class_id_from_token(token_id):
@@ -1723,6 +1761,11 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     complete_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
     within_support_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
     within_support_within_half_query_stone_state_per_reward_binned_accuracy = {'-3': [], '-1': [], '1': [], '3': []}
+    
+    # NEW: Decomposition reward-adjacency bias metrics (by query reward bin)
+    if exp_typ == 'decomposition':
+        reward_plausible_error_rate_by_query_reward = {'-3': [], '-1': [], '1': [], '3': []}
+        exact_within_plausible_by_query_reward = {'-3': [], '-1': [], '1': [], '3': []}
 
     # NEW: Structural metric accumulators (only for held_out)
     if exp_typ == 'held_out':
@@ -1758,6 +1801,12 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         per_epoch_total_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
         per_epoch_in_support_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
         per_epoch_in_support_correct_half_samples_per_reward_bin = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+
+        if exp_typ == 'decomposition':
+            per_epoch_plausible_error_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+            per_epoch_wrong_in_support_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+            per_epoch_exact_within_plausible_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
+            per_epoch_plausible_prediction_counts = {'-3': 0, '-1': 0, '1': 0, '3': 0}
 
         # NEW: Per-epoch structural counters (only for held_out)
         if exp_typ == 'held_out':
@@ -1876,7 +1925,8 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                     f"got {len(diagonal_to_target)} for support {support_key}, target_class_id {target_class_id}"
                 )
 
-            # ...existing code for classification metrics (unchanged from here)...
+            # First do the classification for 8 vs 108.
+
             per_epoch_total_samples_per_reward_bin[query_start_stone_reward] += 1
 
             if predicted_class_id == target_class_id:
@@ -1886,6 +1936,28 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
             if predicted_class_id in combined_set:
                 predicted_in_context_count += 1
                 per_epoch_in_support_samples_per_reward_bin[query_start_stone_reward] += 1
+
+                if exp_typ == 'decomposition':
+                    # Reward-adjacency mapping for 1-hop transitions.
+                    # Reward bins use {'-3', '-1', '1', '3'} where '3' corresponds to +15.
+                    valid_target_reward_bins = {
+                        '-3': {'-1'},
+                        '-1': {'-3', '1'},
+                        '1': {'-1', '3'},
+                        '3': {'1'},
+                    }
+                    predicted_reward_bin = _get_reward_bin_from_class_id(predicted_class_id)
+                    valid_bins_for_query = valid_target_reward_bins[query_start_stone_reward]
+
+                    if predicted_reward_bin in valid_bins_for_query:
+                        per_epoch_plausible_prediction_counts[query_start_stone_reward] += 1
+                        if predicted_class_id == target_class_id:
+                            per_epoch_exact_within_plausible_counts[query_start_stone_reward] += 1
+
+                    if predicted_class_id != target_class_id:
+                        per_epoch_wrong_in_support_counts[query_start_stone_reward] += 1
+                        if predicted_reward_bin in valid_bins_for_query:
+                            per_epoch_plausible_error_counts[query_start_stone_reward] += 1
 
                 if predicted_class_id == target_class_id:
                     predicted_correct_within_context_count += 1
@@ -1925,7 +1997,8 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
             total += 1
 
-        # ...existing code for accuracy calculations and reward binning (unchanged)...
+        # Now calculate accuracies and store them.
+
         predicted_in_context_accuracy = predicted_in_context_count / total if total > 0 else 0
         predicted_in_context_accuracies.append(predicted_in_context_accuracy)
 
@@ -2011,6 +2084,21 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 accuracy3 = 0
             within_support_within_half_query_stone_state_per_reward_binned_accuracy[reward_bin].append(accuracy3)
 
+            if exp_typ == 'decomposition':
+                wrong_in_support_for_bin = per_epoch_wrong_in_support_counts[reward_bin]
+                if wrong_in_support_for_bin > 0:
+                    m3 = per_epoch_plausible_error_counts[reward_bin] / wrong_in_support_for_bin
+                else:
+                    m3 = 0.0
+                reward_plausible_error_rate_by_query_reward[reward_bin].append(m3)
+
+                plausible_preds_for_bin = per_epoch_plausible_prediction_counts[reward_bin]
+                if plausible_preds_for_bin > 0:
+                    m4 = per_epoch_exact_within_plausible_counts[reward_bin] / plausible_preds_for_bin
+                else:
+                    m4 = 0.0
+                exact_within_plausible_by_query_reward[reward_bin].append(m4)
+
     # Build structural metrics return dicts (held_out only)
     if exp_typ == 'held_out':
         same_half_structural_metrics = {
@@ -2025,6 +2113,14 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
     else:
         same_half_structural_metrics = {}
         correct_half_structural_metrics = {}
+
+    if exp_typ == 'decomposition':
+        decomposition_reward_bias_metrics = {
+            'reward_plausible_error_rate_by_query_reward': reward_plausible_error_rate_by_query_reward,
+            'exact_within_plausible_by_query_reward': exact_within_plausible_by_query_reward,
+        }
+    else:
+        decomposition_reward_bias_metrics = {}
 
     return (
         predicted_in_context_accuracies,
@@ -2042,6 +2138,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         ),
         same_half_structural_metrics,
         correct_half_structural_metrics,
+        decomposition_reward_bias_metrics,
     )
 
 def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), seeds = [2], scheduler_prefix='', file_paths = None, file_paths_non_subsampled = None,
@@ -2078,8 +2175,17 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
                     raise ValueError(f"Seed not found in the provided file path: {path}")
     elif type(file_paths) == dict:
         print("file_paths is a dict, extracting seeds and paths.")
-        seeds = list(file_paths.keys())
         file_paths = list(file_paths.values())
+        seeds = []
+        for path in file_paths:
+            match = re.search(r'seed_(\d+)', path)
+            if match:
+                seed_number = int(match.group(1))
+                seeds.append(seed_number)
+            else:
+                raise ValueError(f"Seed not found in the provided file path: {path}")
+    else:
+        raise ValueError(f"file_paths must be either a list or a dict, got {type(file_paths)}")
 
     # Load the data for each provided file path
     print("Loading data from provided file paths for seeds: ", seeds)
@@ -2090,7 +2196,8 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
 
         if exp_typ == 'composition' or exp_typ == 'decomposition':
             if file_paths_non_subsampled is not None:
-                non_subsampled_path = file_paths_non_subsampled[hop][i]
+                # import pdb; pdb.set_trace()
+                non_subsampled_path = file_paths_non_subsampled[hop][seed]
                 # Check if the seed in the non_subsampled_path matches the current seed
                 match_non_subsampled = re.search(r'seed_(\d+)', non_subsampled_path)
                 if match_non_subsampled:
@@ -2226,6 +2333,8 @@ if __name__ == "__main__":
 
     parser.add_argument('--reward_binning_analysis_only', action='store_true',
                         help="Flag to only perform reward binning analysis for the 4 edge held out experiment.", default=False)
+    parser.add_argument('--custom_output_dir', type=str, default=None,
+                        help="Optional directory for reward-binning-only plot outputs. Created if it does not exist.")
 
 
     parser.add_argument('--normalized_reward', action='store_true',
@@ -2273,7 +2382,7 @@ if __name__ == "__main__":
     four_hop_epoch_values_text = [0, 200, 400, 600, 800, 999]
     five_hop_epoch_values_text = [0, 200, 600, 800, 999]
 
-    four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 5000] #, 999]
+    four_edge_held_out_epoch_values_text = [0, 200, 300, 400, 999]
 
     # Create a dictionary mapping hop counts to their hop-specific epoch values
     hop_to_epoch_values = {
@@ -2737,8 +2846,6 @@ if __name__ == "__main__":
 
 
 
-
-
     if args.get_non_support_analysis_only:
         non_support_accuracies_by_seed = {}
         non_support_metrics_by_seed = {}
@@ -2933,6 +3040,7 @@ if __name__ == "__main__":
                 query_start_stone_reward_binning_analysis,
                 same_half_structural_metrics,
                 correct_half_structural_metrics,
+                decomposition_reward_bias_metrics,
             ) = half_chemistry_results
 
             complete_query_stone_state_per_reward_binned_accuracy, within_support_query_stone_state_per_reward_binned_accuracy, within_support_within_half_query_stone_state_per_reward_binned_accuracy = query_start_stone_reward_binning_analysis
@@ -2953,6 +3061,7 @@ if __name__ == "__main__":
                 'within_support_within_half_query_stone_state_per_reward_binned_accuracy': within_support_within_half_query_stone_state_per_reward_binned_accuracy,
                 'same_half_structural_metrics': same_half_structural_metrics,
                 'correct_half_structural_metrics': correct_half_structural_metrics,
+                'decomposition_reward_bias_metrics': decomposition_reward_bias_metrics,
             }
 
 
@@ -3016,6 +3125,8 @@ if __name__ == "__main__":
     if exp_typ == 'decomposition':
         metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108',
         'predicted_in_adjacent_and_correct_half_accuracies', 'predicted_correct_half_within_adjacent_and_correct_half_accuracies']
+        if args.reward_binning_analysis_only:
+            metrics = ['complete_query_stone_state_per_reward_binned_accuracy', 'within_support_query_stone_state_per_reward_binned_accuracy', 'within_support_within_half_query_stone_state_per_reward_binned_accuracy']
     elif exp_typ == 'held_out':
         metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108']
         if args.reward_binning_analysis_only:
@@ -3023,7 +3134,7 @@ if __name__ == "__main__":
     else:
         metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_candidate_accuracies', 'correct_within_candidates']
 
-    if args.reward_binning_analysis_only and exp_typ == 'held_out':
+    if args.reward_binning_analysis_only and exp_typ in ['held_out', 'decomposition']:
         # Doing per reward averaging only for held-out experiments.
         complete_query_stone_state_per_reward_binned_accuracy_all_seeds = {'-3': [], '-1': [], '1': [], '3': []}
         within_support_query_stone_state_per_reward_binned_accuracy_all_seeds = {'-3': [], '-1': [], '1': [], '3': []}
@@ -3137,10 +3248,7 @@ if __name__ == "__main__":
 
 
 
-        # Now, we will plot the within_support_query_stone_state_per_reward_binned_accuracy, and within_support_within_half_query_stone_state_per_reward_binned_accuracy only.
-        # For the within_support_query_stone_state_per_reward_binned_accuracy, there will be 4 lines (one for each reward bin) and the style will be solid.
-        # For the within_support_within_half_query_stone_state_per_reward_binned_accuracy, there will be 4 lines (one for each reward bin) and the style will be dashed.
-        # Make sure the colors for the solid and dashed lines for the same reward bin are the same.
+        # Plot reward-binned exact-within-correct-half accuracies.
         fig = plt.figure(figsize=(14, 10))
         ax = fig.add_subplot(1, 1, 1)
         ax.grid(True, alpha=0.3)
@@ -3155,17 +3263,10 @@ if __name__ == "__main__":
         }
 
         for reward_bin in ['-3', '-1', '1', '3']:
-            # Plot within_support_query_stone_state_per_reward_binned_accuracy
-            mean_values = averaged_results[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-            std_error_values = std_errors[f'within_support_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-            ax.plot(epochs, mean_values, label=f'Query with reward feature {reward_bin_mapping[reward_bin]}', color=reward_bin_colors[reward_bin], linestyle='dashed')
+            mean_values = averaged_results[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+            std_error_values = std_errors[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
+            ax.plot(epochs, mean_values, label=f'Query with reward feature = {reward_bin_mapping[reward_bin]}', color=reward_bin_colors[reward_bin], linestyle='solid')
             ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
-
-            # # Plot within_support_within_half_query_stone_state_per_reward_binned_accuracy
-            # mean_values = averaged_results[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-            # std_error_values = std_errors[f'within_support_within_half_query_stone_state_per_reward_binned_accuracy_{reward_bin}']
-            # ax.plot(epochs, mean_values, label=f'Query with reward feature = {reward_bin_mapping[reward_bin]}', color=reward_bin_colors[reward_bin], linestyle='solid')
-            # ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
 
         ax.set_xlabel('Epochs', fontsize=26)
         ax.set_ylabel('Accuracy', fontsize=26)
@@ -3176,16 +3277,90 @@ if __name__ == "__main__":
         ax.tick_params(axis='x', labelsize=24)
         ax.tick_params(axis='y', labelsize=24)
         plt.ylim(0, 1.0)
-        
-        # plt.savefig(f'reward_binned_accuracy_analysis_in_support_gating_hop_{hop}_{exp_typ}.png')
-        # plt.savefig(f'reward_binned_accuracy_analysis_in_support_gating_hop_{hop}_{exp_typ}.pdf', bbox_inches='tight')
 
+        custom_output_dir = args.custom_output_dir
+        if custom_output_dir is not None:
+            os.makedirs(custom_output_dir, exist_ok=True)
 
-        # plt.savefig(f'reward_binned_accuracy_exact_match_within_correct_half_hop_{hop}_{exp_typ}.png')
-        # plt.savefig(f'reward_binned_accuracy_exact_match_within_correct_half_hop_{hop}_{exp_typ}.pdf', bbox_inches='tight')
+        if args.custom_output_file is not None:
+            custom_base_name = os.path.splitext(os.path.basename(args.custom_output_file))[0]
+            first_plot_base = f"{custom_base_name}_reward_binned_accuracy_exact_match_within_correct_half"
+            second_plot_base = f"{custom_base_name}_decomposition_reward_bias_metrics"
+        else:
+            first_plot_base = f"reward_binned_accuracy_exact_match_within_correct_half_hop_{hop}_{exp_typ}"
+            second_plot_base = f"decomposition_reward_bias_metrics_hop_{hop}_{exp_typ}"
 
-        plt.savefig(f'reward_binned_accuracy_analysis_hop_{hop}_{exp_typ}_within_support_denom.png')
-        plt.savefig(f'reward_binned_accuracy_analysis_hop_{hop}_{exp_typ}_within_support_denom.pdf', bbox_inches='tight')
+        if custom_output_dir is not None:
+            first_plot_png = os.path.join(custom_output_dir, f"{first_plot_base}.png")
+            first_plot_pdf = os.path.join(custom_output_dir, f"{first_plot_base}.pdf")
+        else:
+            first_plot_png = f"{first_plot_base}.png"
+            first_plot_pdf = f"{first_plot_base}.pdf"
+
+        plt.savefig(first_plot_png)
+        plt.savefig(first_plot_pdf, bbox_inches='tight')
+
+        if exp_typ == 'decomposition' and 'decomposition_reward_bias_metrics' in next(iter(seed_results.values())):
+            # Average decomposition reward-bias metrics across seeds.
+            reward_bins = ['-3', '-1', '1', '3']
+            averaged_decomp_reward_bias = {
+                'reward_plausible_error_rate_by_query_reward': {rb: None for rb in reward_bins},
+                'exact_within_plausible_by_query_reward': {rb: None for rb in reward_bins},
+            }
+            std_decomp_reward_bias = {
+                'reward_plausible_error_rate_by_query_reward': {rb: None for rb in reward_bins},
+                'exact_within_plausible_by_query_reward': {rb: None for rb in reward_bins},
+            }
+
+            for metric_key in ['reward_plausible_error_rate_by_query_reward', 'exact_within_plausible_by_query_reward']:
+                for reward_bin in reward_bins:
+                    all_seed_values = []
+                    for seed in seed_results.keys():
+                        metric_values = seed_results[seed]['decomposition_reward_bias_metrics'].get(metric_key, {}).get(reward_bin, [])
+                        all_seed_values.append(metric_values)
+
+                    max_len = max(len(v) for v in all_seed_values)
+                    padded_values = []
+                    for values in all_seed_values:
+                        if len(values) < max_len:
+                            fill = values[-1] if len(values) > 0 else 0.0
+                            values = list(values) + [fill] * (max_len - len(values))
+                        padded_values.append(values)
+
+                    all_seed_values = np.array(padded_values)
+                    averaged_decomp_reward_bias[metric_key][reward_bin] = np.mean(all_seed_values, axis=0)
+                    std_decomp_reward_bias[metric_key][reward_bin] = np.std(all_seed_values, axis=0) / np.sqrt(len(all_seed_values))
+
+            # Plot M3 and M4 as two subplots.
+            fig2, axs2 = plt.subplots(1, 2, figsize=(18, 7), sharey=True)
+            metric_to_title = {
+                'reward_plausible_error_rate_by_query_reward': 'D1: Reward-plausible errors (given wrong & in-support)',
+                'exact_within_plausible_by_query_reward': 'D2: Exact within plausible reward set',
+            }
+            for ax_idx, metric_key in enumerate(['reward_plausible_error_rate_by_query_reward', 'exact_within_plausible_by_query_reward']):
+                ax2 = axs2[ax_idx]
+                epochs2 = range(len(averaged_decomp_reward_bias[metric_key]['-3']))
+                for reward_bin in reward_bins:
+                    mean_values = averaged_decomp_reward_bias[metric_key][reward_bin]
+                    std_values = std_decomp_reward_bias[metric_key][reward_bin]
+                    ax2.plot(epochs2, mean_values, label=f"Query reward = {reward_bin_mapping[reward_bin]}", color=reward_bin_colors[reward_bin], linewidth=2)
+                    ax2.fill_between(epochs2, mean_values - std_values, mean_values + std_values, color=reward_bin_colors[reward_bin], alpha=0.2)
+                ax2.set_title(metric_to_title[metric_key], fontsize=14)
+                ax2.set_xlabel('Epochs', fontsize=14)
+                ax2.set_ylim(0, 1.0)
+                ax2.grid(True, alpha=0.3)
+                ax2.tick_params(axis='x', labelsize=12)
+                ax2.tick_params(axis='y', labelsize=12)
+
+            axs2[0].set_ylabel('Accuracy / Rate', fontsize=14)
+            axs2[1].legend(fontsize=11, loc='best')
+            plt.tight_layout()
+            if custom_output_dir is not None:
+                second_plot_png = os.path.join(custom_output_dir, f"{second_plot_base}.png")
+            else:
+                second_plot_png = f"{second_plot_base}.png"
+            plt.savefig(second_plot_png)
+            # plt.savefig(f'decomposition_reward_bias_metrics_hop_{hop}_{exp_typ}.pdf', bbox_inches='tight')
 
         exit(0)
 
@@ -3472,9 +3647,16 @@ if __name__ == "__main__":
 
         plt.tight_layout()
         custom_output_file = args.custom_output_file
+        custom_output_dir = args.custom_output_dir
         if custom_output_file is not None:
-            plt.savefig(f'{custom_output_file}.png')
-            plt.savefig(f'{custom_output_file}.pdf', bbox_inches='tight')
+            custom_base_name = os.path.splitext(os.path.basename(custom_output_file))[0]
+            if custom_output_dir is not None:
+                os.makedirs(custom_output_dir, exist_ok=True)
+                save_base = os.path.join(custom_output_dir, custom_base_name)
+            else:
+                save_base = custom_base_name
+            plt.savefig(f'{save_base}.png')
+            plt.savefig(f'{save_base}.pdf', bbox_inches='tight')
         else:
             plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_with_structural_metrics.png')
             plt.savefig(f'Jan_2_{exp_typ}_{hop}_phasic_learning_with_structural_metrics.pdf', bbox_inches='tight')
@@ -3515,9 +3697,16 @@ if __name__ == "__main__":
         plt.grid(True, alpha=0.3)
         plt.ylim(0, 1)
         custom_output_file = args.custom_output_file
+        custom_output_dir = args.custom_output_dir
         if custom_output_file is not None:
-            plt.savefig(f'{custom_output_file}.png')
-            plt.savefig(f'{custom_output_file}.pdf', bbox_inches='tight')
+            custom_base_name = os.path.splitext(os.path.basename(custom_output_file))[0]
+            if custom_output_dir is not None:
+                os.makedirs(custom_output_dir, exist_ok=True)
+                save_base = os.path.join(custom_output_dir, custom_base_name)
+            else:
+                save_base = custom_base_name
+            plt.savefig(f'{save_base}.png')
+            plt.savefig(f'{save_base}.pdf', bbox_inches='tight')
         else:
             if args.get_output_file_from_input_path:
                 file_paths = composition_file_paths if exp_typ == 'composition' else decomposition_file_paths if exp_typ == 'decomposition' else None
@@ -3572,11 +3761,11 @@ if __name__ == "__main__":
 #         epoch: {
 #             reward: {
 #                 'total_in_support': 0,
-#                 'in_support_and_reachable': 0, # Reachable by reward value
+#                 'in_support_and_reachable': 0, # Reachable by reward value (Stone-based)
 #                 'total_reachable': 0,
 #                 'reachable_and_correct': 0,
 #                 'in_support_and_connected': 0, # Actually connected in graph
-#                 'in_support_and_true_adjacent': 0, # [NEW] Connected in support OR target
+#                 'in_support_and_true_adjacent': 0, # Connected in support OR target
 #             } for reward in reachable_reward_mapping.keys()
 #         } for epoch in predictions_by_epoch.keys()
 #     }
@@ -3611,7 +3800,7 @@ if __name__ == "__main__":
 #             predicted_class_id = predictions[i]
             
 #             # Extract query stone reward (second-to-last token in query)
-#             query = encoder_input_ids[-5:]  # Last 5 tokens
+#             query = encoder_input_ids[-5:]
 #             query_stone_reward = feature_to_id_vocab[query[-2]]
             
 #             # Decode query stone ID to find its specific neighbors

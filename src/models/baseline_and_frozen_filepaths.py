@@ -453,11 +453,13 @@ decomposition_baseline_file_paths = {
     5: {
         0:{
             42: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine_restarts/wd_0.1_lr_0.0001/eta_min_8e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_42/predictions/",
-            # 2: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_9e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_2/predictions/",
-            2: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_9e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_2/jan_23_snapshot/predictions_jan_23_snapshot/",
+            2: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_9e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_2/predictions/",
+            # 2: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_9e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_2/jan_23_snapshot/predictions_jan_23_snapshot/",
             3: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_3/predictions/",
             # 7: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_7/predictions/",
             # 8: "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/complete_graph/scheduler_cosine/wd_0.1_lr_0.0001/eta_min_7e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_5_qhop_1/seed_0/init_seed_8/predictions/"
+
+            #
         }
     }
 }
@@ -513,6 +515,10 @@ decomposition_baseline_pickle_file_paths = {
             42: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_42_hop_5_exp_decomposition.pkl",
             2: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_2_hop_5_exp_decomposition.pkl",
             3: "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/stagewise_accuracies_data_split_seed_0_init_seed_3_hop_5_exp_decomposition.pkl"
+
+
+            # The following are the bad runs. Add file paths here that you would like to investigate further.
+
         }
     }
 }
