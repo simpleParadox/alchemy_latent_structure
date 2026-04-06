@@ -210,7 +210,7 @@ SLURM_MEM_DECOMPOSITION: Dict[int, str] = {2: "12G", 3: "12G", 4: "14G", 5: "14G
 
 # Approximate seconds per epoch (used to compute dynamic SLURM --time)
 SECONDS_PER_EPOCH_COMPOSITION = 10.9
-SECONDS_PER_EPOCH_DECOMPOSITION = 32  # adjust if needed
+SECONDS_PER_EPOCH_DECOMPOSITION = 32.5  # adjust if needed
 
 STARTUP_OVERHEAD_SECONDS = 30  
 TIME_BUFFER_FACTOR = 1.0       
