@@ -11,12 +11,12 @@ METRIC_KEYS = {
     "p_a": "predicted_in_context_accuracies",
 
     # Held out
-    "p_b_given_a": "predicted_in_context_correct_half_accuracies",
-    "p_c_given_ab": "predicted_in_context_correct_half_exact_accuracies",
+    # "p_b_given_a": "predicted_in_context_correct_half_accuracies",
+    # "p_c_given_ab": "predicted_in_context_correct_half_exact_accuracies",
 
     # Composition
-    # "p_b_given_a": "predicted_in_context_correct_candidate_accuracies",
-    # "p_c_given_ab": "correct_within_candidates"
+    "p_b_given_a": "predicted_in_context_correct_candidate_accuracies",
+    "p_c_given_ab": "correct_within_candidates"
 }
 
 
@@ -349,22 +349,26 @@ def plot_deltas_with_errorbars(
         #     ax.annotate(str(n), (x, y), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
 
     ax.axhline(y=epsilon, color="black", linestyle="--", label=f"Plasticity threshold ({epsilon})")
-
-    if x_mode == "absolute":
-        ax.set_xlabel("Freeze Epoch", fontsize=18)
-    else:
-        if bin_width > 1:
-            xlabel = f"Relative Freeze Epoch (t_f - t_base[{anchor_key or stage_key}])" 
-        else:
-            xlabel = f"Relative Freeze Epoch"
-        ax.set_xlabel(xlabel, fontsize=18)
-        ax.axvline(x=0, color="black", linestyle=":", alpha=1.0)
-
+    
     stage_key_map = {
         "p_b_given_a": "P[B|A]",
         "p_a": "P[A]",
         "p_c_given_ab": "P[C|A∩B]",
     }
+    if x_mode == "absolute":
+        ax.set_xlabel("Freeze Epoch", fontsize=18)
+    else:
+        if bin_width > 1:
+            if anchor_key is None:
+                xlabel = f"Relative Freeze Epoch (t_f - t_base[{stage_key_map.get(stage_key, stage_key)}])" 
+            else:
+                xlabel = f"Relative Freeze Epoch (t_f - t_base[{stage_key_map.get(anchor_key, anchor_key)}])" 
+        else:
+            xlabel = f"Relative Freeze Epoch"
+        ax.set_xlabel(xlabel, fontsize=18)
+        ax.axvline(x=0, color="black", linestyle=":", alpha=1.0)
+
+    
 
     init_seed_str = ",".join(str(s) for s in (init_seeds if init_seeds is not None else [1, 3, 42]))
     ax.set_ylabel(f"Δt for event {stage_key_map.get(stage_key, stage_key)}", fontsize=18)
@@ -389,7 +393,7 @@ def plot_deltas_with_errorbars(
     if output_path:
         plt.savefig(output_path, dpi=200)
         plt.savefig(output_path.replace(".png", ".pdf"), dpi=200)
-        print(f"Plot saved to {output_path}.png")
+        print(f"Plot saved to {output_path}")
     else:
         plt.show()
 
