@@ -2242,8 +2242,17 @@ def load_epoch_data(exp_typ: str = 'held_out', hop = 2, epoch_range = (0, 500), 
         inputs_raw_file_path = f'{inputs_source}/inputs_classification_epoch_001.npz'
         targets_raw_file_path = f'{inputs_source}/targets_classification_epoch_001.npz'
 
-        inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
-        targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
+        try:
+            inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
+            targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
+        except Exception as e:
+            print(e)
+            inputs_raw_file_path = f'{inputs_source}/inputs_classification_epoch_002.npz'
+            targets_raw_file_path = f'{inputs_source}/targets_classification_epoch_002.npz'
+            inputs_raw = np.load(inputs_raw_file_path, allow_pickle=True)['inputs']
+            targets_raw = np.load(targets_raw_file_path, allow_pickle=True)['targets']
+
+            
         
         stacked_inputs = np.vstack(inputs_raw) # Flatten inputs from (39, 32, 181) to (1240, 181) 
         data_with_targets = [{'encoder_input_ids': stacked_inputs[i].tolist(), 'target_class_id': int(targets_raw[i])} for i in range(len(targets_raw))]
@@ -2448,10 +2457,10 @@ if __name__ == "__main__":
         else:
         # Till 500 only.
             hop_to_epoch_values = {
-                    2: [0, 200, 400, 500],
-                    3: [0, 200, 400, 500],
-                    4: [0, 200, 400, 500],
-                    5: [0, 200, 400, 500]
+                    2: [0, 200, 400, 999],
+                    3: [0, 200, 400, 999],
+                    4: [0, 200, 400, 999],
+                    5: [0, 200, 400, 999]
             }
         
         seed_values_hop_dict = {
