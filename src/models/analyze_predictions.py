@@ -1352,7 +1352,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         r_match = re.search(r'reward: (\+?-?\d+)', state_str)
         if not r_match:
             # Fallback for some potential error cases
-            return '-3' 
+            raise ValueError(f"Could not extract reward from class_id {class_id} with state string '{state_str}'") 
         return _normalize_reward_bin(r_match.group(1))
 
     # For stone_states input format, build a reverse mapping from stone input token to reward value
@@ -3354,15 +3354,15 @@ if __name__ == "__main__":
                     std_values = std_decomp_reward_bias[metric_key][reward_bin]
                     ax2.plot(epochs2, mean_values, label=f"Query reward = {reward_bin_mapping[reward_bin]}", color=reward_bin_colors[reward_bin], linewidth=2)
                     ax2.fill_between(epochs2, mean_values - std_values, mean_values + std_values, color=reward_bin_colors[reward_bin], alpha=0.2)
-                ax2.set_title(metric_to_title[metric_key], fontsize=14)
-                ax2.set_xlabel('Epochs', fontsize=14)
+                ax2.set_title(metric_to_title[metric_key], fontsize=18)
+                ax2.set_xlabel('Epochs', fontsize=26)
                 ax2.set_ylim(0, 1.0)
                 ax2.grid(True, alpha=0.3)
-                ax2.tick_params(axis='x', labelsize=12)
-                ax2.tick_params(axis='y', labelsize=12)
+                ax2.tick_params(axis='x', labelsize=22)
+                ax2.tick_params(axis='y', labelsize=22)
 
-            axs2[0].set_ylabel('Accuracy / Rate', fontsize=14)
-            axs2[1].legend(fontsize=11, loc='best')
+            axs2[0].set_ylabel('Accuracy / Rate', fontsize=26)
+            axs2[1].legend(fontsize=16, loc='best')
             plt.tight_layout()
             if custom_output_dir is not None:
                 second_plot_png = os.path.join(custom_output_dir, f"{second_plot_base}.png")
@@ -3537,9 +3537,11 @@ if __name__ == "__main__":
                     continue
                 ax.plot(epochs, mean, label=label, linewidth=2, linestyle=linestyles.get(metric, 'solid'), color=colors.get(hop, {}).get(metric, 'gold'))
             ax.set_title(f'Seed {seed}', fontsize=16)
-            ax.set_xlabel('Epoch', fontsize=14)
-            ax.set_ylabel('Accuracy', fontsize=14)
-            ax.legend(fontsize=10)
+            ax.set_xlabel('Epoch', fontsize=22)
+            ax.set_ylabel('Accuracy', fontsize=22)
+            ax.tick_params(axis='x', labelsize=20)
+            ax.tick_params(axis='y', labelsize=20)
+            ax.legend(fontsize=14)
             ax.grid(True, alpha=0.3)
             ax.set_ylim(0, 1)
         # plt.suptitle(f'Phasic learning of latent structure learning ({hop}-hop) - Individual Seeds', fontsize=20, y=1.02)
