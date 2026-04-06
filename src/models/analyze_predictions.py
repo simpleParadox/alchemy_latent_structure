@@ -3277,7 +3277,7 @@ if __name__ == "__main__":
             ax.plot(epochs, mean_values, label=f'Query with reward feature = {reward_bin_mapping[reward_bin]}', color=reward_bin_colors[reward_bin], linestyle='solid')
             ax.fill_between(epochs, mean_values - std_error_values, mean_values + std_error_values, color=reward_bin_colors[reward_bin], alpha=0.2)
 
-        ax.set_xlabel('Epochs', fontsize=26)
+        ax.set_xlabel('Epoch', fontsize=26)
         ax.set_ylabel('Accuracy', fontsize=26)
         
         ax.legend(fontsize=18, loc='lower right', ncol=1)
@@ -3355,7 +3355,7 @@ if __name__ == "__main__":
                     ax2.plot(epochs2, mean_values, label=f"Query reward = {reward_bin_mapping[reward_bin]}", color=reward_bin_colors[reward_bin], linewidth=2)
                     ax2.fill_between(epochs2, mean_values - std_values, mean_values + std_values, color=reward_bin_colors[reward_bin], alpha=0.2)
                 ax2.set_title(metric_to_title[metric_key], fontsize=18)
-                ax2.set_xlabel('Epochs', fontsize=26)
+                ax2.set_xlabel('Epoch', fontsize=26)
                 ax2.set_ylim(0, 1.0)
                 ax2.grid(True, alpha=0.3)
                 ax2.tick_params(axis='x', labelsize=22)
