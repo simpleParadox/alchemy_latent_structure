@@ -25,6 +25,7 @@ import glob
 import os
 import sys
 from typing import Dict, List, Optional, Tuple
+from cluster_profile import cluster
 
 # ---------------------------------------------------------------------------
 # Baseline checkpoint paths (extracted from baseline_and_frozen_filepaths.py)
@@ -145,9 +146,12 @@ DECOMPOSITION_FROZEN_EPOCHS: Dict[int, Dict[int, List[int]]] = {
         3:  [362, 372, 382, 392, 402, 412, 422, 432, 442, 452, 462, 472, 482, 492],
     },
     5: {
-        42: [124, 134, 144, 154, 164, 174, 184, 194, 204, 214, 224, 234, 244, 254, 264, 274, 284, 294, 304, 314, 324, 334, 344, 354, 364, 374, 384, 394, 404, 414, 424, 434, 444, 454, 464, 474, 484, 494, 504, 514, 524, 534, 544, 554, 564, 574, 584, 594, 604, 614, 624, 634, 644, 654, 664, 674, 684, 694, 704, 714, 724, 734],
-        2:  [120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700, 710, 720, 730],
-        3:  [128, 138, 148, 158, 168, 178, 188, 198, 208, 218, 228, 238, 248, 258, 268, 278, 288, 298, 308, 318, 328, 338, 348, 358, 368, 378, 388, 398, 408, 418, 428, 438, 448, 458, 468, 478, 488, 498, 508, 518, 528, 538, 548, 558, 568, 578, 588, 598, 608, 618, 628, 638, 648, 658, 668, 678, 688, 698, 708, 718, 728],
+        # 42: [124, 134, 144, 154, 164, 174, 184, 194, 204, 214, 224, 234, 244, 254, 264, 274, 284, 294, 304, 314, 324, 334, 344, 354, 364, 374, 384, 394, 404, 414, 424, 434, 444, 454, 464, 474, 484, 494, 504, 514, 524, 534, 544, 554, 564, 574, 584, 594, 604, 614, 624, 634, 644, 654, 664, 674, 684]
+        42: [694, 704, 714, 724, 734, 744],
+        # 2:  [120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700]
+        2:  [710, 720, 730],
+        # 3:  [128, 138, 148, 158, 168, 178, 188, 198, 208, 218, 228, 238, 248, 258, 268, 278, 288, 298, 308, 318, 328, 338, 348, 358, 368, 378, 388, 398, 408, 418, 428, 438, 448, 458, 468, 478, 488, 498, 508, 518, 528, 538, 548, 558, 568, 578, 588, 598, 608, 618, 628, 638, 648, 658, 668, 678]
+        3:  [698, 708, 718, 728,688, 698, 708, 718, 728],
     },
 }
 
@@ -209,11 +213,11 @@ DECOMPOSITION_DATA_PATHS: Dict[int, Dict[str, str]] = {
 # Composition uses shop_1_qhop_N → shorter sequences → less memory.
 # Decomposition uses shop_N_qhop_1 → longer sequences → more memory.
 SLURM_MEM_COMPOSITION: Dict[int, str] = {2: "12G", 3: "12G", 4: "12G", 5: "12G"}
-SLURM_MEM_DECOMPOSITION: Dict[int, str] = {2: "12G", 3: "12G", 4: "14G", 5: "14G"}
+SLURM_MEM_DECOMPOSITION: Dict[int, str] = {2: "12G", 3: "12G", 4: "16G", 5: "18G"}
 
 # Approximate seconds per epoch (used to compute dynamic SLURM --time)
 SECONDS_PER_EPOCH_COMPOSITION = 10.9
-SECONDS_PER_EPOCH_DECOMPOSITION = 32.5  # adjust if needed
+SECONDS_PER_EPOCH_DECOMPOSITION = 153  # adjust if needed
 
 STARTUP_OVERHEAD_SECONDS = 30  
 TIME_BUFFER_FACTOR = 1.0       
@@ -239,6 +243,28 @@ FROZEN_LAYERS = [
 ]
 
 TOTAL_EPOCHS = 1000  # All runs target 1000 epochs (indices 0..999)
+
+
+def extract_scheduler_type(checkpoint_path: str) -> str:
+    """Extract the scheduler type from the checkpoint path.
+
+    Paths contain segments like ``scheduler_cosine/`` or
+    ``scheduler_cosine_restarts/``.  We match the most specific
+    variant first to avoid returning ``cosine`` for
+    ``cosine_restarts``.
+    """
+    if "scheduler_cosine_restarts" in checkpoint_path:
+        return "cosine_restarts"
+    elif "scheduler_cosine" in checkpoint_path:
+        return "cosine"
+    elif "no_scheduler" in checkpoint_path:
+        return "none"
+    else:
+        import re
+        m = re.search(r'scheduler_([\w]+)', checkpoint_path)
+        if m:
+            return m.group(1)
+        return "cosine"  # safe default
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +358,12 @@ def find_incomplete_runs(
         base_path = seed_paths[init_seed].rstrip("/")
         freeze_epochs = frozen_epochs_lookup[hop][init_seed]
 
+        if cluster == "cc":
+            # The checkpoints are stored in scratch on CC, so we need to adjust the base path accordingly.
+            # print(f"Adjusting base path for cluster 'cc': {base_path} → ", end="")
+            base_path = base_path.replace("/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/", "/home/rsaha/scratch/dm_alchemy/src/saved_models/")
+            print(base_path)
+
         for frozen_layer in FROZEN_LAYERS:
             for freeze_epoch in freeze_epochs:
                 total_checked += 1
@@ -367,6 +399,82 @@ def find_incomplete_runs(
     print(f"{'='*70}\n")
 
     return incomplete
+
+
+# ---------------------------------------------------------------------------
+# Manual runs loading
+# ---------------------------------------------------------------------------
+
+def load_manual_runs(
+    manual_runs_path: str,
+    exp_typ: str,
+    hop: int,
+    data_split_seed: int,
+) -> List[dict]:
+    """
+    Load a CSV file of explicit (init_seed, frozen_layer, freeze_epoch)
+    tuples and build the same list-of-dicts structure used by
+    generate_sbatch_scripts.
+
+    File format — one run per line, comma-separated:
+        init_seed,frozen_layer,freeze_epoch
+
+    Example lines:
+        42,transformer_layer_0,430
+        42,embedding_layer,480
+        1,transformer_layer_3,470
+
+    Lines starting with '#' and blank lines are ignored.
+    """
+    if exp_typ == "composition":
+        checkpoint_paths = COMPOSITION_BASELINE_CHECKPOINT_PATHS
+    elif exp_typ == "decomposition":
+        checkpoint_paths = DECOMPOSITION_BASELINE_CHECKPOINT_PATHS
+    else:
+        raise ValueError(f"Unsupported exp_typ: {exp_typ}")
+
+    seed_paths = checkpoint_paths[hop][data_split_seed]
+
+    runs: List[dict] = []
+    with open(manual_runs_path, "r") as f:
+        for line_no, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) != 3:
+                print(f"WARNING: skipping malformed line {line_no}: {raw_line.rstrip()}")
+                continue
+
+            init_seed = int(parts[0])
+            frozen_layer = parts[1]
+            freeze_epoch = int(parts[2])
+
+            if init_seed not in seed_paths:
+                print(f"WARNING: init_seed={init_seed} not in checkpoint paths "
+                      f"for {exp_typ} hop={hop}. Skipping line {line_no}.")
+                continue
+
+            base_path = seed_paths[init_seed].rstrip("/")
+            resume_subdir = f"resume_from_epoch_{freeze_epoch}__freeze_{frozen_layer}"
+            pred_dir = os.path.join(base_path, resume_subdir, "predictions")
+
+            runs.append({
+                "exp_typ": exp_typ,
+                "hop": hop,
+                "data_split_seed": data_split_seed,
+                "init_seed": init_seed,
+                "frozen_layer": frozen_layer,
+                "freeze_epoch": freeze_epoch,
+                "expected_files": TOTAL_EPOCHS - 1 - freeze_epoch,
+                "actual_files": "N/A",
+                "status": "manual",
+                "checkpoint_base_path": base_path,
+                "pred_dir": pred_dir,
+            })
+
+    print(f"\nLoaded {len(runs)} manual run(s) from: {manual_runs_path}")
+    return runs
 
 
 # ---------------------------------------------------------------------------
@@ -447,11 +555,15 @@ def generate_sbatch_scripts(
         remaining_epochs = TOTAL_EPOCHS - freeze_epoch
         time_limit = compute_slurm_time(remaining_epochs, sec_per_epoch)
 
+        # Extract scheduler type from the checkpoint path
+        scheduler_type = extract_scheduler_type(checkpoint_path)
+
         job_tag = f"{exp_typ}_{hop}hop_s{init_seed}_{frozen_layer}_e{freeze_epoch}"
         sbatch_filename = f"rerun_{job_tag}.sh"
         sbatch_filepath = os.path.join(sbatch_dir, sbatch_filename)
 
         # Build the accelerate launch command
+        # Weight decay, and eta_min are dynamically loaded in train.py.
         train_cmd = (
             f"CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --multi_gpu --gpu_ids=all --main_process_port=0 "
             f"src/models/train.py "
@@ -471,10 +583,10 @@ def generate_sbatch_scripts(
             f"--padding_side=right "
             f"--use_flash_attention=True "
             f"--use_preprocessed=True "
-            f"--save_checkpoints=False "
+            f"--save_checkpoints=True "
             f"--store_predictions=True "
             f"--use_scheduler=True "
-            f"--scheduler_type=cosine "
+            f"--scheduler_type={scheduler_type} "
             f"--scheduler_call_location=after_batch "
             f"--t0=20 "
             f"--wandb_mode=online "
@@ -579,6 +691,10 @@ def parse_args() -> argparse.Namespace:
                     help="SLURM account to use (default: aip-afyshe).")
     p.add_argument("--dry_run", action="store_true",
                     help="Only print the report, do not write the sbatch script.")
+    p.add_argument("--manual_runs", type=str, default=None,
+                    help="Path to a CSV file with explicit (init_seed,frozen_layer,freeze_epoch) "
+                         "lines. Skips filesystem scanning and generates sbatch scripts "
+                         "only for the listed runs.")
 
     return p.parse_args()
 
@@ -589,25 +705,44 @@ def main():
     if args.output is None:
         args.output = f"resubmit_{args.exp_typ}_{args.hop}hop.sh"
 
-    incomplete = find_incomplete_runs(
-        exp_typ=args.exp_typ,
-        hop=args.hop,
-        data_split_seed=args.data_split_seed,
-        init_seeds=args.init_seeds,
-    )
-
-    print_report(incomplete)
-
-    if args.dry_run:
-        print("\n[DRY RUN] Not writing sbatch script.")
-    else:
-        generate_sbatch_scripts(
-            incomplete_runs=incomplete,
-            output_path=args.output,
+    if args.manual_runs:
+        # ── Manual mode: load explicit run list, skip scanning ──
+        runs = load_manual_runs(
+            manual_runs_path=args.manual_runs,
             exp_typ=args.exp_typ,
             hop=args.hop,
-            account=args.account,
+            data_split_seed=args.data_split_seed,
         )
+        print_report(runs)
+        if args.dry_run:
+            print("\n[DRY RUN] Not writing sbatch scripts.")
+        else:
+            generate_sbatch_scripts(
+                incomplete_runs=runs,
+                output_path=args.output,
+                exp_typ=args.exp_typ,
+                hop=args.hop,
+                account=args.account,
+            )
+    else:
+        # ── Auto mode: scan filesystem for incomplete runs ──
+        incomplete = find_incomplete_runs(
+            exp_typ=args.exp_typ,
+            hop=args.hop,
+            data_split_seed=args.data_split_seed,
+            init_seeds=args.init_seeds,
+        )
+        print_report(incomplete)
+        if args.dry_run:
+            print("\n[DRY RUN] Not writing sbatch scripts.")
+        else:
+            generate_sbatch_scripts(
+                incomplete_runs=incomplete,
+                output_path=args.output,
+                exp_typ=args.exp_typ,
+                hop=args.hop,
+                account=args.account,
+            )
 
 
 if __name__ == "__main__":
