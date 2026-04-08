@@ -10,13 +10,13 @@ METRIC_KEYS = {
      
     "p_a": "predicted_in_context_accuracies",
 
-    # Held out
-    # "p_b_given_a": "predicted_in_context_correct_half_accuracies",
-    # "p_c_given_ab": "predicted_in_context_correct_half_exact_accuracies",
+    # Held out / Decomposition
+    "p_b_given_a": "predicted_in_context_correct_half_accuracies",
+    "p_c_given_ab": "predicted_in_context_correct_half_exact_accuracies",
 
     # Composition
-    "p_b_given_a": "predicted_in_context_correct_candidate_accuracies",
-    "p_c_given_ab": "correct_within_candidates"
+    # "p_b_given_a": "predicted_in_context_correct_candidate_accuracies",
+    # "p_c_given_ab": "correct_within_candidates"
 }
 
 
@@ -40,6 +40,19 @@ def _bin_center(x: float, bin_width: int) -> int:
         raise ValueError("bin_width must be >= 1")
     # Standard binning: map x to the nearest multiple of bin_width
     return int(np.floor((x + bin_width / 2) / bin_width) * bin_width)
+
+
+def _snap_to_grid(x: float, bin_width: int) -> int:
+    """Snap x to the nearest multiple of bin_width using symmetric rounding.
+
+    Unlike _bin_center which uses floor-based binning (asymmetric boundaries),
+    this uses standard rounding so that e.g. both -4 and +4 map to 0 when
+    bin_width=10.  This keeps seeds with slightly different offsets from
+    the anchor baseline in the same bin.
+    """
+    if bin_width <= 0:
+        raise ValueError("bin_width must be >= 1")
+    return int(bin_width * round(x / bin_width))
 
 
 def _get_t_baseline_from_payload(payload: dict) -> Optional[int]:
@@ -69,6 +82,7 @@ def extract_plot_data_with_errorbars(
     debug_relative: bool = False,  
     min_x: Optional[int] = None,
     max_x: Optional[int] = None,
+    snap_to_grid: bool = False,
 ) -> Dict[str, List[Tuple[int, float, float, int]]]:
     """
     Returns:
@@ -157,7 +171,10 @@ def extract_plot_data_with_errorbars(
 
                     # Only bin if user requested binning
                     if bin_width > 1:
-                        x_val = _bin_center(rel, bin_width=bin_width)
+                        if snap_to_grid:
+                            x_val = _snap_to_grid(rel, bin_width=bin_width)
+                        else:
+                            x_val = _bin_center(rel, bin_width=bin_width)
                     else:
                         x_val = int(rel)
 
@@ -276,6 +293,7 @@ def plot_deltas_with_errorbars(
     max_x: Optional[int] = None,
     y_min: Optional[int] = None,
     y_max: Optional[int] = None,
+    snap_to_grid: bool = False,
 ):
     layer_data = extract_plot_data_with_errorbars(
         results_json_path=results_path,
@@ -291,6 +309,7 @@ def plot_deltas_with_errorbars(
         debug_relative=debug_relative,
         min_x=min_x,
         max_x=max_x,
+        snap_to_grid=snap_to_grid,
     )
 
     if not layer_data:
@@ -362,6 +381,7 @@ def plot_deltas_with_errorbars(
             if anchor_key is None:
                 xlabel = f"Relative Freeze Epoch (t_f - t_base[{stage_key_map.get(stage_key, stage_key)}])" 
             else:
+                # xlabel = f"Relative Freeze Epoch"
                 xlabel = f"Relative Freeze Epoch (t_f - t_base[{stage_key_map.get(anchor_key, anchor_key)}])" 
         else:
             xlabel = f"Relative Freeze Epoch"
@@ -507,6 +527,14 @@ def main():
         default=None,
         help="Maximum value on the y-axis to plot.",
     )
+    parser.add_argument(
+        "--snap_to_grid",
+        action="store_true",
+        help="Use symmetric rounding to snap relative x-values to the nearest "
+             "multiple of bin_width. Ensures seeds with different baseline "
+             "offsets land in the same bins. Only affects relative x_mode "
+             "with bin_width > 1.",
+    )
 
     args = parser.parse_args()
 
@@ -537,7 +565,9 @@ def main():
         max_x=args.max_x,
         y_min=args.y_min,
         y_max=args.y_max,
+        snap_to_grid=args.snap_to_grid,
     )
+    print("Snap to grid: ", args.snap_to_grid)
 
 
 if __name__ == "__main__":
