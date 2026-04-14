@@ -130,29 +130,19 @@ DECOMPOSITION_FROZEN_EPOCHS: Dict[int, Dict[int, List[int]]] = {
         3:  [32, 42, 52, 62, 72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312, 322, 332, 342, 352, 362, 372, 382, 392, 402, 412, 422, 432, 442, 452, 462, 472, 482, 492, 502, 512]
     },
     3: {
-        # 42: [46, 56, 66, 76, 86, 96, 106, 116, 126, 136, 146, 156, 166, 176, 186, 196, 206, 216, 226, 236, 246, 256, 266, 276, 286, 296, 306, 316, 326, 336, 346, 356, 366, 376, 386, 396, 406, 416, 426, 436, 446, 456, 466, 476, 486, 496]
-        42: [506, 516, 526, 536, 546, 556, 566],
-        # 1:  [41, 51, 61, 71, 81, 91, 101, 111, 121, 131, 141, 151, 161, 171, 181, 191, 201, 211, 221, 231, 241, 251, 261, 271, 281, 291, 301, 311, 321, 331, 341, 351, 361, 371, 381, 391, 401, 411, 421, 431]
-        1:  [441, 451, 461, 471],
-        # 3:  [87, 97, 107, 117, 127, 137, 147, 157, 167, 177, 187, 197, 207, 217, 227, 237, 247, 257, 267, 277, 287, 297, 307, 317, 327, 337, 347, 357, 367]
-        3: [377, 387, 397, 407, 417, 427, 437, 447, 457, 467],
+        42: [46, 56, 66, 76, 86, 96, 106, 116, 126, 136, 146, 156, 166, 176, 186, 196, 206, 216, 226, 236, 246, 256, 266, 276, 286, 296, 306, 316, 326, 336, 346, 356, 366, 376, 386, 396, 406, 416, 426, 436, 446, 456, 466, 476, 486, 496, 506, 516, 526, 536, 546, 556, 566],
+        1:  [41, 51, 61, 71, 81, 91, 101, 111, 121, 131, 141, 151, 161, 171, 181, 191, 201, 211, 221, 231, 241, 251, 261, 271, 281, 291, 301, 311, 321, 331, 341, 351, 361, 371, 381, 391, 401, 411, 421, 431, 441, 451, 461, 471],
+        3:  [87, 97, 107, 117, 127, 137, 147, 157, 167, 177, 187, 197, 207, 217, 227, 237, 247, 257, 267, 277, 287, 297, 307, 317, 327, 337, 347, 357, 367, 377, 387, 397, 407, 417, 427, 437, 447, 457, 467],
     },
     4: {
-        # 42: [80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390],
-        42: [400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550],
-        # 1:  [40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410]
-        1:  [420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550],
-        # 3:  [62, 72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312, 322, 332, 342, 352],
-        3:  [362, 372, 382, 392, 402, 412, 422, 432, 442, 452, 462, 472, 482, 492],
+        42: [80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550],
+        1:  [40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550],
+        3:  [62, 72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312, 322, 332, 342, 352, 362, 372, 382, 392, 402, 412, 422, 432, 442, 452, 462, 472, 482, 492],
     },
     5: {
-        # 42: [124, 134, 144, 154, 164, 174, 184, 194, 204, 214, 224, 234, 244, 254, 264, 274, 284, 294, 304, 314, 324, 334, 344, 354, 364, 374, 384, 394, 404, 414, 424, 434, 444, 454, 464, 474, 484, 494, 504, 514, 524, 534, 544, 554, 564, 574, 584, 594, 604, 614, 624, 634, 644, 654, 664, 674, 684]
-        42: [694, 704, 714, 724, 734, 744],
-        # 2:  [120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700]
-        2:  [710, 720, 730],
-        # 3:  [128, 138, 148, 158, 168, 178, 188, 198, 208, 218, 228, 238, 248, 258, 268, 278, 288, 298, 308, 318, 328, 338, 348, 358, 368, 378, 388, 398, 408, 418, 428, 438, 448, 458, 468, 478, 488, 498, 508, 518, 528, 538, 548, 558, 568, 578, 588, 598, 608, 618, 628, 638, 648, 658, 668, 678]
-        # 3:  [688, 698]
-        3:  [708, 718, 728],
+        42: [124, 134, 144, 154, 164, 174, 184, 194, 204, 214, 224, 234, 244, 254, 264, 274, 284, 294, 304, 314, 324, 334, 344, 354, 364, 374, 384, 394, 404, 414, 424, 434, 444, 454, 464, 474, 484, 494, 504, 514, 524, 534, 544, 554, 564, 574, 584, 594, 604, 614, 624, 634, 644, 654, 664, 674, 684, 694, 704, 714, 724, 734, 744],
+        2:  [120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700, 710, 720, 730],
+        3:  [128, 138, 148, 158, 168, 178, 188, 198, 208, 218, 228, 238, 248, 258, 268, 278, 288, 298, 308, 318, 328, 338, 348, 358, 368, 378, 388, 398, 408, 418, 428, 438, 448, 458, 468, 478, 488, 498, 508, 518, 528, 538, 548, 558, 568, 578, 588, 598, 608, 618, 628, 638, 648, 658, 668, 678, 688, 698, 708, 718, 728],
     },
 }
 
@@ -214,11 +204,21 @@ DECOMPOSITION_DATA_PATHS: Dict[int, Dict[str, str]] = {
 # Composition uses shop_1_qhop_N → shorter sequences → less memory.
 # Decomposition uses shop_N_qhop_1 → longer sequences → more memory.
 SLURM_MEM_COMPOSITION: Dict[int, str] = {2: "12G", 3: "12G", 4: "12G", 5: "12G"}
-SLURM_MEM_DECOMPOSITION: Dict[int, str] = {2: "12G", 3: "12G", 4: "16G", 5: "18G"}
+SLURM_MEM_DECOMPOSITION: Dict[int, str] = {2: "12G", 3: "14G", 4: "16G", 5: "18G"}
 
 # Approximate seconds per epoch (used to compute dynamic SLURM --time)
-SECONDS_PER_EPOCH_COMPOSITION = 10.9
-SECONDS_PER_EPOCH_DECOMPOSITION = 153  # adjust if needed
+SECONDS_PER_EPOCH_COMPOSITION = {
+    2: 11,
+    3: 11,
+    4: 11,
+    5: 11,
+}
+SECONDS_PER_EPOCH_DECOMPOSITION =  {
+    2: 11,
+    3: 33,
+    4: 61,
+    5: 153
+}
 
 STARTUP_OVERHEAD_SECONDS = 30  
 TIME_BUFFER_FACTOR = 1.0       
@@ -244,6 +244,7 @@ FROZEN_LAYERS = [
 ]
 
 TOTAL_EPOCHS = 1000  # All runs target 1000 epochs (indices 0..999)
+DEFAULT_MAX_MISSING_EPOCHS = 20
 
 
 def extract_scheduler_type(checkpoint_path: str) -> str:
@@ -283,6 +284,7 @@ def check_run_completeness(
     checkpoint_base_path: str,
     freeze_epoch: int,
     frozen_layer: str,
+    max_missing_epochs: int = DEFAULT_MAX_MISSING_EPOCHS,
 ) -> Tuple[str, int, int, str]:
     """
     Check whether a single frozen-layer run is complete.
@@ -304,7 +306,7 @@ def check_run_completeness(
 
     if actual_files == 0 and not os.path.isdir(pred_dir):
         status = "missing"
-    elif actual_files < expected_files:
+    elif (expected_files - actual_files) > max_missing_epochs:
         status = "incomplete"
         print(pred_dir)
     else:
@@ -318,6 +320,7 @@ def find_incomplete_runs(
     hop: int,
     data_split_seed: int,
     init_seeds: Optional[List[int]] = None,
+    max_missing_epochs: int = DEFAULT_MAX_MISSING_EPOCHS,
 ) -> List[dict]:
     """
     Scan all expected (init_seed, frozen_layer, freeze_epoch) combinations
@@ -369,7 +372,10 @@ def find_incomplete_runs(
             for freeze_epoch in freeze_epochs:
                 total_checked += 1
                 pred_dir, expected, actual, status = check_run_completeness(
-                    base_path, freeze_epoch, frozen_layer
+                    base_path,
+                    freeze_epoch,
+                    frozen_layer,
+                    max_missing_epochs=max_missing_epochs,
                 )
 
                 if status == "complete":
@@ -532,8 +538,8 @@ def generate_sbatch_scripts(
 
     mem = mem_lookup.get(hop, "14G")
     sec_per_epoch = (
-        SECONDS_PER_EPOCH_COMPOSITION if exp_typ == "composition"
-        else SECONDS_PER_EPOCH_DECOMPOSITION
+        SECONDS_PER_EPOCH_COMPOSITION[hop] if exp_typ == "composition"
+        else SECONDS_PER_EPOCH_DECOMPOSITION[hop]
     )
 
     # Directory that holds individual sbatch scripts
@@ -584,7 +590,7 @@ def generate_sbatch_scripts(
             f"--padding_side=right "
             f"--use_flash_attention=True "
             f"--use_preprocessed=True "
-            f"--save_checkpoints=True "
+            f"--save_checkpoints=False "
             f"--store_predictions=True "
             f"--use_scheduler=True "
             f"--scheduler_type={scheduler_type} "
@@ -696,6 +702,9 @@ def parse_args() -> argparse.Namespace:
                     help="Path to a CSV file with explicit (init_seed,frozen_layer,freeze_epoch) "
                          "lines. Skips filesystem scanning and generates sbatch scripts "
                          "only for the listed runs.")
+    p.add_argument("--max_missing_epochs", type=int, default=DEFAULT_MAX_MISSING_EPOCHS,
+                    help=("Tolerance for missing prediction epochs before marking a run "
+                          "as incomplete (default: 20)."))
 
     return p.parse_args()
 
@@ -732,6 +741,7 @@ def main():
             hop=args.hop,
             data_split_seed=args.data_split_seed,
             init_seeds=args.init_seeds,
+            max_missing_epochs=args.max_missing_epochs,
         )
         print_report(incomplete)
         if args.dry_run:

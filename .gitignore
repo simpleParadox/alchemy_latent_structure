@@ -101,3 +101,8 @@ test_vocab_parsing.py
 src/models/fetch_wandb_stage_analysis.py
 src/models/wandb_stage_filters.py
 src/models/submit_missing_runs.py
+src/models/run_wandb_slurm_watchdog.py
+src/models/watchdog_sbatch_infer.py
+src/models/find_and_sync_remote_frozen_runs.py
+clean_agent.py
+src/models/__pycache__/

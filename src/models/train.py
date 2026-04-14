@@ -1160,7 +1160,8 @@ def main():
             "project": args.wandb_project,
             "entity": args.wandb_entity,
             "config": vars(args),
-            "mode": args.wandb_mode
+            "mode": args.wandb_mode,
+            "dir": "/home/rsaha/scratch/wandb_runs"
         }
         
         if args.resume_wandb_run_id:
