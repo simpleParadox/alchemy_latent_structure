@@ -547,7 +547,8 @@ def generate_sbatch_scripts(
     os.makedirs(sbatch_dir, exist_ok=True)
 
     # Directory for SLURM stdout logs
-    log_dir = f"reruns_{exp_typ}/{hop}-hop"
+    # Store in scratch on CC to avoid filling up home directory.
+    log_dir = f"~/scratch/dm_alchemy"
     os.makedirs(log_dir, exist_ok=True)
 
     generated_files: List[str] = []
