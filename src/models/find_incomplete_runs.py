@@ -321,10 +321,12 @@ def find_incomplete_runs(
     data_split_seed: int,
     init_seeds: Optional[List[int]] = None,
     max_missing_epochs: int = DEFAULT_MAX_MISSING_EPOCHS,
-) -> List[dict]:
+) -> Tuple[List[dict], List[dict]]:
     """
-    Scan all expected (init_seed, frozen_layer, freeze_epoch) combinations
-    and return a list of dicts for incomplete/missing runs.
+        Scan all expected (init_seed, frozen_layer, freeze_epoch) combinations
+        and return two lists:
+            - incomplete/missing runs
+            - complete runs
     """
     if exp_typ == "composition":
         checkpoint_paths = COMPOSITION_BASELINE_CHECKPOINT_PATHS
@@ -348,6 +350,7 @@ def find_incomplete_runs(
         init_seeds = sorted(seed_paths.keys())
 
     incomplete: List[dict] = []
+    complete_runs: List[dict] = []
     total_checked = 0
     total_complete = 0
 
@@ -380,6 +383,19 @@ def find_incomplete_runs(
 
                 if status == "complete":
                     total_complete += 1
+                    complete_runs.append({
+                        "exp_typ": exp_typ,
+                        "hop": hop,
+                        "data_split_seed": data_split_seed,
+                        "init_seed": init_seed,
+                        "frozen_layer": frozen_layer,
+                        "freeze_epoch": freeze_epoch,
+                        "expected_files": expected,
+                        "actual_files": actual,
+                        "status": status,
+                        "checkpoint_base_path": base_path,
+                        "pred_dir": pred_dir,
+                    })
                 else:
                     incomplete.append({
                         "exp_typ": exp_typ,
@@ -405,7 +421,7 @@ def find_incomplete_runs(
     print(f"  Total to rerun: {len(incomplete)}")
     print(f"{'='*70}\n")
 
-    return incomplete
+    return incomplete, complete_runs
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +523,30 @@ def print_report(incomplete_runs: List[dict]) -> None:
             r["actual_files"],
             r["status"],
         ))
+
+
+def print_complete_report(complete_runs: List[dict]) -> None:
+    """Pretty-print only completed runs, with pred_dir listed after the table."""
+    if not complete_runs:
+        print("No completed runs found.")
+        return
+
+    fmt = "{:<12} {:<25} {:<14} {:<10} {:<10} {:<10}"
+    print(fmt.format("init_seed", "frozen_layer", "freeze_epoch", "expected", "actual", "status"))
+    print("-" * 85)
+    for r in complete_runs:
+        print(fmt.format(
+            r["init_seed"],
+            r["frozen_layer"],
+            r["freeze_epoch"],
+            r["expected_files"],
+            r["actual_files"],
+            r["status"],
+        ))
+
+    print("\nPrediction directories (completed runs):")
+    for r in complete_runs:
+        print(r["pred_dir"])
 
 
 def generate_sbatch_scripts(
@@ -703,6 +743,9 @@ def parse_args() -> argparse.Namespace:
                     help="Path to a CSV file with explicit (init_seed,frozen_layer,freeze_epoch) "
                          "lines. Skips filesystem scanning and generates sbatch scripts "
                          "only for the listed runs.")
+    p.add_argument("--complete_only", action="store_true",
+                   help=("Print only completed runs and their prediction directories. "
+                         "Suppresses scan summary and does not generate sbatch scripts."))
     p.add_argument("--max_missing_epochs", type=int, default=DEFAULT_MAX_MISSING_EPOCHS,
                     help=("Tolerance for missing prediction epochs before marking a run "
                           "as incomplete (default: 20)."))
@@ -717,6 +760,9 @@ def main():
         args.output = f"resubmit_{args.exp_typ}_{args.hop}hop.sh"
 
     if args.manual_runs:
+        if args.complete_only:
+            print("ERROR: --complete_only is not supported with --manual_runs.")
+            sys.exit(2)
         # ── Manual mode: load explicit run list, skip scanning ──
         runs = load_manual_runs(
             manual_runs_path=args.manual_runs,
@@ -737,24 +783,27 @@ def main():
             )
     else:
         # ── Auto mode: scan filesystem for incomplete runs ──
-        incomplete = find_incomplete_runs(
+        incomplete, complete_runs = find_incomplete_runs(
             exp_typ=args.exp_typ,
             hop=args.hop,
             data_split_seed=args.data_split_seed,
             init_seeds=args.init_seeds,
             max_missing_epochs=args.max_missing_epochs,
         )
-        print_report(incomplete)
-        if args.dry_run:
-            print("\n[DRY RUN] Not writing sbatch scripts.")
+        if args.complete_only:
+            print_complete_report(complete_runs)
         else:
-            generate_sbatch_scripts(
-                incomplete_runs=incomplete,
-                output_path=args.output,
-                exp_typ=args.exp_typ,
-                hop=args.hop,
-                account=args.account,
-            )
+            print_report(incomplete)
+            if args.dry_run:
+                print("\n[DRY RUN] Not writing sbatch scripts.")
+            else:
+                generate_sbatch_scripts(
+                    incomplete_runs=incomplete,
+                    output_path=args.output,
+                    exp_typ=args.exp_typ,
+                    hop=args.hop,
+                    account=args.account,
+                )
 
 
 if __name__ == "__main__":
