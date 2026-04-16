@@ -21,6 +21,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import csv
 import glob
 import os
 import sys
@@ -269,6 +270,48 @@ def extract_scheduler_type(checkpoint_path: str) -> str:
         return "cosine"  # safe default
 
 
+def checkpoint_base_to_rel(checkpoint_base_path: str) -> str:
+    """Convert absolute checkpoint base path to path relative to src/saved_models."""
+    normalized = checkpoint_base_path.replace("\\", "/")
+    marker = "/src/saved_models/"
+    idx = normalized.find(marker)
+    if idx == -1:
+        raise ValueError(
+            f"Could not derive checkpoint_base_rel from path (missing '{marker}'): {checkpoint_base_path}"
+        )
+    rel = normalized[idx + len(marker):].strip("/")
+    return rel
+
+
+def default_saved_models_root_for_cluster(cluster_name: str) -> str:
+    """Return default src/saved_models root for the current cluster."""
+    if cluster_name == "cc":
+        return "/home/rsaha/scratch/dm_alchemy/src/saved_models"
+    # killarney and other local clusters use the aip project tree by default.
+    return "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models"
+
+
+def resolve_saved_models_root(saved_models_root_override: Optional[str] = None) -> str:
+    if saved_models_root_override:
+        return saved_models_root_override.rstrip("/")
+    return default_saved_models_root_for_cluster(cluster)
+
+
+def resolve_checkpoint_base_path(path_or_rel: str, saved_models_root: str) -> str:
+    """
+    Resolve a checkpoint base path for the active cluster.
+
+    Accepts either:
+      - absolute checkpoint path containing /src/saved_models/
+      - relative checkpoint path under src/saved_models
+    """
+    if os.path.isabs(path_or_rel):
+        rel = checkpoint_base_to_rel(path_or_rel)
+    else:
+        rel = path_or_rel.strip("/").replace("\\", "/")
+    return os.path.join(saved_models_root, rel).rstrip("/")
+
+
 # ---------------------------------------------------------------------------
 # Detection logic
 # ---------------------------------------------------------------------------
@@ -321,6 +364,7 @@ def find_incomplete_runs(
     data_split_seed: int,
     init_seeds: Optional[List[int]] = None,
     max_missing_epochs: int = DEFAULT_MAX_MISSING_EPOCHS,
+    saved_models_root_override: Optional[str] = None,
 ) -> Tuple[List[dict], List[dict]]:
     """
         Scan all expected (init_seed, frozen_layer, freeze_epoch) combinations
@@ -349,6 +393,8 @@ def find_incomplete_runs(
     if init_seeds is None:
         init_seeds = sorted(seed_paths.keys())
 
+    saved_models_root = resolve_saved_models_root(saved_models_root_override)
+
     incomplete: List[dict] = []
     complete_runs: List[dict] = []
     total_checked = 0
@@ -362,14 +408,8 @@ def find_incomplete_runs(
             print(f"WARNING: init_seed={init_seed} not in frozen epochs for {exp_typ} hop={hop}. Skipping.")
             continue
 
-        base_path = seed_paths[init_seed].rstrip("/")
+        base_path = resolve_checkpoint_base_path(seed_paths[init_seed], saved_models_root)
         freeze_epochs = frozen_epochs_lookup[hop][init_seed]
-
-        if cluster == "cc":
-            # The checkpoints are stored in scratch on CC, so we need to adjust the base path accordingly.
-            # print(f"Adjusting base path for cluster 'cc': {base_path} → ", end="")
-            base_path = base_path.replace("/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/", "/home/rsaha/scratch/dm_alchemy/src/saved_models/")
-            print(base_path)
 
         for frozen_layer in FROZEN_LAYERS:
             for freeze_epoch in freeze_epochs:
@@ -433,6 +473,7 @@ def load_manual_runs(
     exp_typ: str,
     hop: int,
     data_split_seed: int,
+    saved_models_root_override: Optional[str] = None,
 ) -> List[dict]:
     """
     Load a CSV file of explicit (init_seed, frozen_layer, freeze_epoch)
@@ -458,9 +499,69 @@ def load_manual_runs(
 
     seed_paths = checkpoint_paths[hop][data_split_seed]
 
+    saved_models_root = resolve_saved_models_root(saved_models_root_override)
+
     runs: List[dict] = []
-    with open(manual_runs_path, "r") as f:
-        for line_no, raw_line in enumerate(f, start=1):
+    with open(manual_runs_path, "r", newline="") as f:
+        raw_lines = [ln.rstrip("\n") for ln in f]
+
+    data_lines = [ln for ln in raw_lines if ln.strip() and not ln.lstrip().startswith("#")]
+    if not data_lines:
+        print(f"\nLoaded 0 manual run(s) from: {manual_runs_path}")
+        return runs
+
+    # Detect rich/header format vs legacy 3-column format.
+    first_cols = [c.strip() for c in data_lines[0].split(",")]
+    has_header = len(first_cols) >= 3 and first_cols[0] in {
+        "init_seed", "exp_typ", "hop", "data_split_seed", "frozen_layer", "freeze_epoch"
+    }
+
+    if has_header:
+        reader = csv.DictReader(data_lines)
+        for row_idx, row in enumerate(reader, start=2):
+            try:
+                init_seed = int(str(row.get("init_seed", "")).strip())
+                frozen_layer = str(row.get("frozen_layer", "")).strip()
+                freeze_epoch = int(str(row.get("freeze_epoch", "")).strip())
+            except Exception:
+                print(f"WARNING: skipping malformed CSV row {row_idx}: {row}")
+                continue
+
+            checkpoint_base_rel = str(row.get("checkpoint_base_rel", "")).strip()
+            checkpoint_base_abs = str(row.get("checkpoint_base_path", "")).strip()
+
+            if checkpoint_base_rel:
+                base_path = resolve_checkpoint_base_path(checkpoint_base_rel, saved_models_root)
+            elif checkpoint_base_abs:
+                base_path = resolve_checkpoint_base_path(checkpoint_base_abs, saved_models_root)
+            else:
+                if init_seed not in seed_paths:
+                    print(
+                        f"WARNING: init_seed={init_seed} not in checkpoint paths for {exp_typ} hop={hop}. "
+                        f"Skipping row {row_idx}."
+                    )
+                    continue
+                base_path = resolve_checkpoint_base_path(seed_paths[init_seed], saved_models_root)
+
+            resume_subdir = f"resume_from_epoch_{freeze_epoch}__freeze_{frozen_layer}"
+            pred_dir = os.path.join(base_path, resume_subdir, "predictions")
+
+            runs.append({
+                "exp_typ": exp_typ,
+                "hop": hop,
+                "data_split_seed": data_split_seed,
+                "init_seed": init_seed,
+                "frozen_layer": frozen_layer,
+                "freeze_epoch": freeze_epoch,
+                "expected_files": TOTAL_EPOCHS - 1 - freeze_epoch,
+                "actual_files": "N/A",
+                "status": "manual",
+                "checkpoint_base_path": base_path,
+                "pred_dir": pred_dir,
+            })
+    else:
+        # Legacy format: init_seed,frozen_layer,freeze_epoch
+        for line_no, raw_line in enumerate(raw_lines, start=1):
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -474,11 +575,13 @@ def load_manual_runs(
             freeze_epoch = int(parts[2])
 
             if init_seed not in seed_paths:
-                print(f"WARNING: init_seed={init_seed} not in checkpoint paths "
-                      f"for {exp_typ} hop={hop}. Skipping line {line_no}.")
+                print(
+                    f"WARNING: init_seed={init_seed} not in checkpoint paths "
+                    f"for {exp_typ} hop={hop}. Skipping line {line_no}."
+                )
                 continue
 
-            base_path = seed_paths[init_seed].rstrip("/")
+            base_path = resolve_checkpoint_base_path(seed_paths[init_seed], saved_models_root)
             resume_subdir = f"resume_from_epoch_{freeze_epoch}__freeze_{frozen_layer}"
             pred_dir = os.path.join(base_path, resume_subdir, "predictions")
 
@@ -547,6 +650,52 @@ def print_complete_report(complete_runs: List[dict]) -> None:
     print("\nPrediction directories (completed runs):")
     for r in complete_runs:
         print(r["pred_dir"])
+
+
+def export_manual_runs_csv(runs: List[dict], output_csv_path: str) -> None:
+    """Export runs into a portable CSV suitable for --manual_runs."""
+    os.makedirs(os.path.dirname(output_csv_path) or ".", exist_ok=True)
+
+    fieldnames = [
+        "exp_typ",
+        "hop",
+        "data_split_seed",
+        "init_seed",
+        "frozen_layer",
+        "freeze_epoch",
+        "checkpoint_base_rel",
+        "checkpoint_base_path",
+        "status",
+        "expected_files",
+        "actual_files",
+        "pred_dir",
+    ]
+
+    with open(output_csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in runs:
+            try:
+                checkpoint_base_rel = checkpoint_base_to_rel(r["checkpoint_base_path"])
+            except ValueError:
+                checkpoint_base_rel = ""
+
+            writer.writerow({
+                "exp_typ": r.get("exp_typ", ""),
+                "hop": r.get("hop", ""),
+                "data_split_seed": r.get("data_split_seed", ""),
+                "init_seed": r.get("init_seed", ""),
+                "frozen_layer": r.get("frozen_layer", ""),
+                "freeze_epoch": r.get("freeze_epoch", ""),
+                "checkpoint_base_rel": checkpoint_base_rel,
+                "checkpoint_base_path": r.get("checkpoint_base_path", ""),
+                "status": r.get("status", ""),
+                "expected_files": r.get("expected_files", ""),
+                "actual_files": r.get("actual_files", ""),
+                "pred_dir": r.get("pred_dir", ""),
+            })
+
+    print(f"Exported {len(runs)} run(s) to CSV: {output_csv_path}")
 
 
 def generate_sbatch_scripts(
@@ -780,6 +929,12 @@ def parse_args() -> argparse.Namespace:
                     help="Path to a CSV file with explicit (init_seed,frozen_layer,freeze_epoch) "
                          "lines. Skips filesystem scanning and generates sbatch scripts "
                          "only for the listed runs.")
+    p.add_argument("--export_manual_runs_csv", type=str, default=None,
+                   help=("Export detected runs to a portable CSV suitable for --manual_runs. "
+                         "In auto-scan mode exports incomplete runs; in manual mode exports loaded runs."))
+    p.add_argument("--saved_models_root_override", type=str, default=None,
+                   help=("Override cluster-based src/saved_models root when resolving checkpoint paths "
+                         "for scan/manual CSV workflows."))
     p.add_argument("--complete_only", action="store_true",
                    help=("Print only completed runs and their prediction directories. "
                          "Suppresses scan summary and does not generate sbatch scripts."))
@@ -816,8 +971,11 @@ def main():
             exp_typ=args.exp_typ,
             hop=args.hop,
             data_split_seed=args.data_split_seed,
+            saved_models_root_override=args.saved_models_root_override,
         )
         print_report(runs)
+        if args.export_manual_runs_csv:
+            export_manual_runs_csv(runs, args.export_manual_runs_csv)
         if args.dry_run:
             print("\n[DRY RUN] Not writing sbatch scripts.")
         else:
@@ -841,7 +999,10 @@ def main():
             data_split_seed=args.data_split_seed,
             init_seeds=args.init_seeds,
             max_missing_epochs=args.max_missing_epochs,
+            saved_models_root_override=args.saved_models_root_override,
         )
+        if args.export_manual_runs_csv:
+            export_manual_runs_csv(incomplete, args.export_manual_runs_csv)
         if args.complete_only:
             print_complete_report(complete_runs)
         else:
