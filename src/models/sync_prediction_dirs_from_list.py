@@ -352,7 +352,15 @@ def rsync_one(
     if direction == "pull":
         os.makedirs(target_dir, exist_ok=True)
     else:
-        os.makedirs(source_dir, exist_ok=True)
+        if not os.path.isdir(source_dir):
+            return False
+        mkdir_cmd = ["ssh", *ssh_options, remote_host, f"mkdir -p {shlex.quote(target_dir)}"]
+        try:
+            mkdir_proc = subprocess.run(mkdir_cmd, timeout=timeout_seconds)
+            if mkdir_proc.returncode != 0:
+                return False
+        except subprocess.TimeoutExpired:
+            return False
 
     ssh_inner = "ssh " + " ".join(shlex.quote(opt) for opt in ssh_options)
     if direction == "pull":
