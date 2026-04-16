@@ -31,31 +31,50 @@ PRED_PATTERN = "predictions_classification_epoch_*.npz"
 
 @dataclass
 class PathPlan:
-    remote_dir: str
-    local_dir: str
-    local_exists: bool
-    local_npz_count: int
+    source_dir: str
+    target_dir: str
+    source_is_remote: bool
+    local_source_exists: bool
+    local_source_npz_count: int
+    local_target_exists: bool
+    local_target_npz_count: int
 
 
 @dataclass
 class ConflictRow:
-    remote_dir: str
-    local_dir: str
+    source_dir: str
+    target_dir: str
     local_npz_count: int
     remote_npz_count: Optional[int]
+    reason: str
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Sync remote prediction directories from a file into a local prefix."
     )
+    p.add_argument(
+        "--direction",
+        type=str,
+        choices=["pull", "push"],
+        default="pull",
+        help=(
+            "Transfer direction: pull (remote->local, default) or push (local->remote)."
+        ),
+    )
     p.add_argument("--remote_host", type=str, required=True, help="Remote SSH host.")
     p.add_argument("--paths_file", type=str, required=True, help="Text file with remote prediction directories.")
     p.add_argument(
         "--local_prefix",
         type=str,
-        required=True,
-        help="Local prefix to replace everything before the anchor.",
+        default="",
+        help="Local prefix replacing everything before anchor in pull mode.",
+    )
+    p.add_argument(
+        "--remote_prefix",
+        type=str,
+        default="",
+        help="Remote prefix replacing everything before anchor in push mode.",
     )
     p.add_argument(
         "--anchor",
@@ -68,7 +87,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="",
         help=(
-            "Optional subdirectory under local_prefix to store all synced paths "
+            "Optional subdirectory inserted in destination path "
             "(e.g., sync_2026_04_15)."
         ),
     )
@@ -187,12 +206,12 @@ def read_remote_paths(paths_file: str) -> List[str]:
     return rows
 
 
-def map_remote_to_local(remote_dir: str, local_prefix: str, anchor: str, local_suffix: str) -> str:
+def map_path_to_prefix(path: str, target_prefix: str, anchor: str, local_suffix: str) -> str:
     anchor_token = f"/{anchor}/"
-    i = remote_dir.find(anchor_token)
+    i = path.find(anchor_token)
     if i < 0:
-        raise ValueError(f"Anchor '/{anchor}/' not found in remote path: {remote_dir}")
-    suffix = remote_dir[i + 1 :]
+        raise ValueError(f"Anchor '/{anchor}/' not found in path: {path}")
+    suffix = path[i + 1 :]
 
     # Insert local_suffix right after the init_seed_* directory so the
     # run hierarchy stays intact while avoiding overwrites.
@@ -207,7 +226,7 @@ def map_remote_to_local(remote_dir: str, local_prefix: str, anchor: str, local_s
         parts.insert(init_idx + 1, local_suffix.strip("/"))
         suffix = "/".join(parts)
 
-    base = local_prefix.rstrip("/")
+    base = target_prefix.rstrip("/")
     return os.path.join(base, suffix)
 
 
@@ -225,45 +244,89 @@ def local_npz_count(path: str, include_pattern: str) -> int:
         return 0
 
 
-def build_plan(
-    remote_dirs: List[str],
+def build_pull_plan(
+    source_remote_dirs: List[str],
     local_prefix: str,
     anchor: str,
     include_pattern: str,
     local_suffix: str,
 ) -> List[PathPlan]:
     plan: List[PathPlan] = []
-    for remote_dir in remote_dirs:
-        local_dir = map_remote_to_local(remote_dir, local_prefix, anchor, local_suffix)
+    for remote_dir in source_remote_dirs:
+        local_dir = map_path_to_prefix(remote_dir, local_prefix, anchor, local_suffix)
         exists = os.path.isdir(local_dir)
         count = local_npz_count(local_dir, include_pattern)
         plan.append(
             PathPlan(
-                remote_dir=remote_dir,
-                local_dir=local_dir,
-                local_exists=exists,
-                local_npz_count=count,
+                source_dir=remote_dir,
+                target_dir=local_dir,
+                source_is_remote=True,
+                local_source_exists=True,
+                local_source_npz_count=0,
+                local_target_exists=exists,
+                local_target_npz_count=count,
             )
         )
     return plan
 
 
-def print_plan(plan: List[PathPlan]) -> None:
+def build_push_plan(
+    source_local_dirs: List[str],
+    remote_prefix: str,
+    anchor: str,
+    include_pattern: str,
+    local_suffix: str,
+) -> List[PathPlan]:
+    plan: List[PathPlan] = []
+    for local_dir in source_local_dirs:
+        remote_dir = map_path_to_prefix(local_dir, remote_prefix, anchor, local_suffix)
+        source_exists = os.path.isdir(local_dir)
+        source_count = local_npz_count(local_dir, include_pattern)
+        plan.append(
+            PathPlan(
+                source_dir=local_dir,
+                target_dir=remote_dir,
+                source_is_remote=False,
+                local_source_exists=source_exists,
+                local_source_npz_count=source_count,
+                local_target_exists=False,
+                local_target_npz_count=0,
+            )
+        )
+    return plan
+
+
+def print_plan(plan: List[PathPlan], direction: str) -> None:
     if not plan:
         print("No paths found in input file.")
         return
 
-    fmt = "{:<4} {:<7} {:<10} {:<90}"
-    print(fmt.format("#", "exists", "local_npz", "local_dir"))
-    print("-" * 130)
-    for i, row in enumerate(plan, start=1):
-        print(fmt.format(i, str(row.local_exists), row.local_npz_count, row.local_dir))
+    if direction == "pull":
+        fmt = "{:<4} {:<7} {:<10} {:<90}"
+        print(fmt.format("#", "exists", "local_npz", "local_dir"))
+        print("-" * 130)
+        for i, row in enumerate(plan, start=1):
+            print(fmt.format(i, str(row.local_target_exists), row.local_target_npz_count, row.target_dir))
+    else:
+        fmt = "{:<4} {:<7} {:<10} {:<90}"
+        print(fmt.format("#", "exists", "local_npz", "local_source_dir"))
+        print("-" * 130)
+        for i, row in enumerate(plan, start=1):
+            print(fmt.format(i, str(row.local_source_exists), row.local_source_npz_count, row.source_dir))
 
-    print("\nRemote -> Local mapping:")
+    print("\nSource -> Target mapping:")
     for row in plan:
-        print(f"REMOTE: {row.remote_dir}")
-        print(f"LOCAL:  {row.local_dir}")
+        print(f"SOURCE: {row.source_dir}")
+        print(f"TARGET: {row.target_dir}")
         print()
+
+
+def print_skipped_missing_sources(rows: List[PathPlan]) -> None:
+    if not rows:
+        return
+    print(f"\nSkipping {len(rows)} rows because source directories do not exist locally:")
+    for row in rows:
+        print(f"  - {row.source_dir}")
 
 
 def confirm_transfer(args: argparse.Namespace, n: int) -> bool:
@@ -278,18 +341,26 @@ def confirm_transfer(args: argparse.Namespace, n: int) -> bool:
 
 
 def rsync_one(
+    direction: str,
     remote_host: str,
     ssh_options: List[str],
-    remote_dir: str,
-    local_dir: str,
+    source_dir: str,
+    target_dir: str,
     include_pattern: str,
     timeout_seconds: int,
 ) -> bool:
-    os.makedirs(local_dir, exist_ok=True)
+    if direction == "pull":
+        os.makedirs(target_dir, exist_ok=True)
+    else:
+        os.makedirs(source_dir, exist_ok=True)
 
     ssh_inner = "ssh " + " ".join(shlex.quote(opt) for opt in ssh_options)
-    src = f"{remote_host}:{remote_dir.rstrip('/')}/"
-    dst = f"{local_dir.rstrip('/')}/"
+    if direction == "pull":
+        src = f"{remote_host}:{source_dir.rstrip('/')}/"
+        dst = f"{target_dir.rstrip('/')}/"
+    else:
+        src = f"{source_dir.rstrip('/')}/"
+        dst = f"{remote_host}:{target_dir.rstrip('/')}/"
 
     cmd = [
         "rsync",
@@ -350,7 +421,7 @@ def remote_npz_count(
         return None
 
 
-def compute_conflicts(
+def compute_pull_conflicts(
     plan: List[PathPlan],
     remote_host: str,
     ssh_options: List[str],
@@ -359,34 +430,71 @@ def compute_conflicts(
 ) -> List[ConflictRow]:
     conflicts: List[ConflictRow] = []
     for row in plan:
-        if not row.local_exists:
+        if not row.local_target_exists:
             continue
         rcount = remote_npz_count(
             remote_host=remote_host,
             ssh_options=ssh_options,
-            remote_dir=row.remote_dir,
+            remote_dir=row.source_dir,
             include_pattern=include_pattern,
             timeout_seconds=timeout_seconds,
         )
         conflicts.append(
             ConflictRow(
-                remote_dir=row.remote_dir,
-                local_dir=row.local_dir,
-                local_npz_count=row.local_npz_count,
+                source_dir=row.source_dir,
+                target_dir=row.target_dir,
+                local_npz_count=row.local_target_npz_count,
                 remote_npz_count=rcount,
+                reason="existing_local_target",
             )
         )
     return conflicts
 
 
-def print_conflicts(conflicts: List[ConflictRow]) -> None:
+def compute_push_conflicts(
+    plan: List[PathPlan],
+    remote_host: str,
+    ssh_options: List[str],
+    include_pattern: str,
+    timeout_seconds: int,
+) -> List[ConflictRow]:
+    conflicts: List[ConflictRow] = []
+    for row in plan:
+        if not row.local_source_exists:
+            continue
+        local_count = row.local_source_npz_count
+        rcount = remote_npz_count(
+            remote_host=remote_host,
+            ssh_options=ssh_options,
+            remote_dir=row.target_dir,
+            include_pattern=include_pattern,
+            timeout_seconds=timeout_seconds,
+        )
+        # In push mode, skip only when remote has at least as many prediction files.
+        if rcount is not None and rcount >= local_count:
+            conflicts.append(
+                ConflictRow(
+                    source_dir=row.source_dir,
+                    target_dir=row.target_dir,
+                    local_npz_count=local_count,
+                    remote_npz_count=rcount,
+                    reason="remote_has_gte_local",
+                )
+            )
+    return conflicts
+
+
+def print_conflicts(conflicts: List[ConflictRow], direction: str) -> None:
     if not conflicts:
         return
 
     fmt = "{:<4} {:<10} {:<10} {:<10} {:<90}"
-    print("\nConflicts (existing local directories with empty local_suffix):")
-    print(fmt.format("#", "local_npz", "remote_npz", "delta", "local_dir"))
-    print("-" * 140)
+    if direction == "pull":
+        print("\nConflicts (existing local target directories with empty local_suffix):")
+    else:
+        print("\nConflicts (remote target has >= local npz count with empty local_suffix):")
+    print(fmt.format("#", "local_npz", "remote_npz", "delta", "target_dir"))
+    print("-" * 130)
     for i, row in enumerate(conflicts, start=1):
         if row.remote_npz_count is None:
             remote_txt = "unknown"
@@ -394,27 +502,42 @@ def print_conflicts(conflicts: List[ConflictRow]) -> None:
         else:
             remote_txt = str(row.remote_npz_count)
             delta_txt = str(row.remote_npz_count - row.local_npz_count)
-        print(fmt.format(i, row.local_npz_count, remote_txt, delta_txt, row.local_dir))
+        print(fmt.format(i, row.local_npz_count, remote_txt, delta_txt, row.target_dir))
 
-    print("\nConflict mapping details:")
+    print("\nConflict details:")
     for row in conflicts:
-        print(f"REMOTE: {row.remote_dir}")
-        print(f"LOCAL:  {row.local_dir}")
+        print(f"SOURCE: {row.source_dir}")
+        print(f"TARGET: {row.target_dir}")
+        print(f"REASON: {row.reason}")
         print()
 
 
 def main() -> None:
     args = parse_args()
 
-    remote_dirs = read_remote_paths(args.paths_file)
-    plan = build_plan(
-        remote_dirs,
-        args.local_prefix,
-        args.anchor,
-        args.include_pattern,
-        args.local_suffix,
-    )
-    print_plan(plan)
+    if args.direction == "pull" and not args.local_prefix:
+        raise ValueError("--local_prefix is required when --direction pull")
+    if args.direction == "push" and not args.remote_prefix:
+        raise ValueError("--remote_prefix is required when --direction push")
+
+    listed_paths = read_remote_paths(args.paths_file)
+    if args.direction == "pull":
+        plan = build_pull_plan(
+            listed_paths,
+            args.local_prefix,
+            args.anchor,
+            args.include_pattern,
+            args.local_suffix,
+        )
+    else:
+        plan = build_push_plan(
+            listed_paths,
+            args.remote_prefix,
+            args.anchor,
+            args.include_pattern,
+            args.local_suffix,
+        )
+    print_plan(plan, args.direction)
 
     ssh_options: List[str] = []
     control_path: Optional[str] = None
@@ -424,40 +547,76 @@ def main() -> None:
     fail = 0
     transfer_plan: List[PathPlan] = list(plan)
     skipped_existing: List[PathPlan] = []
+    skipped_missing_source: List[PathPlan] = []
     try:
+        if args.direction == "push":
+            skipped_missing_source = [row for row in transfer_plan if not row.local_source_exists]
+            transfer_plan = [row for row in transfer_plan if row.local_source_exists]
+            print_skipped_missing_sources(skipped_missing_source)
+
         if not args.local_suffix:
             ssh_options, control_path, started = setup_control_master(args)
-            conflicts = compute_conflicts(
-                plan=plan,
-                remote_host=args.remote_host,
-                ssh_options=ssh_options,
-                include_pattern=args.include_pattern,
-                timeout_seconds=args.ssh_timeout_seconds,
-            )
-            print_conflicts(conflicts)
-            if conflicts and not args.allow_existing_without_suffix:
-                conflict_local_dirs = {c.local_dir for c in conflicts}
-                skipped_existing = [row for row in plan if row.local_dir in conflict_local_dirs]
-                transfer_plan = [row for row in plan if row.local_dir not in conflict_local_dirs]
-                print("Conflict protection is active (local_suffix is empty).")
-                print("Existing local directories will be skipped.")
-                print(
-                    "Use --allow_existing_without_suffix if you intentionally want to transfer into existing local directories."
+            if args.direction == "pull":
+                conflicts = compute_pull_conflicts(
+                    plan=transfer_plan,
+                    remote_host=args.remote_host,
+                    ssh_options=ssh_options,
+                    include_pattern=args.include_pattern,
+                    timeout_seconds=args.ssh_timeout_seconds,
                 )
+            else:
+                conflicts = compute_push_conflicts(
+                    plan=transfer_plan,
+                    remote_host=args.remote_host,
+                    ssh_options=ssh_options,
+                    include_pattern=args.include_pattern,
+                    timeout_seconds=args.ssh_timeout_seconds,
+                )
+            print_conflicts(conflicts, args.direction)
+            if conflicts and not args.allow_existing_without_suffix:
+                conflict_targets = {c.target_dir for c in conflicts}
+                skipped_existing = [row for row in transfer_plan if row.target_dir in conflict_targets]
+                transfer_plan = [row for row in transfer_plan if row.target_dir not in conflict_targets]
+                print("Conflict protection is active (local_suffix is empty).")
+                if args.direction == "pull":
+                    print("Existing local target directories will be skipped.")
+                else:
+                    print("Remote targets with >= local npz count will be skipped.")
+                if args.direction == "pull":
+                    print(
+                        "Use --allow_existing_without_suffix if you intentionally want to transfer into existing local target directories."
+                    )
+                else:
+                    print(
+                        "Use --allow_existing_without_suffix if you intentionally want to transfer into remote targets even when they already have >= local npz count."
+                    )
 
         if args.dry_run:
             if skipped_existing:
-                print(f"\n[DRY RUN] Skipping {len(skipped_existing)} existing local directories:")
+                if args.direction == "pull":
+                    print(f"\n[DRY RUN] Skipping {len(skipped_existing)} existing local target directories:")
+                else:
+                    print(
+                        f"\n[DRY RUN] Skipping {len(skipped_existing)} remote targets with >= local npz count:"
+                    )
                 for row in skipped_existing:
-                    print(f"  - {row.local_dir}")
+                    print(f"  - {row.target_dir}")
+            if skipped_missing_source:
+                print(f"[DRY RUN] Skipping {len(skipped_missing_source)} rows with missing local source dirs.")
             print(f"[DRY RUN] Would transfer {len(transfer_plan)} directories.")
             print("\n[DRY RUN] No files transferred.")
             return
 
         if skipped_existing:
-            print(f"\nSkipping {len(skipped_existing)} existing local directories:")
+            if args.direction == "pull":
+                print(f"\nSkipping {len(skipped_existing)} existing local target directories:")
+            else:
+                print(f"\nSkipping {len(skipped_existing)} remote targets with >= local npz count:")
             for row in skipped_existing:
-                print(f"  - {row.local_dir}")
+                print(f"  - {row.target_dir}")
+
+        if skipped_missing_source:
+            print(f"\nSkipped {len(skipped_missing_source)} rows with missing local source directories.")
 
         if not transfer_plan:
             print("No directories to transfer after applying conflict protection.")
@@ -472,14 +631,15 @@ def main() -> None:
 
         for row in transfer_plan:
             print("\n" + "=" * 80)
-            print(f"Transferring: {row.remote_dir}")
-            print(f"To:          {row.local_dir}")
+            print(f"Transferring: {row.source_dir}")
+            print(f"To:          {row.target_dir}")
             print("=" * 80)
             success = rsync_one(
+                direction=args.direction,
                 remote_host=args.remote_host,
                 ssh_options=ssh_options,
-                remote_dir=row.remote_dir,
-                local_dir=row.local_dir,
+                source_dir=row.source_dir,
+                target_dir=row.target_dir,
                 include_pattern=args.include_pattern,
                 timeout_seconds=args.ssh_timeout_seconds,
             )
@@ -487,7 +647,7 @@ def main() -> None:
                 ok += 1
             else:
                 fail += 1
-                print("FAILED transfer for:", row.remote_dir)
+                print("FAILED transfer for:", row.source_dir)
     finally:
         teardown_control_master(args.remote_host, control_path, started)
 
@@ -496,6 +656,8 @@ def main() -> None:
     print(f"  Failed:  {fail}")
     if skipped_existing:
         print(f"  Skipped existing: {len(skipped_existing)}")
+    if skipped_missing_source:
+        print(f"  Skipped missing source: {len(skipped_missing_source)}")
 
 
 if __name__ == "__main__":
