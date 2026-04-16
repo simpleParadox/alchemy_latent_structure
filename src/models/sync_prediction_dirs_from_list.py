@@ -315,10 +315,10 @@ def print_plan(plan: List[PathPlan], direction: str) -> None:
             print(fmt.format(i, str(row.local_source_exists), row.local_source_npz_count, row.source_dir))
 
     print("\nSource -> Target mapping:")
-    for row in plan:
-        print(f"SOURCE: {row.source_dir}")
-        print(f"TARGET: {row.target_dir}")
-        print()
+    # for row in plan:
+        # print(f"SOURCE: {row.source_dir}")
+        # print(f"TARGET: {row.target_dir}")
+        # print()
 
 
 def print_skipped_missing_sources(rows: List[PathPlan]) -> None:

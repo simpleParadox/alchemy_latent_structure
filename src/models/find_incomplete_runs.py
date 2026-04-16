@@ -222,7 +222,7 @@ SECONDS_PER_EPOCH_DECOMPOSITION =  {
 
 STARTUP_OVERHEAD_SECONDS = 30  
 TIME_BUFFER_FACTOR = 1.0       
-MAX_SLURM_TIME_SECONDS = 24 * 3600  # cap at 24 hours
+MAX_SLURM_TIME_SECONDS = 50 * 3600  # cap at 24 hours
 
 
 def compute_slurm_time(remaining_epochs: int, seconds_per_epoch: int) -> str:
@@ -555,6 +555,11 @@ def generate_sbatch_scripts(
     exp_typ: str,
     hop: int,
     account: str = "aip-afyshe",
+    enable_chunked_resume: bool = False,
+    chunk_epochs: int = 200,
+    chunk_checkpoint_every: int = 5,
+    chunk_keep_last_n: int = 5,
+    auto_chain_afterok: bool = False,
 ) -> None:
     """
     Generate one standalone sbatch file per incomplete run, stored in a
@@ -588,7 +593,7 @@ def generate_sbatch_scripts(
 
     # Directory for SLURM stdout logs
     # Store in scratch on CC to avoid filling up home directory.
-    log_dir = f"~/scratch/dm_alchemy"
+    log_dir = f"/home/rsaha/scratch/dm_alchemy"
     os.makedirs(log_dir, exist_ok=True)
 
     generated_files: List[str] = []
@@ -599,9 +604,12 @@ def generate_sbatch_scripts(
         freeze_epoch = r["freeze_epoch"]
         checkpoint_path = r["checkpoint_base_path"]
 
-        # Compute dynamic time allocation based on remaining epochs
-        remaining_epochs = TOTAL_EPOCHS - freeze_epoch
-        time_limit = compute_slurm_time(remaining_epochs, sec_per_epoch)
+        # Compute dynamic time allocation.
+        if enable_chunked_resume:
+            time_epochs = chunk_epochs
+        else:
+            time_epochs = TOTAL_EPOCHS - freeze_epoch
+        time_limit = compute_slurm_time(time_epochs, sec_per_epoch)
 
         # Extract scheduler type from the checkpoint path
         scheduler_type = extract_scheduler_type(checkpoint_path)
@@ -620,6 +628,10 @@ def generate_sbatch_scripts(
             f"--resume_checkpoint_path={checkpoint_path} "
             f"--freeze_layers={frozen_layer} "
             f"--epochs=1000 "
+            f"--enable_chunked_resume={'True' if enable_chunked_resume else 'False'} "
+            f"--chunk_epochs={chunk_epochs} "
+            f"--chunk_checkpoint_every={chunk_checkpoint_every} "
+            f"--chunk_keep_last_n={chunk_keep_last_n} "
             f"--batch_size=32 "
             f"--model_size=xsmall "
             f"--model_architecture=decoder "
@@ -662,6 +674,28 @@ def generate_sbatch_scripts(
             f"--preprocessed_dir={data_paths['preprocessed']}"
         )
 
+        chunk_state_dir = os.path.join(
+            checkpoint_path,
+            f"resume_from_epoch_{freeze_epoch}__freeze_{frozen_layer}",
+            "chunk_state",
+        )
+
+        auto_chain_block = []
+        if auto_chain_afterok:
+            auto_chain_block = [
+                "",
+                "# Auto-chain next chunk after successful completion",
+                f"CHUNK_STATE_DIR=\"{chunk_state_dir}\"",
+                "TARGET_EPOCH=999",
+                "LATEST_EPOCH=$(ls \"$CHUNK_STATE_DIR\"/chunk_checkpoint_epoch_*.pt 2>/dev/null | sed -E 's/.*chunk_checkpoint_epoch_([0-9]+)\\.pt/\\1/' | sort -n | tail -1)",
+                "if [[ -n \"$LATEST_EPOCH\" && \"$LATEST_EPOCH\" -lt \"$TARGET_EPOCH\" ]]; then",
+                "  echo \"Auto-chaining next chunk from epoch $LATEST_EPOCH (dependency afterok:$SLURM_JOB_ID).\"",
+                "  sbatch --dependency=afterok:${SLURM_JOB_ID} \"$0\"",
+                "else",
+                "  echo \"No further auto-chaining needed (latest epoch: ${LATEST_EPOCH:-none}).\"",
+                "fi",
+            ]
+
         # Write the individual sbatch file
         sbatch_lines = [
             "#!/bin/bash",
@@ -675,6 +709,8 @@ def generate_sbatch_scripts(
             f"#SBATCH --job-name=rerun_{job_tag}",
             f"#SBATCH --output={log_dir}/rerun_{job_tag}-%j.out",
             "",
+            "set -euo pipefail",
+            "",
             "module load python/3.10",
             "source alchemy_env/bin/activate",
             "",
@@ -685,6 +721,7 @@ def generate_sbatch_scripts(
             "export WANDB_INIT_TIMEOUT",
             "",
             train_cmd,
+            *auto_chain_block,
             "",
         ]
 
@@ -749,6 +786,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max_missing_epochs", type=int, default=DEFAULT_MAX_MISSING_EPOCHS,
                     help=("Tolerance for missing prediction epochs before marking a run "
                           "as incomplete (default: 20)."))
+    p.add_argument("--enable_chunked_resume", action="store_true",
+                    help="Generate sbatch scripts that run chunked frozen resumes (requires train.py chunk flags).")
+    p.add_argument("--chunk_epochs", type=int, default=200,
+                    help="Max epochs to run per chunk when --enable_chunked_resume is used.")
+    p.add_argument("--chunk_checkpoint_every", type=int, default=5,
+                    help="Save chunk checkpoint every N epochs.")
+    p.add_argument("--chunk_keep_last_n", type=int, default=5,
+                    help="Number of chunk checkpoints to retain.")
+    p.add_argument("--auto_chain_afterok", action="store_true",
+                    help="If set, each generated sbatch script re-submits itself with --dependency=afterok when target epoch is not reached.")
 
     return p.parse_args()
 
@@ -780,6 +827,11 @@ def main():
                 exp_typ=args.exp_typ,
                 hop=args.hop,
                 account=args.account,
+                enable_chunked_resume=args.enable_chunked_resume,
+                chunk_epochs=args.chunk_epochs,
+                chunk_checkpoint_every=args.chunk_checkpoint_every,
+                chunk_keep_last_n=args.chunk_keep_last_n,
+                auto_chain_afterok=args.auto_chain_afterok,
             )
     else:
         # ── Auto mode: scan filesystem for incomplete runs ──
@@ -803,6 +855,11 @@ def main():
                     exp_typ=args.exp_typ,
                     hop=args.hop,
                     account=args.account,
+                    enable_chunked_resume=args.enable_chunked_resume,
+                    chunk_epochs=args.chunk_epochs,
+                    chunk_checkpoint_every=args.chunk_checkpoint_every,
+                    chunk_keep_last_n=args.chunk_keep_last_n,
+                    auto_chain_afterok=args.auto_chain_afterok,
                 )
 
 

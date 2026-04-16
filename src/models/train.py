@@ -1,5 +1,7 @@
 import argparse
 import gc
+import glob
+import json
 import os
 import math
 import random
@@ -21,6 +23,94 @@ from accelerate import Accelerator
 from data_loaders import AlchemyDataset, collate_fn
 import re
 from models import create_transformer_model, create_classifier_model, create_decoder_classifier_model, create_linear_model
+
+
+def _normalize_freeze_layers(freeze_layers: str | None) -> str:
+    if freeze_layers is None:
+        return ""
+    return ",".join([x.strip() for x in str(freeze_layers).split(",") if x.strip()])
+
+
+def _build_resume_subdir_name(resume_checkpoint_epoch: str | int, freeze_layers: str | None) -> str:
+    freeze_layers_str = (_normalize_freeze_layers(freeze_layers) or "none")
+    freeze_layers_str = freeze_layers_str.replace("/", "_").replace("\\", "_")
+    return f"resume_from_epoch_{resume_checkpoint_epoch}__freeze_{freeze_layers_str}"
+
+
+def _extract_epoch_from_chunk_checkpoint(path: str) -> int | None:
+    m = re.search(r"chunk_checkpoint_epoch_(\d+)\.pt$", os.path.basename(path))
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def _find_latest_chunk_checkpoint(chunk_state_dir: str) -> tuple[str | None, int | None]:
+    candidates = glob.glob(os.path.join(chunk_state_dir, "chunk_checkpoint_epoch_*.pt"))
+    if not candidates:
+        return None, None
+
+    parsed = []
+    for p in candidates:
+        ep = _extract_epoch_from_chunk_checkpoint(p)
+        if ep is not None:
+            parsed.append((ep, p))
+
+    if not parsed:
+        return None, None
+
+    latest_epoch, latest_path = max(parsed, key=lambda x: x[0])
+    return latest_path, latest_epoch
+
+
+def _prune_old_chunk_checkpoints(chunk_state_dir: str, keep_last_n: int) -> None:
+    if keep_last_n <= 0:
+        return
+
+    candidates = glob.glob(os.path.join(chunk_state_dir, "chunk_checkpoint_epoch_*.pt"))
+    parsed = []
+    for p in candidates:
+        ep = _extract_epoch_from_chunk_checkpoint(p)
+        if ep is not None:
+            parsed.append((ep, p))
+
+    if len(parsed) <= keep_last_n:
+        return
+
+    parsed.sort(key=lambda x: x[0])
+    to_delete = parsed[:-keep_last_n]
+    for _, path in to_delete:
+        try:
+            os.remove(path)
+        except OSError as e:
+            print(f"WARNING: Failed to remove old chunk checkpoint {path}: {e}")
+
+
+def _write_run_state(chunk_state_dir: str, resume_checkpoint_epoch: str, freeze_layers: str | None) -> None:
+    os.makedirs(chunk_state_dir, exist_ok=True)
+    state_path = os.path.join(chunk_state_dir, "run_state.json")
+    payload = {
+        "original_resume_checkpoint_epoch": str(resume_checkpoint_epoch),
+        "freeze_layers": _normalize_freeze_layers(freeze_layers),
+    }
+    with open(state_path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+
+def _read_run_state(chunk_state_dir: str) -> dict | None:
+    state_path = os.path.join(chunk_state_dir, "run_state.json")
+    if not os.path.exists(state_path):
+        return None
+    try:
+        with open(state_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"WARNING: Could not parse run state file {state_path}: {e}")
+        return None
+
+
+def _prefer_aip_output_root(path: str) -> str:
+    """Normalize output paths to the preferred aip-afyshe project root."""
+    return path.replace('/home/rsaha/projects/def-afyshe-ab/rsaha/', '/home/rsaha/projects/aip-afyshe/rsaha/')
 
 def set_seed(seed_value):
     print("Setting seed:", seed_value)
@@ -164,6 +254,14 @@ def parse_args():
                         help="Path to checkpoint file to resume training from.")
     parser.add_argument("--resume_checkpoint_epoch", type=str, default=None)
     parser.add_argument("--resume_checkpoint_path", type=str, default=None)
+    parser.add_argument("--enable_chunked_resume", type=str, default="False", choices=["True", "False"],
+                        help="If True, for frozen resume runs, auto-continue from latest chunk checkpoint in the same run root.")
+    parser.add_argument("--chunk_epochs", type=int, default=200,
+                        help="Max number of epochs to execute per chunked run invocation.")
+    parser.add_argument("--chunk_checkpoint_every", type=int, default=5,
+                        help="Save chunk checkpoint every N epochs.")
+    parser.add_argument("--chunk_keep_last_n", type=int, default=5,
+                        help="Number of recent chunk checkpoints to keep.")
     
     parser.add_argument("--freeze_layers", type=str, default=None,
                         help="Comma-separated list of layer names to freeze (e.g., 'transformer_layer_0,transformer_layer_1').")
@@ -997,11 +1095,15 @@ def main():
     args.allow_data_path_mismatch = str(args.allow_data_path_mismatch).lower() == "true"
     args.resume_from_checkpoint = str(args.resume_from_checkpoint).lower() == "true"
     args.multi_gpu_validation = str(args.multi_gpu_validation).lower() == "true"
+    args.enable_chunked_resume = str(args.enable_chunked_resume).lower() == "true"
 
     start_epoch = 0
     best_val_loss = float('inf')
     resume_checkpoint_path = None
     checkpoint_args = None
+    chunk_state_dir = None
+    frozen_run_root = None
+    resuming_from_chunk_checkpoint = False
 
     if args.resume_from_checkpoint:
         if args.resume_checkpoint_path is None or args.resume_checkpoint_epoch is None:
@@ -1042,6 +1144,47 @@ def main():
         args.flatten_linear_model_input = str(args.flatten_linear_model_input) == 'True'  # Convert to boolean
         print("Flatten linear model input: ", args.flatten_linear_model_input)
 
+        # Optional chunked continuation for frozen-layer resumes.
+        if args.enable_chunked_resume and _normalize_freeze_layers(args.freeze_layers):
+            runtime_base_checkpoint_dir = os.path.dirname(resume_checkpoint_path)
+            resume_subdir_name = _build_resume_subdir_name(args.resume_checkpoint_epoch, args.freeze_layers)
+            frozen_run_root = os.path.join(runtime_base_checkpoint_dir, resume_subdir_name)
+            chunk_state_dir = os.path.join(frozen_run_root, "chunk_state")
+
+            run_state = _read_run_state(chunk_state_dir)
+            if run_state is not None:
+                state_freeze = _normalize_freeze_layers(run_state.get("freeze_layers"))
+                req_freeze = _normalize_freeze_layers(args.freeze_layers)
+                state_epoch = str(run_state.get("original_resume_checkpoint_epoch", ""))
+                req_epoch = str(args.resume_checkpoint_epoch)
+                if state_freeze != req_freeze:
+                    raise ValueError(
+                        f"Chunk run_state freeze_layers mismatch: state={state_freeze}, requested={req_freeze}"
+                    )
+                if state_epoch and state_epoch != req_epoch:
+                    raise ValueError(
+                        f"Chunk run_state resume epoch mismatch: state={state_epoch}, requested={req_epoch}"
+                    )
+
+            latest_chunk_ckpt, latest_chunk_epoch = _find_latest_chunk_checkpoint(chunk_state_dir)
+            if latest_chunk_ckpt is not None:
+                resume_checkpoint_path = latest_chunk_ckpt
+                resuming_from_chunk_checkpoint = True
+                print(
+                    f"Chunked resume enabled: using latest chunk checkpoint "
+                    f"(epoch {latest_chunk_epoch}) at {resume_checkpoint_path}"
+                )
+            else:
+                legacy_pred_files = glob.glob(os.path.join(frozen_run_root, "predictions", "predictions_*.npz"))
+                if legacy_pred_files:
+                    print(
+                        "WARNING: Found predictions in frozen run root but no chunk checkpoint. "
+                        "Falling back to original resume checkpoint; overlapping prediction epochs may be recomputed/overwritten."
+                    )
+        else:
+            if args.enable_chunked_resume and not _normalize_freeze_layers(args.freeze_layers):
+                print("WARNING: enable_chunked_resume=True but freeze_layers is empty; disabling chunk continuation behavior.")
+
 
 
         if not os.path.exists(resume_checkpoint_path):
@@ -1056,6 +1199,15 @@ def main():
             args,
             allow_mismatch=args.allow_data_path_mismatch
         )
+
+        # For chunk continuation, freeze layers must match exactly across chunks.
+        if resuming_from_chunk_checkpoint:
+            checkpoint_freeze = _normalize_freeze_layers(getattr(checkpoint_args, "freeze_layers", None))
+            requested_freeze = _normalize_freeze_layers(args.freeze_layers)
+            if checkpoint_freeze != requested_freeze:
+                raise ValueError(
+                    f"Chunk checkpoint freeze_layers mismatch: checkpoint={checkpoint_freeze}, requested={requested_freeze}"
+                )
 
         print(f"Resuming training from epoch {checkpoint['epoch'] + 1}")
 
@@ -1170,11 +1322,36 @@ def main():
             wandb_kwargs["resume"] = "must"
             wandb_kwargs["name"] = None  # Don't override name when resuming
             print(f"Resuming wandb run: {args.resume_wandb_run_id}")
+        elif args.enable_chunked_resume and chunk_state_dir is not None:
+            run_id_file = os.path.join(chunk_state_dir, "wandb_run_id.txt")
+            if os.path.exists(run_id_file):
+                with open(run_id_file, "r") as f:
+                    recovered_run_id = f.read().strip()
+                if recovered_run_id:
+                    wandb_kwargs["id"] = recovered_run_id
+                    wandb_kwargs["resume"] = "must"
+                    wandb_kwargs["name"] = None
+                    print(f"Auto-resuming chunked wandb run from file: {recovered_run_id}")
+                else:
+                    wandb_kwargs["name"] = args.wandb_run_name if args.wandb_run_name else f"{args.task_type}_{args.model_size}_{time.strftime('%Y%m%d-%H%M%S')}"
+            else:
+                wandb_kwargs["name"] = args.wandb_run_name if args.wandb_run_name else f"{args.task_type}_{args.model_size}_{time.strftime('%Y%m%d-%H%M%S')}"
         else:
             # New wandb run
             wandb_kwargs["name"] = args.wandb_run_name if args.wandb_run_name else f"{args.task_type}_{args.model_size}_{time.strftime('%Y%m%d-%H%M%S')}"
         
         wandb.init(**wandb_kwargs)
+
+        # Persist run id for chunked auto-continuation. Missing file should never fail training.
+        if args.enable_chunked_resume and chunk_state_dir is not None:
+            try:
+                os.makedirs(chunk_state_dir, exist_ok=True)
+                run_id_file = os.path.join(chunk_state_dir, "wandb_run_id.txt")
+                if wandb.run is not None and wandb.run.id is not None:
+                    with open(run_id_file, "w") as f:
+                        f.write(str(wandb.run.id).strip())
+            except Exception as e:
+                print(f"WARNING: Could not persist wandb_run_id.txt in {chunk_state_dir}: {e}")
 
     print(f"Using device: {accelerator.device}")
     print(f"Selected task type: {args.task_type}")
@@ -1526,8 +1703,10 @@ def main():
     # Only initialize if not resuming; if resuming, load_checkpoint will supply it.
     best_val_loss = float('inf')
     if resume_checkpoint_path:
-        # Branch training when freezing is enabled: do NOT load optimizer state.
+        # Branch training from baseline with freezing: skip optimizer state.
+        # Chunk-to-chunk continuation: load optimizer state for exact continuity.
         freeze_active = args.freeze_layers is not None and str(args.freeze_layers).strip() != ""
+        load_optimizer_state = (not freeze_active) or resuming_from_chunk_checkpoint
 
         start_epoch, best_val_loss, _ = load_checkpoint(
             resume_checkpoint_path,
@@ -1537,7 +1716,7 @@ def main():
             accelerator,
             checkpoint_epoch=args.resume_checkpoint_epoch,
             model_size=args.model_size,
-            load_optimizer_state=(not freeze_active),
+            load_optimizer_state=load_optimizer_state,
             # For cosine, it's usually OK to load scheduler state even if optimizer state is skipped,
             # as long as param_group count matches (commonly 1 group here).
             load_scheduler_state=True,
@@ -1658,20 +1837,24 @@ def main():
     # This ensures we never overwrite the original run's checkpoints and we can
     # distinguish resumed training branches by resume epoch + freezing config.
     if args.resume_from_checkpoint:
-        # Use the epoch number encoded in the checkpoint filename (args.resume_checkpoint_epoch)
-        # since that's what the user provided for resumption.
-        resume_epoch_str = str(args.resume_checkpoint_epoch)
+        # Keep a stable branch root per (original resume epoch, frozen layer set).
+        resume_subdir_name = _build_resume_subdir_name(args.resume_checkpoint_epoch, args.freeze_layers)
 
-        # Make freeze_layers safe for folder names
-        freeze_layers_str = (args.freeze_layers or "none").strip()
-        freeze_layers_str = freeze_layers_str.replace(" ", "")
-        # Avoid overly messy path separators
-        freeze_layers_str = freeze_layers_str.replace("/", "_").replace("\\", "_")
+        # Always root resumed outputs under the same tree as the resolved resume checkpoint.
+        # This prevents cross-root drift (e.g., def-afyshe-ab vs aip-afyshe) across chained chunks.
+        runtime_base_checkpoint_dir = os.path.dirname(resume_checkpoint_path)
+        hierarchical_save_dir = os.path.join(runtime_base_checkpoint_dir, resume_subdir_name)
+        frozen_run_root = hierarchical_save_dir
+        chunk_state_dir = os.path.join(frozen_run_root, "chunk_state")
 
-        # Example: seed_0/resume_from_epoch_140__freeze_transformer_layer_0,transformer_layer_1
-        resume_subdir_name = f"resume_from_epoch_{resume_epoch_str}__freeze_{freeze_layers_str}"
-
-        hierarchical_save_dir = os.path.join(hierarchical_save_dir, resume_subdir_name)
+    # Apply output path rewrites once before training (never mutate save_dir inside epoch loop).
+    # Preference: persist outputs under aip-afyshe unless scratch mode is enabled.
+    if not args.store_in_scratch:
+        hierarchical_save_dir = _prefer_aip_output_root(hierarchical_save_dir)
+    if args.custom_checkpoint_dir is not None and cluster != 'cc':
+        hierarchical_save_dir = hierarchical_save_dir.replace('def-afyshe-ab', 'aip-afyshe')
+    if args.store_in_scratch:
+        hierarchical_save_dir = re.sub(r'^.*dm_alchemy', '/home/rsaha/scratch/dm_alchemy', hierarchical_save_dir)
 
     if accelerator.is_local_main_process:
         if not os.path.exists(hierarchical_save_dir):
@@ -1681,8 +1864,23 @@ def main():
         # Update args.save_dir to use the hierarchical structure
         args.save_dir = hierarchical_save_dir
 
+        if args.enable_chunked_resume and args.resume_from_checkpoint and _normalize_freeze_layers(args.freeze_layers):
+            _write_run_state(
+                chunk_state_dir=os.path.join(args.save_dir, "chunk_state"),
+                resume_checkpoint_epoch=str(args.resume_checkpoint_epoch),
+                freeze_layers=args.freeze_layers,
+            )
 
-    for epoch in tqdm(range(start_epoch, args.epochs), disable=not accelerator.is_local_main_process):
+    training_end_epoch_exclusive = args.epochs
+    if args.enable_chunked_resume and args.resume_from_checkpoint and _normalize_freeze_layers(args.freeze_layers):
+        training_end_epoch_exclusive = min(args.epochs, start_epoch + args.chunk_epochs)
+        if accelerator.is_local_main_process:
+            print(
+                f"Chunked execution enabled: running epochs [{start_epoch}, {training_end_epoch_exclusive}) "
+                f"out of global target {args.epochs}."
+            )
+
+    for epoch in tqdm(range(start_epoch, training_end_epoch_exclusive), disable=not accelerator.is_local_main_process):
         if accelerator.is_local_main_process:
             print(f"--- Epoch {epoch+1}/{args.epochs} ---")
         with accelerator.autocast():
@@ -1760,13 +1958,6 @@ def main():
             if accelerator.is_local_main_process:
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
-                if args.custom_checkpoint_dir is not None:
-                    # Replace 'def-afyshe-ab' with 'aip-afyshe' in the custom checkpoint dir if needed
-                    if cluster != 'cc':
-                        args.save_dir = args.save_dir.replace('def-afyshe-ab', 'aip-afyshe')
-                if args.store_in_scratch:
-                    # Replace anything before 'dm_alchemy' with '/home/rsaha/scratch'
-                    args.save_dir = re.sub(r'^.*dm_alchemy', '/home/rsaha/scratch/dm_alchemy', args.save_dir)
                 # Check if updated args.save_dir exists, if not create it
                 if not os.path.exists(args.save_dir):
                     os.makedirs(args.save_dir)
@@ -1803,6 +1994,22 @@ def main():
                 if args.save_checkpoints:
                     torch.save(checkpoint, model_save_path)
                     print(f"New best validation loss: {best_val_loss:.4f}. Model saved to {model_save_path}")
+
+                # Chunk checkpointing is independent of save_checkpoints and is used for short chained jobs.
+                if args.enable_chunked_resume and args.resume_from_checkpoint and _normalize_freeze_layers(args.freeze_layers):
+                    should_save_chunk = ((epoch + 1) % max(1, args.chunk_checkpoint_every) == 0) or ((epoch + 1) == training_end_epoch_exclusive)
+                    if should_save_chunk:
+                        active_chunk_state_dir = os.path.join(args.save_dir, "chunk_state")
+                        os.makedirs(active_chunk_state_dir, exist_ok=True)
+                        chunk_ckpt_path = os.path.join(active_chunk_state_dir, f"chunk_checkpoint_epoch_{epoch + 1}.pt")
+                        torch.save(checkpoint, chunk_ckpt_path)
+                        _write_run_state(
+                            chunk_state_dir=active_chunk_state_dir,
+                            resume_checkpoint_epoch=str(args.resume_checkpoint_epoch),
+                            freeze_layers=args.freeze_layers,
+                        )
+                        _prune_old_chunk_checkpoints(active_chunk_state_dir, max(1, args.chunk_keep_last_n))
+                        print(f"Saved chunk checkpoint: {chunk_ckpt_path}")
                 # del checkpoint  # Free up memory
                 torch.cuda.empty_cache()
                 # gc.collect()
@@ -1829,9 +2036,26 @@ def main():
                     checkpoint['feature_to_idx_map'] = full_dataset.feature_to_idx_map
                     checkpoint['idx_to_feature_map'] = {v: k for k, v in full_dataset.feature_to_idx_map.items()}
                     checkpoint['num_output_features'] = full_dataset.num_output_features
+                if scheduler is not None:
+                    checkpoint['scheduler_state_dict'] = scheduler.state_dict()
                 if args.save_checkpoints:
                     if (epoch + 1) % 10 == 0:
                         torch.save(checkpoint, model_save_path)
+
+                if args.enable_chunked_resume and args.resume_from_checkpoint and _normalize_freeze_layers(args.freeze_layers):
+                    should_save_chunk = ((epoch + 1) % max(1, args.chunk_checkpoint_every) == 0) or ((epoch + 1) == training_end_epoch_exclusive)
+                    if should_save_chunk:
+                        active_chunk_state_dir = os.path.join(args.save_dir, "chunk_state")
+                        os.makedirs(active_chunk_state_dir, exist_ok=True)
+                        chunk_ckpt_path = os.path.join(active_chunk_state_dir, f"chunk_checkpoint_epoch_{epoch + 1}.pt")
+                        torch.save(checkpoint, chunk_ckpt_path)
+                        _write_run_state(
+                            chunk_state_dir=active_chunk_state_dir,
+                            resume_checkpoint_epoch=str(args.resume_checkpoint_epoch),
+                            freeze_layers=args.freeze_layers,
+                        )
+                        _prune_old_chunk_checkpoints(active_chunk_state_dir, max(1, args.chunk_keep_last_n))
+                        print(f"Saved chunk checkpoint: {chunk_ckpt_path}")
                 print(f"Model saved to {model_save_path} (no validation)")
         
 
