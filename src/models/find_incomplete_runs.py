@@ -205,7 +205,7 @@ DECOMPOSITION_DATA_PATHS: Dict[int, Dict[str, str]] = {
 # Composition uses shop_1_qhop_N → shorter sequences → less memory.
 # Decomposition uses shop_N_qhop_1 → longer sequences → more memory.
 SLURM_MEM_COMPOSITION: Dict[int, str] = {2: "12G", 3: "12G", 4: "12G", 5: "12G"}
-SLURM_MEM_DECOMPOSITION: Dict[int, str] = {2: "12G", 3: "14G", 4: "16G", 5: "18G"}
+SLURM_MEM_DECOMPOSITION: Dict[int, str] = {2: "12G", 3: "14G", 4: "15G", 5: "17G"}
 
 # Approximate seconds per epoch (used to compute dynamic SLURM --time)
 SECONDS_PER_EPOCH_COMPOSITION = {
