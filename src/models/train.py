@@ -1100,6 +1100,7 @@ def main():
     start_epoch = 0
     best_val_loss = float('inf')
     resume_checkpoint_path = None
+    resume_base_checkpoint_dir = None
     checkpoint_args = None
     chunk_state_dir = None
     frozen_run_root = None
@@ -1121,6 +1122,10 @@ def main():
         if cluster == 'cc':
             scratch_path = '/home/rsaha/scratch/'
             resume_checkpoint_path = resume_checkpoint_path.replace('/home/rsaha/projects/aip-afyshe/rsaha/', scratch_path)
+
+        # Pin the original resume base directory once. Do not derive this later
+        # from chunk checkpoints under .../chunk_state/, or paths will recurse.
+        resume_base_checkpoint_dir = os.path.dirname(resume_checkpoint_path)
 
         # Extract the hyperparameters from the resume_checkpoint_path to correctly update the wandb args. For example, extract the lr, model_size, eta_min, seed, weight_decay etc.
         # Here's an example of a path: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/'
@@ -1146,7 +1151,7 @@ def main():
 
         # Optional chunked continuation for frozen-layer resumes.
         if args.enable_chunked_resume and _normalize_freeze_layers(args.freeze_layers):
-            runtime_base_checkpoint_dir = os.path.dirname(resume_checkpoint_path)
+            runtime_base_checkpoint_dir = resume_base_checkpoint_dir
             resume_subdir_name = _build_resume_subdir_name(args.resume_checkpoint_epoch, args.freeze_layers)
             frozen_run_root = os.path.join(runtime_base_checkpoint_dir, resume_subdir_name)
             chunk_state_dir = os.path.join(frozen_run_root, "chunk_state")
@@ -1840,9 +1845,11 @@ def main():
         # Keep a stable branch root per (original resume epoch, frozen layer set).
         resume_subdir_name = _build_resume_subdir_name(args.resume_checkpoint_epoch, args.freeze_layers)
 
-        # Always root resumed outputs under the same tree as the resolved resume checkpoint.
-        # This prevents cross-root drift (e.g., def-afyshe-ab vs aip-afyshe) across chained chunks.
-        runtime_base_checkpoint_dir = os.path.dirname(resume_checkpoint_path)
+        # Always root resumed outputs under the original checkpoint parent directory.
+        # Never derive from active chunk checkpoints inside .../chunk_state/.
+        if resume_base_checkpoint_dir is None:
+            raise ValueError("resume_base_checkpoint_dir is unexpectedly unset for resumed run")
+        runtime_base_checkpoint_dir = resume_base_checkpoint_dir
         hierarchical_save_dir = os.path.join(runtime_base_checkpoint_dir, resume_subdir_name)
         frozen_run_root = hierarchical_save_dir
         chunk_state_dir = os.path.join(frozen_run_root, "chunk_state")
