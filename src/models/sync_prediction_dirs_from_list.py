@@ -27,6 +27,12 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 PRED_PATTERN = "predictions_classification_epoch_*.npz"
+CHECKPOINT_PATTERNS = [
+    "chunk_checkpoint_epoch_*.pt",
+    "best_model_epoch_*.pt",
+    "run_state.json",
+    "wandb_run_id.txt",
+]
 
 
 @dataclass
@@ -126,12 +132,36 @@ def parse_args() -> argparse.Namespace:
         help="Timeout for SSH operations in seconds (default: 120).",
     )
     p.add_argument(
+        "--artifact_type",
+        type=str,
+        choices=["predictions", "checkpoints", "both"],
+        default="predictions",
+        help=(
+            "What to transfer: prediction files, checkpoint files, or both. "
+            "Default is predictions."
+        ),
+    )
+    p.add_argument(
         "--include_pattern",
         type=str,
-        default=PRED_PATTERN,
-        help=f"Glob pattern to transfer with rsync (default: {PRED_PATTERN}).",
+        action="append",
+        default=None,
+        help=(
+            "Glob pattern to transfer with rsync; can be repeated. "
+            "If omitted, defaults are chosen from --artifact_type."
+        ),
     )
     return p.parse_args()
+
+
+def effective_patterns(args: argparse.Namespace) -> List[str]:
+    if args.include_pattern:
+        return args.include_pattern
+    if args.artifact_type == "predictions":
+        return [PRED_PATTERN]
+    if args.artifact_type == "checkpoints":
+        return list(CHECKPOINT_PATTERNS)
+    return [PRED_PATTERN, *CHECKPOINT_PATTERNS]
 
 
 def flatten_ssh_options(values: List[str]) -> List[str]:
@@ -230,11 +260,48 @@ def map_path_to_prefix(path: str, target_prefix: str, anchor: str, local_suffix:
     return os.path.join(base, suffix)
 
 
-def local_npz_count(path: str, include_pattern: str) -> int:
+def expand_source_dirs(paths: List[str], artifact_type: str) -> List[str]:
+    expanded: List[str] = []
+    for p in paths:
+        norm = p.rstrip("/")
+        base = os.path.basename(norm)
+        parent = os.path.dirname(norm)
+
+        if artifact_type in {"predictions", "both"}:
+            if base == "chunk_state":
+                expanded.append(os.path.join(parent, "predictions"))
+            elif base == "predictions":
+                expanded.append(norm)
+            elif "resume_from_epoch_" in norm:
+                expanded.append(os.path.join(norm, "predictions"))
+
+        if artifact_type in {"checkpoints", "both"}:
+            if base == "predictions":
+                expanded.append(os.path.join(parent, "chunk_state"))
+            elif base == "chunk_state":
+                expanded.append(norm)
+            elif "resume_from_epoch_" in norm:
+                expanded.append(os.path.join(norm, "chunk_state"))
+
+    deduped: List[str] = []
+    seen = set()
+    for p in expanded:
+        if p not in seen:
+            seen.add(p)
+            deduped.append(p)
+    return deduped
+
+
+def local_match_count(path: str, include_patterns: List[str]) -> int:
     if not os.path.isdir(path):
         return 0
-    # Use shell glob count via find for consistency with pattern semantics.
-    cmd = ["bash", "-lc", f"find {shlex.quote(path)} -maxdepth 1 -type f -name {shlex.quote(include_pattern)} | wc -l"]
+
+    if not include_patterns:
+        return 0
+
+    or_expr = " -o ".join([f"-name {shlex.quote(p)}" for p in include_patterns])
+    find_expr = f"find {shlex.quote(path)} -maxdepth 1 -type f \\( {or_expr} \\) | wc -l"
+    cmd = ["bash", "-lc", find_expr]
     proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
     if proc.returncode != 0:
         return 0
@@ -248,14 +315,14 @@ def build_pull_plan(
     source_remote_dirs: List[str],
     local_prefix: str,
     anchor: str,
-    include_pattern: str,
+    include_patterns: List[str],
     local_suffix: str,
 ) -> List[PathPlan]:
     plan: List[PathPlan] = []
     for remote_dir in source_remote_dirs:
         local_dir = map_path_to_prefix(remote_dir, local_prefix, anchor, local_suffix)
         exists = os.path.isdir(local_dir)
-        count = local_npz_count(local_dir, include_pattern)
+        count = local_match_count(local_dir, include_patterns)
         plan.append(
             PathPlan(
                 source_dir=remote_dir,
@@ -274,14 +341,14 @@ def build_push_plan(
     source_local_dirs: List[str],
     remote_prefix: str,
     anchor: str,
-    include_pattern: str,
+    include_patterns: List[str],
     local_suffix: str,
 ) -> List[PathPlan]:
     plan: List[PathPlan] = []
     for local_dir in source_local_dirs:
         remote_dir = map_path_to_prefix(local_dir, remote_prefix, anchor, local_suffix)
         source_exists = os.path.isdir(local_dir)
-        source_count = local_npz_count(local_dir, include_pattern)
+        source_count = local_match_count(local_dir, include_patterns)
         plan.append(
             PathPlan(
                 source_dir=local_dir,
@@ -346,7 +413,7 @@ def rsync_one(
     ssh_options: List[str],
     source_dir: str,
     target_dir: str,
-    include_pattern: str,
+    include_patterns: List[str],
     timeout_seconds: int,
 ) -> bool:
     if direction == "pull":
@@ -377,12 +444,18 @@ def rsync_one(
         "-e",
         ssh_inner,
         "--include",
-        include_pattern,
+        "*/",
+    ]
+
+    for pattern in include_patterns:
+        cmd.extend(["--include", pattern])
+
+    cmd.extend([
         "--exclude",
         "*",
         src,
         dst,
-    ]
+    ])
     try:
         proc = subprocess.run(cmd, timeout=timeout_seconds)
         return proc.returncode == 0
@@ -394,15 +467,19 @@ def remote_npz_count(
     remote_host: str,
     ssh_options: List[str],
     remote_dir: str,
-    include_pattern: str,
+    include_patterns: List[str],
     timeout_seconds: int,
 ) -> Optional[int]:
+    if not include_patterns:
+        return 0
+
     quoted_dir = shlex.quote(remote_dir)
+    or_expr = " -o ".join([f"-name {shlex.quote(p)}" for p in include_patterns])
     cmd = (
         "if [ -d {d} ]; then "
-        "find {d} -maxdepth 1 -type f -name {g} | wc -l; "
+        "find {d} -maxdepth 1 -type f \\\(" + or_expr + "\\\) | wc -l; "
         "else echo __MISSING__; fi"
-    ).format(d=quoted_dir, g=shlex.quote(include_pattern))
+    ).format(d=quoted_dir)
 
     ssh_cmd = ["ssh", *ssh_options, remote_host, cmd]
     try:
@@ -433,7 +510,7 @@ def compute_pull_conflicts(
     plan: List[PathPlan],
     remote_host: str,
     ssh_options: List[str],
-    include_pattern: str,
+    include_patterns: List[str],
     timeout_seconds: int,
 ) -> List[ConflictRow]:
     conflicts: List[ConflictRow] = []
@@ -444,7 +521,7 @@ def compute_pull_conflicts(
             remote_host=remote_host,
             ssh_options=ssh_options,
             remote_dir=row.source_dir,
-            include_pattern=include_pattern,
+            include_patterns=include_patterns,
             timeout_seconds=timeout_seconds,
         )
         conflicts.append(
@@ -463,7 +540,7 @@ def compute_push_conflicts(
     plan: List[PathPlan],
     remote_host: str,
     ssh_options: List[str],
-    include_pattern: str,
+    include_patterns: List[str],
     timeout_seconds: int,
 ) -> List[ConflictRow]:
     conflicts: List[ConflictRow] = []
@@ -475,7 +552,7 @@ def compute_push_conflicts(
             remote_host=remote_host,
             ssh_options=ssh_options,
             remote_dir=row.target_dir,
-            include_pattern=include_pattern,
+            include_patterns=include_patterns,
             timeout_seconds=timeout_seconds,
         )
         # In push mode, skip only when remote has at least as many prediction files.
@@ -522,6 +599,7 @@ def print_conflicts(conflicts: List[ConflictRow], direction: str) -> None:
 
 def main() -> None:
     args = parse_args()
+    include_patterns = effective_patterns(args)
 
     if args.direction == "pull" and not args.local_prefix:
         raise ValueError("--local_prefix is required when --direction pull")
@@ -529,20 +607,25 @@ def main() -> None:
         raise ValueError("--remote_prefix is required when --direction push")
 
     listed_paths = read_remote_paths(args.paths_file)
+    expanded_paths = expand_source_dirs(listed_paths, args.artifact_type)
+    if not expanded_paths:
+        print("No transferable directories derived from input paths and artifact_type.")
+        return
+
     if args.direction == "pull":
         plan = build_pull_plan(
-            listed_paths,
+            expanded_paths,
             args.local_prefix,
             args.anchor,
-            args.include_pattern,
+            include_patterns,
             args.local_suffix,
         )
     else:
         plan = build_push_plan(
-            listed_paths,
+            expanded_paths,
             args.remote_prefix,
             args.anchor,
-            args.include_pattern,
+            include_patterns,
             args.local_suffix,
         )
     print_plan(plan, args.direction)
@@ -569,7 +652,7 @@ def main() -> None:
                     plan=transfer_plan,
                     remote_host=args.remote_host,
                     ssh_options=ssh_options,
-                    include_pattern=args.include_pattern,
+                    include_patterns=include_patterns,
                     timeout_seconds=args.ssh_timeout_seconds,
                 )
             else:
@@ -577,7 +660,7 @@ def main() -> None:
                     plan=transfer_plan,
                     remote_host=args.remote_host,
                     ssh_options=ssh_options,
-                    include_pattern=args.include_pattern,
+                    include_patterns=include_patterns,
                     timeout_seconds=args.ssh_timeout_seconds,
                 )
             print_conflicts(conflicts, args.direction)
@@ -648,7 +731,7 @@ def main() -> None:
                 ssh_options=ssh_options,
                 source_dir=row.source_dir,
                 target_dir=row.target_dir,
-                include_pattern=args.include_pattern,
+                include_patterns=include_patterns,
                 timeout_seconds=args.ssh_timeout_seconds,
             )
             if success:
