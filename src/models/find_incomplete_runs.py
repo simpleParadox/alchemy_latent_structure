@@ -221,7 +221,7 @@ SECONDS_PER_EPOCH_DECOMPOSITION =  {
     5: 153
 }
 
-STARTUP_OVERHEAD_SECONDS = 30  
+STARTUP_OVERHEAD_SECONDS = 150  
 TIME_BUFFER_FACTOR = 1.0       
 MAX_SLURM_TIME_SECONDS = 50 * 3600  # cap at 24 hours
 
@@ -835,9 +835,12 @@ def generate_sbatch_scripts(
                 "",
                 "# Auto-chain next chunk after successful completion",
                 f"CHUNK_STATE_DIR=\"{chunk_state_dir}\"",
+                "STOP_MARKER=\"$CHUNK_STATE_DIR/autochain_stop.json\"",
                 "TARGET_EPOCH=999",
                 "LATEST_EPOCH=$(ls \"$CHUNK_STATE_DIR\"/chunk_checkpoint_epoch_*.pt 2>/dev/null | sed -E 's/.*chunk_checkpoint_epoch_([0-9]+)\\.pt/\\1/' | sort -n | tail -1)",
-                "if [[ -n \"$LATEST_EPOCH\" && \"$LATEST_EPOCH\" -lt \"$TARGET_EPOCH\" ]]; then",
+                "if [[ -f \"$STOP_MARKER\" ]]; then",
+                "  echo \"No further auto-chaining needed (convergence marker found at $STOP_MARKER).\"",
+                "elif [[ -n \"$LATEST_EPOCH\" && \"$LATEST_EPOCH\" -lt \"$TARGET_EPOCH\" ]]; then",
                 "  echo \"Auto-chaining next chunk from epoch $LATEST_EPOCH (dependency afterok:$SLURM_JOB_ID).\"",
                 "  sbatch --dependency=afterok:${SLURM_JOB_ID} \"$0\"",
                 "else",

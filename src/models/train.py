@@ -85,12 +85,22 @@ def _prune_old_chunk_checkpoints(chunk_state_dir: str, keep_last_n: int) -> None
             print(f"WARNING: Failed to remove old chunk checkpoint {path}: {e}")
 
 
-def _write_run_state(chunk_state_dir: str, resume_checkpoint_epoch: str, freeze_layers: str | None) -> None:
+def _write_run_state(
+    chunk_state_dir: str,
+    resume_checkpoint_epoch: str,
+    freeze_layers: str | None,
+    val_acc_ge_threshold_streak: int = 0,
+    auto_stop_val_acc_threshold: float = 0.99,
+    auto_stop_val_acc_patience: int = 10,
+) -> None:
     os.makedirs(chunk_state_dir, exist_ok=True)
     state_path = os.path.join(chunk_state_dir, "run_state.json")
     payload = {
         "original_resume_checkpoint_epoch": str(resume_checkpoint_epoch),
         "freeze_layers": _normalize_freeze_layers(freeze_layers),
+        "val_acc_ge_threshold_streak": int(val_acc_ge_threshold_streak),
+        "auto_stop_val_acc_threshold": float(auto_stop_val_acc_threshold),
+        "auto_stop_val_acc_patience": int(auto_stop_val_acc_patience),
     }
     with open(state_path, "w") as f:
         json.dump(payload, f, indent=2)
@@ -106,6 +116,27 @@ def _read_run_state(chunk_state_dir: str) -> dict | None:
     except Exception as e:
         print(f"WARNING: Could not parse run state file {state_path}: {e}")
         return None
+
+
+def _write_autochain_stop_marker(
+    chunk_state_dir: str,
+    reason: str,
+    epoch: int,
+    val_acc: float,
+    threshold: float,
+    patience: int,
+) -> None:
+    os.makedirs(chunk_state_dir, exist_ok=True)
+    marker_path = os.path.join(chunk_state_dir, "autochain_stop.json")
+    payload = {
+        "reason": reason,
+        "epoch": int(epoch),
+        "val_accuracy": float(val_acc),
+        "threshold": float(threshold),
+        "patience": int(patience),
+    }
+    with open(marker_path, "w") as f:
+        json.dump(payload, f, indent=2)
 
 
 def _prefer_aip_output_root(path: str) -> str:
@@ -262,6 +293,10 @@ def parse_args():
                         help="Save chunk checkpoint every N epochs.")
     parser.add_argument("--chunk_keep_last_n", type=int, default=5,
                         help="Number of recent chunk checkpoints to keep.")
+    parser.add_argument("--auto_stop_val_acc_threshold", type=float, default=0.975,
+                        help="Stop auto-chaining when validation accuracy stays >= this threshold for a patience window.")
+    parser.add_argument("--auto_stop_val_acc_patience", type=int, default=10,
+                        help="Patience window (epochs) for --auto_stop_val_acc_threshold before stopping auto-chaining.")
     
     parser.add_argument("--freeze_layers", type=str, default=None,
                         help="Comma-separated list of layer names to freeze (e.g., 'transformer_layer_0,transformer_layer_1').")
@@ -1105,6 +1140,7 @@ def main():
     chunk_state_dir = None
     frozen_run_root = None
     resuming_from_chunk_checkpoint = False
+    loaded_val_acc_streak = 0
 
     if args.resume_from_checkpoint:
         if args.resume_checkpoint_path is None or args.resume_checkpoint_epoch is None:
@@ -1170,6 +1206,10 @@ def main():
                     raise ValueError(
                         f"Chunk run_state resume epoch mismatch: state={state_epoch}, requested={req_epoch}"
                     )
+                try:
+                    loaded_val_acc_streak = int(run_state.get("val_acc_ge_threshold_streak", 0))
+                except Exception:
+                    loaded_val_acc_streak = 0
 
             latest_chunk_ckpt, latest_chunk_epoch = _find_latest_chunk_checkpoint(chunk_state_dir)
             if latest_chunk_ckpt is not None:
@@ -1876,6 +1916,9 @@ def main():
                 chunk_state_dir=os.path.join(args.save_dir, "chunk_state"),
                 resume_checkpoint_epoch=str(args.resume_checkpoint_epoch),
                 freeze_layers=args.freeze_layers,
+                val_acc_ge_threshold_streak=loaded_val_acc_streak,
+                auto_stop_val_acc_threshold=float(args.auto_stop_val_acc_threshold),
+                auto_stop_val_acc_patience=int(args.auto_stop_val_acc_patience),
             )
 
     training_end_epoch_exclusive = args.epochs
@@ -1887,7 +1930,11 @@ def main():
                 f"out of global target {args.epochs}."
             )
 
+    val_acc_streak = loaded_val_acc_streak
+
     for epoch in tqdm(range(start_epoch, training_end_epoch_exclusive), disable=not accelerator.is_local_main_process):
+        convergence_stop_triggered_local = False
+        current_val_acc_for_stop = None
         if accelerator.is_local_main_process:
             print(f"--- Epoch {epoch+1}/{args.epochs} ---")
         with accelerator.autocast():
@@ -1957,6 +2004,31 @@ def main():
                 print(f"Epoch {epoch+1} Validation Summary: Avg Loss: {val_loss:.4f}, Avg Acc: {val_acc:.4f}")
                 epoch_log["val_epoch_loss"] = val_loss
                 epoch_log["val_epoch_accuracy"] = val_acc
+                current_val_acc_for_stop = float(val_acc)
+
+                if args.enable_chunked_resume and args.resume_from_checkpoint and _normalize_freeze_layers(args.freeze_layers):
+                    if current_val_acc_for_stop >= float(args.auto_stop_val_acc_threshold):
+                        val_acc_streak += 1
+                    else:
+                        val_acc_streak = 0
+                    epoch_log["val_acc_ge_threshold_streak"] = int(val_acc_streak)
+
+                    if val_acc_streak >= int(args.auto_stop_val_acc_patience):
+                        convergence_stop_triggered_local = True
+                        active_chunk_state_dir = os.path.join(args.save_dir, "chunk_state")
+                        _write_autochain_stop_marker(
+                            chunk_state_dir=active_chunk_state_dir,
+                            reason="val_acc_threshold_patience_reached",
+                            epoch=epoch + 1,
+                            val_acc=current_val_acc_for_stop,
+                            threshold=float(args.auto_stop_val_acc_threshold),
+                            patience=int(args.auto_stop_val_acc_patience),
+                        )
+                        print(
+                            f"Convergence criterion met: val_acc >= {args.auto_stop_val_acc_threshold} "
+                            f"for {args.auto_stop_val_acc_patience} epochs (streak={val_acc_streak}). "
+                            f"Auto-chaining will stop after this job."
+                        )
 
                 # After validation completes, try to release cached memory
             # if torch.cuda.is_available():
@@ -2004,7 +2076,11 @@ def main():
 
                 # Chunk checkpointing is independent of save_checkpoints and is used for short chained jobs.
                 if args.enable_chunked_resume and args.resume_from_checkpoint and _normalize_freeze_layers(args.freeze_layers):
-                    should_save_chunk = ((epoch + 1) % max(1, args.chunk_checkpoint_every) == 0) or ((epoch + 1) == training_end_epoch_exclusive)
+                    should_save_chunk = (
+                        ((epoch + 1) % max(1, args.chunk_checkpoint_every) == 0)
+                        or ((epoch + 1) == training_end_epoch_exclusive)
+                        or convergence_stop_triggered_local
+                    )
                     if should_save_chunk:
                         active_chunk_state_dir = os.path.join(args.save_dir, "chunk_state")
                         os.makedirs(active_chunk_state_dir, exist_ok=True)
@@ -2014,6 +2090,9 @@ def main():
                             chunk_state_dir=active_chunk_state_dir,
                             resume_checkpoint_epoch=str(args.resume_checkpoint_epoch),
                             freeze_layers=args.freeze_layers,
+                            val_acc_ge_threshold_streak=val_acc_streak,
+                            auto_stop_val_acc_threshold=float(args.auto_stop_val_acc_threshold),
+                            auto_stop_val_acc_patience=int(args.auto_stop_val_acc_patience),
                         )
                         _prune_old_chunk_checkpoints(active_chunk_state_dir, max(1, args.chunk_keep_last_n))
                         print(f"Saved chunk checkpoint: {chunk_ckpt_path}")
@@ -2050,7 +2129,11 @@ def main():
                         torch.save(checkpoint, model_save_path)
 
                 if args.enable_chunked_resume and args.resume_from_checkpoint and _normalize_freeze_layers(args.freeze_layers):
-                    should_save_chunk = ((epoch + 1) % max(1, args.chunk_checkpoint_every) == 0) or ((epoch + 1) == training_end_epoch_exclusive)
+                    should_save_chunk = (
+                        ((epoch + 1) % max(1, args.chunk_checkpoint_every) == 0)
+                        or ((epoch + 1) == training_end_epoch_exclusive)
+                        or convergence_stop_triggered_local
+                    )
                     if should_save_chunk:
                         active_chunk_state_dir = os.path.join(args.save_dir, "chunk_state")
                         os.makedirs(active_chunk_state_dir, exist_ok=True)
@@ -2060,6 +2143,9 @@ def main():
                             chunk_state_dir=active_chunk_state_dir,
                             resume_checkpoint_epoch=str(args.resume_checkpoint_epoch),
                             freeze_layers=args.freeze_layers,
+                            val_acc_ge_threshold_streak=val_acc_streak,
+                            auto_stop_val_acc_threshold=float(args.auto_stop_val_acc_threshold),
+                            auto_stop_val_acc_patience=int(args.auto_stop_val_acc_patience),
                         )
                         _prune_old_chunk_checkpoints(active_chunk_state_dir, max(1, args.chunk_keep_last_n))
                         print(f"Saved chunk checkpoint: {chunk_ckpt_path}")
@@ -2077,6 +2163,17 @@ def main():
             print(f"Epoch {epoch}: CUDA Memory - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB")
             torch.cuda.empty_cache()
             gc.collect()
+
+        stop_flag = torch.tensor(
+            1 if convergence_stop_triggered_local else 0,
+            device=accelerator.device,
+            dtype=torch.int32,
+        )
+        stop_flag = accelerator.reduce(stop_flag, reduction="max")
+        if int(stop_flag.item()) > 0:
+            if accelerator.is_local_main_process:
+                print("Stopping current chunk early due to val-accuracy convergence criterion.")
+            break
 
     if accelerator.is_local_main_process:
         print("Training complete.")
