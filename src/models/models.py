@@ -515,9 +515,6 @@ class StoneStateDecoderClassifier(nn.Module):
                 src_key_padding_mask=src_padding_mask,
                 is_causal=True
             )
-
-        # free up memory
-        # del src_emb, src_emb_permuted, src_emb_pe, causal_mask
         
         # For classification, we need the representation of the last valid token
         if src_padding_mask is not None:
@@ -542,9 +539,6 @@ class StoneStateDecoderClassifier(nn.Module):
         if self.prediction_type == 'autoregressive':
             # Return full sequence output for autoregressive tasks
             return self.classification_head(decoder_output)
-
-        # torch.cuda.empty_cache()
-        # gc.collect()
         
         # Return classification logits based on the last valid token
         next_token_logits = self.classification_head(last_token_output)
@@ -685,15 +679,15 @@ class LinearBaseline(nn.Module):
         if self.flatten_input:
             batch_size, seq_len, emb_dim = x_emb.shape
             
-            # # Ensure sequence length matches max_len by padding/truncating
-            # if seq_len < self.max_len:
-            #     # Pad to max_len
-            #     padding = torch.zeros(batch_size, self.max_len - seq_len, emb_dim, 
-            #                         device=x_emb.device, dtype=x_emb.dtype)
-            #     x_emb = torch.cat([x_emb, padding], dim=1)
-            # elif seq_len > self.max_len:
-            #     # Truncate to max_len
-            #     x_emb = x_emb[:, :self.max_len, :]
+            # Ensure sequence length matches max_len by padding/truncating
+            if seq_len < self.max_len:
+                # Pad to max_len
+                padding = torch.zeros(batch_size, self.max_len - seq_len, emb_dim, 
+                                      device=x_emb.device, dtype=x_emb.dtype)
+                x_emb = torch.cat([x_emb, padding], dim=1)
+            elif seq_len > self.max_len:
+                # Truncate to max_len
+                x_emb = x_emb[:, :self.max_len, :]
             
             # Now flatten with guaranteed consistent dimensions
             pooled = x_emb.view(batch_size, -1)

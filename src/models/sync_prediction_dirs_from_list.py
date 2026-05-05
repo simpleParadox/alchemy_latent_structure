@@ -25,7 +25,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
-
+from tqdm import tqdm
 PRED_PATTERN = "predictions_classification_epoch_*.npz"
 CHECKPOINT_PATTERNS = [
     "chunk_checkpoint_epoch_*.pt",
@@ -514,7 +514,7 @@ def compute_pull_conflicts(
     timeout_seconds: int,
 ) -> List[ConflictRow]:
     conflicts: List[ConflictRow] = []
-    for row in plan:
+    for row in tqdm(plan):
         if not row.local_target_exists:
             continue
         rcount = remote_npz_count(

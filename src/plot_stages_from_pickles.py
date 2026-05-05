@@ -78,9 +78,9 @@ DECOMPOSITION_METRICS: Tuple[str, ...] = (
 
 # Custom colors per metric (used in default mode).
 METRIC_COLORS: Dict[str, str] = {
-    "predicted_in_context_accuracies": "blue",
+    "predicted_in_context_accuracies": "orange",
     "predicted_in_context_correct_candidate_accuracies": "purple",
-    "correct_within_candidates": "red",
+    "correct_within_candidates": "blue",
     "predicted_in_context_correct_half_accuracies": "orange",
     "predicted_in_context_correct_half_exact_accuracies": "green", # Change this based on the hop length.
     "predicted_in_context_other_half_accuracies": "red",
@@ -100,8 +100,8 @@ CUSTOM_METRICS: Dict[str, Dict[str, str]] = {
     },
     "composition": {
         "predicted_in_context_accuracies": "P(A)",
-        "predicted_in_context_correct_candidate_accuracies": "P(B | A)",
-        "correct_within_candidates": "P(C | A ∩ B)",
+        "predicted_in_context_correct_candidate_accuracies": "P(R | A)",
+        "correct_within_candidates": "P(C | A ∩ R)",
     },
     "held_out": {
         "predicted_in_context_accuracies": "P(A) (8 out of 108)",
@@ -437,13 +437,15 @@ def plot_default(
                 alpha=seed_alpha if plot_mean else 1.0,
                 linestyle=seed_to_ls[seed],
                 linewidth=1.75 if plot_mean else 2.0,
-                label=(f"{m}" if legend_mode == "all" else None),
+                # label=(f"{m}" if legend_mode == "all" else None),
             )
 
         # mean overlay
         if plot_mean:
             mean_epochs, mean_vals = _metric_mean_series_epoch_aligned(series_m, max_points=None)
             disp = CUSTOM_METRICS.get(exp_typ, {}).get(m, m)
+            print(f"[INFO] Plotting mean for metric '{m}' as '{disp}' with {len(mean_epochs)} points.")
+            print('Legend mode:', legend_mode)
             ax.plot(
                 mean_epochs,
                 mean_vals,
@@ -453,7 +455,7 @@ def plot_default(
                 label=(f"{disp}" if legend_mode in {"all", "mean_only"} else None),
             )
 
-    ax.set_title(title, fontsize=18)
+    # ax.set_title(title, fontsize=18)
     ax.set_xlabel("Epoch", fontsize=26)
     ax.set_ylabel("Accuracy", fontsize=26)
     if y_lim is not None:

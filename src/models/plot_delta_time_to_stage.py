@@ -133,14 +133,15 @@ def extract_plot_data_with_errorbars(
                     continue
                 payload = metrics[target_metric_key]
 
-                # Prefer freeze_epoch from payload; fall back to epoch_str
-                freeze_epoch = payload.get("freeze_epoch")
-                if freeze_epoch is None:
-                    try:
-                        freeze_epoch = int(epoch_str)
-                    except ValueError:
-                        # Skip malformed epoch keys
-                        continue
+                # Use epoch_str (= intervention_first_epoch) as the freeze epoch.
+                # Note: payload["freeze_epoch"] is intervention_first_epoch - 1,
+                # but t_baseline was computed relative to intervention_first_epoch,
+                # so we must use epoch_str to keep the relative calculation consistent.
+                try:
+                    freeze_epoch = int(epoch_str)
+                except ValueError:
+                    # Skip malformed epoch keys
+                    continue
 
                 delta_t = _cap_delta_t(payload.get("delta_t"), cap_never_reached)
                 if delta_t is None:
@@ -165,7 +166,11 @@ def extract_plot_data_with_errorbars(
 
                     if t_base is None:
                         # Skip point rather than crashing
-                        continue
+                        raise ValueError(
+                            f"Missing or invalid t_baseline for relative x_mode calculation. "
+                            f"data_split_seed={ds_key}, init_seed={init_key}, layer='{layer_name}', "
+                            f"freeze_epoch={freeze_epoch}, anchor_metric='{anchor_metric_key}'."
+                        )
 
                     rel = int(freeze_epoch) - int(t_base)
 
@@ -382,9 +387,9 @@ def plot_deltas_with_errorbars(
                 xlabel = f"Relative Freeze Epoch (t_f - t_base[{stage_key_map.get(stage_key, stage_key)}])" 
             else:
                 # xlabel = f"Relative Freeze Epoch"
-                xlabel = f"Relative Freeze Epoch (t_f - t_base[{stage_key_map.get(anchor_key, anchor_key)}])" 
+                xlabel = f"Relative Freeze Epoch ({stage_key_map.get(anchor_key, anchor_key)})" 
         else:
-            xlabel = f"Relative Freeze Epoch"
+            xlabel = f"Relative Freeze Epoch ({stage_key_map.get(anchor_key, anchor_key)})"
         ax.set_xlabel(xlabel, fontsize=18)
         ax.axvline(x=0, color="black", linestyle=":", alpha=1.0)
 

@@ -24,8 +24,11 @@ import argparse
 import csv
 import glob
 import os
+import re
 import sys
 from typing import Dict, List, Optional, Tuple
+
+import numpy as np
 from cluster_profile import cluster
 
 # ---------------------------------------------------------------------------
@@ -141,7 +144,7 @@ DECOMPOSITION_FROZEN_EPOCHS: Dict[int, Dict[int, List[int]]] = {
         3:  [62, 72, 82, 92, 102, 112, 122, 132, 142, 152, 162, 172, 182, 192, 202, 212, 222, 232, 242, 252, 262, 272, 282, 292, 302, 312, 322, 332, 342, 352, 362, 372, 382, 392, 402, 412, 422, 432, 442, 452, 462, 472, 482, 492],
     },
     5: {
-        42: [124, 134, 144, 154, 164, 174, 184, 194, 204, 214, 224, 234, 244, 254, 264, 274, 284, 294, 304, 314, 324, 334, 344, 354, 364, 374, 384, 394, 404, 414, 424, 434, 444, 454, 464, 474, 484, 494, 504, 514, 524, 534, 544, 554, 564, 574, 584, 594, 604, 614, 624, 634, 644, 654, 664, 674, 684, 694, 704, 714, 724, 734, 744],
+        42:   [124, 134, 144, 154, 164, 174, 184, 194, 204, 214, 224, 234, 244, 254, 264, 274, 284, 294, 304, 314, 324, 334, 344, 354, 364, 374, 384, 394, 404, 414, 424, 434, 444, 454, 464, 474, 484, 494, 504, 514, 524, 534, 544, 554, 564, 574, 584, 594, 604, 614, 624, 634, 644, 654, 664, 674, 684, 694, 704, 714, 724, 734, 744],
         2:  [120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700, 710, 720, 730],
         3:  [128, 138, 148, 158, 168, 178, 188, 198, 208, 218, 228, 238, 248, 258, 268, 278, 288, 298, 308, 318, 328, 338, 348, 358, 368, 378, 388, 398, 408, 418, 428, 438, 448, 458, 468, 478, 488, 498, 508, 518, 528, 538, 548, 558, 568, 578, 588, 598, 608, 618, 628, 638, 648, 658, 668, 678, 688, 698, 708, 718, 728],
     },
@@ -205,7 +208,7 @@ DECOMPOSITION_DATA_PATHS: Dict[int, Dict[str, str]] = {
 # Composition uses shop_1_qhop_N → shorter sequences → less memory.
 # Decomposition uses shop_N_qhop_1 → longer sequences → more memory.
 SLURM_MEM_COMPOSITION: Dict[int, str] = {2: "12G", 3: "12G", 4: "12G", 5: "12G"}
-SLURM_MEM_DECOMPOSITION: Dict[int, str] = {2: "12G", 3: "14G", 4: "15G", 5: "17G"}
+SLURM_MEM_DECOMPOSITION: Dict[int, str] = {2: "12G", 3: "14G", 4: "15G", 5: "12G"}
 
 # Approximate seconds per epoch (used to compute dynamic SLURM --time)
 SECONDS_PER_EPOCH_COMPOSITION = {
@@ -218,11 +221,11 @@ SECONDS_PER_EPOCH_DECOMPOSITION =  {
     2: 11,
     3: 33,
     4: 61,
-    5: 153
+    5: 150
 }
 
-STARTUP_OVERHEAD_SECONDS = 150  
-TIME_BUFFER_FACTOR = 1.0       
+STARTUP_OVERHEAD_SECONDS = 60
+TIME_BUFFER_FACTOR = 1.0
 MAX_SLURM_TIME_SECONDS = 50 * 3600  # cap at 24 hours
 
 
@@ -246,6 +249,9 @@ FROZEN_LAYERS = [
 
 TOTAL_EPOCHS = 1000  # All runs target 1000 epochs (indices 0..999)
 DEFAULT_MAX_MISSING_EPOCHS = 20
+DEFAULT_METRIC_KEY = "predicted_exact_out_of_all_108"
+DEFAULT_METRIC_THRESHOLD = 0.975
+DEFAULT_METRIC_PATIENCE = 10
 
 
 def extract_scheduler_type(checkpoint_path: str) -> str:
@@ -312,6 +318,217 @@ def resolve_checkpoint_base_path(path_or_rel: str, saved_models_root: str) -> st
     return os.path.join(saved_models_root, rel).rstrip("/")
 
 
+def _extract_epoch_from_predictions_filename(path: str) -> Optional[int]:
+    m = re.search(r"predictions_classification_epoch_(\d+)\.npz$", os.path.basename(path))
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def _load_targets_from_baseline_predictions_dir(checkpoint_base_path: str) -> Tuple[Optional[np.ndarray], str, str]:
+    """
+    Load baseline validation targets from <checkpoint_base_path>/predictions/.
+
+    Returns:
+      (targets_array_or_none, reason, targets_path_used)
+    """
+    baseline_predictions_dir = os.path.join(checkpoint_base_path, "predictions")
+    candidates = [
+        os.path.join(baseline_predictions_dir, "targets_classification_epoch_001.npz"),
+        os.path.join(baseline_predictions_dir, "targets_classification_epoch_002.npz"),
+    ]
+
+    chosen_path = ""
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            chosen_path = candidate
+            break
+
+    if not chosen_path:
+        return None, "targets_missing", ""
+
+    try:
+        loaded = np.load(chosen_path, allow_pickle=True)
+    except Exception:
+        return None, "targets_unreadable", chosen_path
+
+    if "targets" not in loaded:
+        return None, "targets_missing_key", chosen_path
+
+    targets = np.asarray(loaded["targets"])
+    targets = targets.reshape(-1)
+    return targets, "ok", chosen_path
+
+
+def _prediction_to_class_ids(predictions: np.ndarray) -> np.ndarray:
+    arr = np.asarray(predictions)
+    if arr.ndim > 1:
+        arr = np.argmax(arr, axis=-1)
+    return arr.reshape(-1)
+
+
+def _collect_epoch_accuracies_from_predictions(
+    pred_dir: str,
+    targets: np.ndarray,
+) -> Tuple[List[Tuple[int, float]], Dict[str, int]]:
+    diagnostics: Dict[str, int] = {
+        "prediction_files_missing": 0,
+        "prediction_file_unreadable": 0,
+        "prediction_missing_key": 0,
+        "prediction_shape_mismatch": 0,
+        "no_valid_prediction_epochs": 0,
+    }
+
+    pattern = os.path.join(pred_dir, "predictions_classification_epoch_*.npz")
+    pred_files = glob.glob(pattern)
+    if not pred_files:
+        diagnostics["prediction_files_missing"] += 1
+        diagnostics["no_valid_prediction_epochs"] += 1
+        return [], diagnostics
+
+    rows: List[Tuple[int, float]] = []
+    for path in pred_files:
+        epoch_num = _extract_epoch_from_predictions_filename(path)
+        if epoch_num is None:
+            continue
+
+        try:
+            loaded = np.load(path, allow_pickle=True)
+        except Exception:
+            diagnostics["prediction_file_unreadable"] += 1
+            continue
+
+        if "predictions" not in loaded:
+            diagnostics["prediction_missing_key"] += 1
+            continue
+
+        pred_ids = _prediction_to_class_ids(loaded["predictions"])
+        if pred_ids.shape[0] != targets.shape[0]:
+            diagnostics["prediction_shape_mismatch"] += 1
+            continue
+
+        acc = float(np.mean(pred_ids == targets))
+        rows.append((epoch_num, acc))
+
+    rows.sort(key=lambda x: x[0])
+    if not rows:
+        diagnostics["no_valid_prediction_epochs"] += 1
+    return rows, diagnostics
+
+
+def _metric_crossed_threshold_with_streak(
+    epoch_values: List[Tuple[int, float]],
+    threshold: float,
+    patience: int,
+) -> Tuple[bool, int]:
+    streak = 0
+    max_streak = 0
+    prev_epoch: Optional[int] = None
+    for epoch, val in epoch_values:
+        if val >= threshold:
+            if prev_epoch is not None and epoch == prev_epoch + 1:
+                streak += 1
+            else:
+                streak = 1
+            if streak > max_streak:
+                max_streak = streak
+            if streak >= patience:
+                return True, max_streak
+        else:
+            streak = 0
+        prev_epoch = epoch
+    return False, max_streak
+
+
+def apply_metric_threshold_gate(
+    runs: List[dict],
+    metric_threshold: float,
+    metric_patience: int,
+    metric_key: str = DEFAULT_METRIC_KEY,
+) -> Tuple[List[dict], List[dict], Dict[str, int]]:
+    """
+    Filter only status='incomplete' runs using metric threshold streak checks.
+
+    Returns:
+      (runs_after_gate, threshold_met_runs, diagnostics)
+    """
+    remaining_runs: List[dict] = []
+    threshold_met_runs: List[dict] = []
+
+    diagnostics: Dict[str, int] = {
+        "eligible_incomplete_runs": 0,
+        "threshold_crossed": 0,
+        "threshold_not_crossed": 0,
+        "targets_missing": 0,
+        "targets_unreadable": 0,
+        "targets_missing_key": 0,
+        "prediction_files_missing": 0,
+        "prediction_file_unreadable": 0,
+        "prediction_missing_key": 0,
+        "prediction_shape_mismatch": 0,
+        "no_valid_prediction_epochs": 0,
+    }
+
+    for run in runs:
+        if run.get("status") != "incomplete":
+            remaining_runs.append(run)
+            continue
+
+        diagnostics["eligible_incomplete_runs"] += 1
+
+        targets, targets_reason, targets_path = _load_targets_from_baseline_predictions_dir(
+            checkpoint_base_path=run["checkpoint_base_path"],
+        )
+
+        run["metric_key"] = metric_key
+        run["metric_threshold"] = metric_threshold
+        run["metric_patience"] = metric_patience
+        run["targets_path"] = targets_path
+
+        if targets is None:
+            run["metric_check_reason"] = targets_reason
+            if targets_reason in diagnostics:
+                diagnostics[targets_reason] += 1
+            diagnostics["threshold_not_crossed"] += 1
+            remaining_runs.append(run)
+            continue
+
+        epoch_values, pred_diag = _collect_epoch_accuracies_from_predictions(
+            pred_dir=run["pred_dir"],
+            targets=targets,
+        )
+        for k, v in pred_diag.items():
+            diagnostics[k] += v
+
+        run["metric_points"] = len(epoch_values)
+        run["metric_last_value"] = epoch_values[-1][1] if epoch_values else None
+        run["metric_last_epoch"] = epoch_values[-1][0] if epoch_values else None
+
+        if not epoch_values:
+            run["metric_check_reason"] = "no_valid_prediction_epochs"
+            diagnostics["threshold_not_crossed"] += 1
+            remaining_runs.append(run)
+            continue
+
+        crossed, max_streak = _metric_crossed_threshold_with_streak(
+            epoch_values=epoch_values,
+            threshold=metric_threshold,
+            patience=metric_patience,
+        )
+        run["metric_max_streak"] = max_streak
+        run["metric_check_reason"] = "ok"
+
+        if crossed:
+            run["status"] = "threshold_met"
+            diagnostics["threshold_crossed"] += 1
+            threshold_met_runs.append(run)
+        else:
+            diagnostics["threshold_not_crossed"] += 1
+            remaining_runs.append(run)
+
+    return remaining_runs, threshold_met_runs, diagnostics
+
+
 # ---------------------------------------------------------------------------
 # Detection logic
 # ---------------------------------------------------------------------------
@@ -365,7 +582,10 @@ def find_incomplete_runs(
     init_seeds: Optional[List[int]] = None,
     max_missing_epochs: int = DEFAULT_MAX_MISSING_EPOCHS,
     saved_models_root_override: Optional[str] = None,
-) -> Tuple[List[dict], List[dict]]:
+    enable_metric_threshold_gate: bool = False,
+    metric_threshold: float = DEFAULT_METRIC_THRESHOLD,
+    metric_patience: int = DEFAULT_METRIC_PATIENCE,
+) -> Tuple[List[dict], List[dict], List[dict], Dict[str, int]]:
     """
         Scan all expected (init_seed, frozen_layer, freeze_epoch) combinations
         and return two lists:
@@ -461,7 +681,58 @@ def find_incomplete_runs(
     print(f"  Total to rerun: {len(incomplete)}")
     print(f"{'='*70}\n")
 
-    return incomplete, complete_runs
+    threshold_met_runs: List[dict] = []
+    metric_gate_diagnostics: Dict[str, int] = {
+        "eligible_incomplete_runs": 0,
+        "threshold_crossed": 0,
+        "threshold_not_crossed": 0,
+        "targets_missing": 0,
+        "targets_unreadable": 0,
+        "targets_missing_key": 0,
+        "prediction_files_missing": 0,
+        "prediction_file_unreadable": 0,
+        "prediction_missing_key": 0,
+        "prediction_shape_mismatch": 0,
+        "no_valid_prediction_epochs": 0,
+    }
+
+    if enable_metric_threshold_gate:
+        incomplete, threshold_met_runs, metric_gate_diagnostics = apply_metric_threshold_gate(
+            runs=incomplete,
+            metric_threshold=metric_threshold,
+            metric_patience=metric_patience,
+            metric_key=DEFAULT_METRIC_KEY,
+        )
+
+        print(f"{'='*70}")
+        print("METRIC GATE SUMMARY (from predictions .npz, applied to status='incomplete' only)")
+        print(f"{'='*70}")
+        print(f"  Metric key:        {DEFAULT_METRIC_KEY}")
+        print(f"  Threshold:         {metric_threshold}")
+        print(f"  Patience (streak): {metric_patience}")
+        print(f"  Eligible runs:     {metric_gate_diagnostics['eligible_incomplete_runs']}")
+        print(f"  Threshold crossed: {metric_gate_diagnostics['threshold_crossed']}")
+        print(f"  Still rerun:       {metric_gate_diagnostics['threshold_not_crossed']}")
+
+        warning_keys = [
+            "targets_missing",
+            "targets_unreadable",
+            "targets_missing_key",
+            "prediction_files_missing",
+            "prediction_file_unreadable",
+            "prediction_missing_key",
+            "prediction_shape_mismatch",
+            "no_valid_prediction_epochs",
+        ]
+        warning_total = sum(metric_gate_diagnostics[k] for k in warning_keys)
+        if warning_total > 0:
+            print("  Warnings (treated as not crossed):")
+            for k in warning_keys:
+                if metric_gate_diagnostics[k] > 0:
+                    print(f"    - {k}: {metric_gate_diagnostics[k]}")
+        print(f"{'='*70}\n")
+
+    return incomplete, complete_runs, threshold_met_runs, metric_gate_diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -650,6 +921,30 @@ def print_complete_report(complete_runs: List[dict]) -> None:
     print("\nPrediction directories (completed runs):")
     for r in complete_runs:
         print(r["pred_dir"])
+
+
+def print_threshold_met_report(threshold_met_runs: List[dict]) -> None:
+    """Pretty-print runs excluded by metric threshold gate."""
+    if not threshold_met_runs:
+        print("No runs were excluded by metric threshold gate.")
+        return
+
+    fmt = "{:<12} {:<25} {:<14} {:<12} {:<10} {:<10} {:<10}"
+    print("Runs excluded from rerun because metric threshold was crossed:")
+    print(fmt.format("init_seed", "frozen_layer", "freeze_epoch", "max_streak", "points", "last_val", "last_ep"))
+    print("-" * 112)
+    for r in threshold_met_runs:
+        last_val = r.get("metric_last_value")
+        last_val_str = f"{last_val:.4f}" if isinstance(last_val, float) else "N/A"
+        print(fmt.format(
+            r["init_seed"],
+            r["frozen_layer"],
+            r["freeze_epoch"],
+            r.get("metric_max_streak", "N/A"),
+            r.get("metric_points", "N/A"),
+            last_val_str,
+            r.get("metric_last_epoch", "N/A"),
+        ))
 
 
 def export_manual_runs_csv(runs: List[dict], output_csv_path: str) -> None:
@@ -954,7 +1249,15 @@ def parse_args() -> argparse.Namespace:
                     help="Number of chunk checkpoints to retain.")
     p.add_argument("--auto_chain_afterok", action="store_true",
                     help="If set, each generated sbatch script re-submits itself with --dependency=afterok when target epoch is not reached.")
-
+    p.add_argument("--enable_metric_threshold_gate", action="store_true",
+                  help=("If set, only status='incomplete' runs are additionally checked for "
+                      "metric threshold crossing using stagewise pickles before generating reruns."))
+    p.add_argument("--metric_threshold", type=float, default=DEFAULT_METRIC_THRESHOLD,
+                  help=(f"Metric threshold for gate on {DEFAULT_METRIC_KEY} "
+                      f"(default: {DEFAULT_METRIC_THRESHOLD})."))
+    p.add_argument("--metric_patience", type=int, default=DEFAULT_METRIC_PATIENCE,
+                  help=("Consecutive values required at/above threshold to mark a run as complete "
+                      f"(default: {DEFAULT_METRIC_PATIENCE})."))
     return p.parse_args()
 
 
@@ -963,6 +1266,10 @@ def main():
 
     if args.output is None:
         args.output = f"resubmit_{args.exp_typ}_{args.hop}hop.sh"
+
+    if args.metric_patience <= 0:
+        print("ERROR: --metric_patience must be >= 1.")
+        sys.exit(2)
 
     if args.manual_runs:
         if args.complete_only:
@@ -996,19 +1303,24 @@ def main():
             )
     else:
         # ── Auto mode: scan filesystem for incomplete runs ──
-        incomplete, complete_runs = find_incomplete_runs(
+        incomplete, complete_runs, threshold_met_runs, _metric_gate_diagnostics = find_incomplete_runs(
             exp_typ=args.exp_typ,
             hop=args.hop,
             data_split_seed=args.data_split_seed,
             init_seeds=args.init_seeds,
             max_missing_epochs=args.max_missing_epochs,
             saved_models_root_override=args.saved_models_root_override,
+            enable_metric_threshold_gate=args.enable_metric_threshold_gate,
+            metric_threshold=args.metric_threshold,
+            metric_patience=args.metric_patience,
         )
         if args.export_manual_runs_csv:
             export_manual_runs_csv(incomplete, args.export_manual_runs_csv)
         if args.complete_only:
             print_complete_report(complete_runs)
         else:
+            if args.enable_metric_threshold_gate:
+                print_threshold_met_report(threshold_met_runs)
             print_report(incomplete)
             if args.dry_run:
                 print("\n[DRY RUN] Not writing sbatch scripts.")
