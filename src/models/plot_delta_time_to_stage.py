@@ -373,6 +373,7 @@ def plot_deltas_with_errorbars(
         #     ax.annotate(str(n), (x, y), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
 
     ax.axhline(y=epsilon, color="black", linestyle="--", label=f"Plasticity threshold ({epsilon})")
+    print(f"x_mode={x_mode}")
     
     stage_key_map = {
         "p_b_given_a": "P[B|A]",

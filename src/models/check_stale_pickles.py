@@ -3,25 +3,38 @@
 check_stale_pickles.py
 
 Batch-check frozen-layer pickle files for completeness. A pickle is "stale"
-if it has fewer metric values than expected (i.e., the training run that
-generated it was incomplete).
+if it has fewer metric values than expected AND the run did NOT converge
+(i.e., it was not legitimately early-stopped).
 
-Expected values = 999 - freeze_epoch  (predictions from epoch freeze_epoch+1 to 999)
+Expected values = 999 - freeze_epoch  (predictions from freeze_epoch+1 to 999)
+
+Early-stopping detection:
+  If the last `patience` values of the convergence metric are all >= threshold,
+  the run is considered converged and NOT stale — even if it has fewer epochs
+  than expected. This matches the logic in find_incomplete_runs.py.
 
 The freeze_epoch is parsed from the filename pattern:
     ..._freeze_epoch_{N}_...
 
 Usage:
     python src/models/check_stale_pickles.py <pickle_dir>
+    python src/models/check_stale_pickles.py <pickle_dir> --threshold 0.975 --patience 10
 
 Prints one stale pickle path per line to stdout.
 Prints summary info to stderr so stdout can be captured cleanly.
 """
+import argparse
 import os
 import re
 import sys
 import glob
 import pickle
+
+
+# Defaults matching find_incomplete_runs.py
+DEFAULT_METRIC_KEY = "predicted_exact_out_of_all_108"
+DEFAULT_THRESHOLD = 0.975
+DEFAULT_PATIENCE = 10
 
 
 def parse_freeze_epoch(filename: str) -> int | None:
@@ -30,12 +43,54 @@ def parse_freeze_epoch(filename: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python check_stale_pickles.py <pickle_dir>", file=sys.stderr)
-        sys.exit(1)
+def check_early_stopped(
+    seed_results: dict,
+    metric_key: str,
+    threshold: float,
+    patience: int,
+) -> bool:
+    """Check if a pickle's run converged (early-stopped legitimately).
 
-    pickle_dir = sys.argv[1]
+    Returns True if the last `patience` values of `metric_key` are all
+    >= `threshold` for at least one seed.
+    """
+    for seed_key, metrics in seed_results.items():
+        values = metrics.get(metric_key)
+        if values is None or not hasattr(values, "__len__"):
+            continue
+        if len(values) < patience:
+            continue
+        tail = values[-patience:]
+        if all(v >= threshold for v in tail):
+            return True
+    return False
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Check frozen-layer pickles for staleness."
+    )
+    parser.add_argument("pickle_dir", help="Directory containing pickle files.")
+    parser.add_argument(
+        "--metric_key",
+        default=DEFAULT_METRIC_KEY,
+        help=f"Metric key to check for convergence (default: {DEFAULT_METRIC_KEY}).",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_THRESHOLD,
+        help=f"Convergence threshold (default: {DEFAULT_THRESHOLD}).",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=DEFAULT_PATIENCE,
+        help=f"Number of consecutive epochs above threshold to consider converged (default: {DEFAULT_PATIENCE}).",
+    )
+    args = parser.parse_args()
+
+    pickle_dir = args.pickle_dir
     if not os.path.isdir(pickle_dir):
         print(f"Directory not found: {pickle_dir}", file=sys.stderr)
         sys.exit(1)
@@ -45,6 +100,7 @@ def main():
     total = 0
     stale = 0
     complete = 0
+    early_stopped = 0
 
     for pkl_path in pkl_files:
         filename = os.path.basename(pkl_path)
@@ -84,16 +140,36 @@ def main():
             continue
 
         if actual_values < expected_values:
-            print(pkl_path)  # stdout: stale path
-            stale += 1
-            print(
-                f"  Incomplete: {filename} — {actual_values}/{expected_values} values",
-                file=sys.stderr,
+            # Pickle is shorter than expected — check if it converged (early-stopped)
+            converged = check_early_stopped(
+                seed_results,
+                metric_key=args.metric_key,
+                threshold=args.threshold,
+                patience=args.patience,
             )
+            if converged:
+                early_stopped += 1
+                print(
+                    f"  Early-stopped (not stale): {filename} — "
+                    f"{actual_values}/{expected_values} values, "
+                    f"tail {args.patience} >= {args.threshold}",
+                    file=sys.stderr,
+                )
+            else:
+                print(pkl_path)  # stdout: stale path
+                stale += 1
+                print(
+                    f"  Incomplete: {filename} — {actual_values}/{expected_values} values",
+                    file=sys.stderr,
+                )
         else:
             complete += 1
 
-    print(f"\nChecked {total} frozen pickles: {complete} complete, {stale} stale", file=sys.stderr)
+    print(
+        f"\nChecked {total} frozen pickles: "
+        f"{complete} complete, {early_stopped} early-stopped, {stale} stale",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":
