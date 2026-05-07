@@ -46,6 +46,7 @@ python src/models/train.py \
 
 > **Note:** The `held_out` experiment type (exp_typ) is enabled by setting `--is_held_out_color_exp True`. For multi-GPU training, you can use `accelerate launch`.
 
+'src/data' contains the json files for the other tasks/hops.
 
 ### Weights & Biases (W&B) Sweeps
 
