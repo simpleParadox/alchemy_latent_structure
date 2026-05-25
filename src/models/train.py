@@ -25,6 +25,55 @@ import re
 from models import create_transformer_model, create_classifier_model, create_decoder_classifier_model, create_linear_model
 
 
+class FloatDict(float):
+    def __new__(cls, val, *args, **kwargs):
+        return super().__new__(cls, val)
+    
+    def __init__(self, val, metrics_dict=None):
+        super().__init__()
+        self._dict = metrics_dict or {}
+        
+    def keys(self):
+        return self._dict.keys()
+        
+    def values(self):
+        return self._dict.values()
+        
+    def items(self):
+        return self._dict.items()
+        
+    def __getitem__(self, key):
+        return self._dict[key]
+        
+    def get(self, key, default=None):
+        return self._dict.get(key, default)
+        
+    def __contains__(self, key):
+        return key in self._dict
+
+
+def log_continual_metrics_csv(csv_path, run_id, task_idx, hop_length, global_epoch, epoch_within_task, P_A, P_B_given_A, P_C_given_AB, cycle_idx=1):
+    import csv
+    file_exists = os.path.exists(csv_path)
+    os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
+    with open(csv_path, 'a', newline='') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(['run_id', 'cycle_idx', 'task_idx', 'hop_length', 'global_epoch', 'epoch_within_task', 'P_A', 'P_B_given_A', 'P_C_given_AB'])
+        writer.writerow([
+            run_id,
+            cycle_idx,
+            task_idx if task_idx is not None else "",
+            hop_length if hop_length is not None else "",
+            global_epoch,
+            epoch_within_task,
+            f"{P_A:.6f}" if isinstance(P_A, (int, float)) else P_A,
+            f"{P_B_given_A:.6f}" if isinstance(P_B_given_A, (int, float)) else P_B_given_A,
+            f"{P_C_given_AB:.6f}" if isinstance(P_C_given_AB, (int, float)) else P_C_given_AB
+        ])
+
+
+
 def _normalize_freeze_layers(freeze_layers: str | None) -> str:
     if freeze_layers is None:
         return ""
@@ -165,7 +214,7 @@ def worker_init_fn(worker_id):
     np.random.seed(worker_seed)
     torch.manual_seed(worker_seed)
 
-def parse_args():
+def build_parser():
     parser = argparse.ArgumentParser(description="Train Alchemy Transformer Model")
     parser.add_argument("--multi_label_reduction", type=str, default="mean", choices=["mean", "sum", 'none'],
                         help="Reduction method for multi-label classification: 'mean' or 'sum'. Default is 'mean'.")
@@ -207,6 +256,59 @@ def parse_args():
                         help="Random seed for reproducibility.")
     parser.add_argument("--save_dir", type=str, default="src/saved_models/",
                         help="Directory to save model checkpoints.")
+    parser.add_argument(
+        "--continual",
+        type=str,
+        default="False",
+        choices=["True", "False"],
+        help="Enables continual learning mode."
+    )
+    parser.add_argument(
+        "--task_sequence",
+        type=int,
+        nargs="+",
+        default=[2, 3, 4, 5],
+        help="The ordered list of hop lengths to train on sequentially."
+    )
+    parser.add_argument(
+        "--epochs_per_task",
+        type=int,
+        default=None,
+        help="If set, overrides --epochs and applies this budget per task in the sequence."
+    )
+    parser.add_argument(
+        "--reset_optimizer",
+        type=str,
+        default="True",
+        choices=["True", "False"],
+        help="Whether to reset the optimizer state at each task boundary."
+    )
+    parser.add_argument(
+        "--continual_mode",
+        type=str,
+        choices=["composition", "decomposition"],
+        default="composition",
+        help="Which experiment type to use in continual mode."
+    )
+    parser.add_argument(
+        "--save_continual_run_id",
+        type=str,
+        default=None,
+        help="Optional string ID for naming continual run output directories."
+    )
+    parser.add_argument(
+        "--log_continual_csv",
+        type=str,
+        default="True",
+        choices=["True", "False"],
+        help="Whether to log continual metrics to a flat CSV file."
+    )
+    parser.add_argument(
+        "--num_cycles",
+        type=int,
+        default=1,
+        help="Number of cycles to repeat the task sequence in continual mode."
+    )
     parser.add_argument("--filter_query_from_support", type=str, choices=["True", "False"],
                         help="Filter out query examples from support sets to prevent data leakage when support_steps=query_steps=1. Default=True", default=True)
     parser.add_argument("--wandb_project", type=str, default="alchemy-meta-learning",
@@ -328,7 +430,10 @@ def parse_args():
         choices=["True", "False"],
         help="If True, shard validation across GPUs (prepare val_dataloader) and reduce metrics across ranks."
     )
-    
+    return parser
+
+def parse_args():
+    parser = build_parser()
     return parser.parse_args()
 
 def calculate_accuracy_seq2seq(predictions, targets, pad_token_id, eos_token_id=None):
@@ -783,12 +888,13 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             elapsed_time = time.time() - start_time
             # Update tqdm description instead of printing
             pbar.set_description(f"Epoch {epoch_num+1} | Batch {batch_idx}/{len(dataloader)} | Loss: {loss.item():.4f} | Train Acc: {acc:.4f} | LR: {current_lr:.2e} | Time: {elapsed_time:.2f}s")
+            prefix = "continual/" if getattr(args, "continual", False) else "baseline/"
             wandb.log({
-                "train_batch_loss": loss.item(),
-                "train_batch_accuracy": acc,
-                "learning_rate": current_lr,
-                "epoch": epoch_num,
-                "batch_idx": batch_idx
+                f"{prefix}train_batch_loss": loss.item(),
+                f"{prefix}train_batch_accuracy": acc,
+                f"{prefix}learning_rate": current_lr,
+                f"{prefix}epoch": epoch_num,
+                f"{prefix}batch_idx": batch_idx
             })
             start_time = time.time()
         
@@ -804,7 +910,7 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
     return avg_epoch_loss, avg_epoch_accuracy
 
 
-def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_token_id, args, ablation_type=None):
+def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_token_id, args, ablation_type=None, task_idx=None, hop_length=None):
     if dataloader is None:
         return None, None, None if args.task_type == "seq2seq" else None
 
@@ -820,7 +926,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     eos_token_id = dataset.eos_token_id if hasattr(dataset, 'eos_token_id') else None
     
     # Only initialize prediction storage if needed
-    store_predictions = args.store_predictions
+    store_predictions = args.store_predictions or (args.task_type == "classification" and getattr(dataset, "stone_state_to_id", None) is not None)
     all_predictions = [] if store_predictions else None
     all_targets = [] if store_predictions else None
     all_encoder_inputs = [] if store_predictions else None
@@ -996,26 +1102,155 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             # del encoder_input_ids, loss
     
     # Save predictions and targets if requested and on main process
-    if store_predictions and accelerator.is_local_main_process:
+    if store_predictions and accelerator.is_local_main_process and args.store_predictions:
         _save_validation_predictions(
             all_predictions, all_targets, all_encoder_inputs,
             args, epoch_num
         )
     
-    # if store_predictions:
-    #     del all_predictions, all_targets, all_encoder_inputs
-    
-    # if torch.cuda.is_available():
-    #     torch.cuda.empty_cache()
-    
-    # gc.collect()
-    
     avg_epoch_loss = total_loss / len(dataloader)
     avg_epoch_accuracy = total_correct_preds / total_considered_items if total_considered_items > 0 else 0.0
     
+    val_metrics = {
+        "accuracy": avg_epoch_accuracy,
+    }
+
+    if args.task_type == "classification" and getattr(dataset, "stone_state_to_id", None) is not None:
+        try:
+            # Gather all predictions, targets, and inputs across ranks if sharded
+            if accelerator.num_processes > 1:
+                all_predictions_tensor = torch.cat(all_predictions, dim=0).to(accelerator.device)
+                all_targets_tensor = torch.cat(all_targets, dim=0).to(accelerator.device)
+                all_encoder_inputs_tensor = torch.cat(all_encoder_inputs, dim=0).to(accelerator.device)
+                
+                gathered_predictions = accelerator.gather(all_predictions_tensor).cpu().numpy()
+                gathered_targets = accelerator.gather(all_targets_tensor).cpu().numpy()
+                gathered_encoder_inputs = accelerator.gather(all_encoder_inputs_tensor).cpu().numpy()
+            else:
+                gathered_predictions = torch.cat(all_predictions, dim=0).cpu().numpy()
+                gathered_targets = torch.cat(all_targets, dim=0).cpu().numpy()
+                gathered_encoder_inputs = torch.cat(all_encoder_inputs, dim=0).cpu().numpy()
+                
+            dataset_len = len(dataset)
+            predictions_array = gathered_predictions[:dataset_len]
+            targets_array = gathered_targets[:dataset_len]
+            encoder_inputs_array = gathered_encoder_inputs[:dataset_len]
+            
+            # Now compute stage metrics on the main process
+            if accelerator.is_local_main_process:
+                # 1. Setup constants and vocabulary lookups
+                input_vocab = dataset.input_word2idx
+                feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
+                
+                # Determine experiment type
+                exp_typ = args.continual_mode if getattr(args, "continual", False) else getattr(args, "way", "composition")
+                
+                # Determine hop length
+                hop = hop_length if hop_length is not None else (getattr(args, "shop_length", 1) if exp_typ == "decomposition" else getattr(args, "qhop_length", 1))
+                
+                input_format = getattr(args, "input_format", "features")
+                stone_token_count = 4 if input_format == "features" else 1
+                hop_to_use = 1 if exp_typ == "decomposition" else hop
+                query_len = stone_token_count + hop_to_use
+                
+                # 2. Build support_to_query_mappings
+                support_to_query_mappings = {}
+                for i, sample in enumerate(dataset.data):
+                    enc_inps = sample['encoder_input_ids']
+                    tgt_cls_id = sample['target_class_id']
+                    support = enc_inps[:-query_len]
+                    support_key = tuple(support)
+                    
+                    if support_key not in support_to_query_mappings:
+                        support_to_query_mappings[support_key] = {}
+                        
+                    query = enc_inps[-query_len:]
+                    query_potion = query[-1]
+                    
+                    if exp_typ == 'composition':
+                        query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query[-hop_to_use:]])
+                        query_potion_key = query_potion_str
+                    else:
+                        query_potion_key = feature_to_id_vocab[query_potion]
+                        
+                    if query_potion_key not in support_to_query_mappings[support_key]:
+                        support_to_query_mappings[support_key][query_potion_key] = [tgt_cls_id]
+                    else:
+                        support_to_query_mappings[support_key][query_potion_key].append(tgt_cls_id)
+                
+                # 3. Analyze each sample prediction
+                predicted_in_context_count = 0
+                correct_half_chemistry_count = 0
+                within_class_correct = 0
+                total = 0
+                
+                for i in range(len(predictions_array)):
+                    sample = dataset.data[i]
+                    enc_inps = sample['encoder_input_ids']
+                    tgt_cls_id = sample['target_class_id']
+                    predicted_class_id = predictions_array[i]
+                    
+                    support = enc_inps[:-query_len]
+                    support_key = tuple(support)
+                    
+                    query = enc_inps[-query_len:]
+                    query_potion = query[-1]
+                    
+                    potions_for_support = list(support_to_query_mappings[support_key].keys())
+                    
+                    if exp_typ == 'composition':
+                        query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query[-hop_to_use:]])
+                        query_potion_key = query_potion_str
+                    else:
+                        query_potion_key = feature_to_id_vocab[query_potion]
+                        
+                    correct_half_chemistry = support_to_query_mappings[support_key][query_potion_key]
+                    
+                    if exp_typ == 'decomposition':
+                        all_stones_in_support = set()
+                        for potion in potions_for_support:
+                            all_stones_in_support.update(support_to_query_mappings[support_key][potion])
+                        combined_set = all_stones_in_support
+                    else:
+                        if len(potions_for_support) >= 2:
+                            other_half_key = potions_for_support[0] if potions_for_support[1] == query_potion_key else potions_for_support[1]
+                            other_half_chemistry = support_to_query_mappings[support_key][other_half_key]
+                        else:
+                            other_half_chemistry = []
+                        combined_set = set(correct_half_chemistry + other_half_chemistry)
+                        
+                    if predicted_class_id in combined_set:
+                        predicted_in_context_count += 1
+                        
+                        if predicted_class_id in correct_half_chemistry:
+                            correct_half_chemistry_count += 1
+                            
+                            if predicted_class_id == tgt_cls_id:
+                                within_class_correct += 1
+                                
+                    total += 1
+                
+                P_A = predicted_in_context_count / total if total > 0 else 0.0
+                P_B_given_A = correct_half_chemistry_count / predicted_in_context_count if predicted_in_context_count > 0 else 0.0
+                P_C_given_AB = within_class_correct / correct_half_chemistry_count if correct_half_chemistry_count > 0 else 0.0
+                
+                val_metrics["P_A"] = P_A
+                val_metrics["P_B_given_A"] = P_B_given_A
+                val_metrics["P_C_given_AB"] = P_C_given_AB
+                
+                print(f"[Online Evaluation] P[A]: {P_A:.4f} | P[B|A]: {P_B_given_A:.4f} | P[C|A∩B]: {P_C_given_AB:.4f}")
+        except Exception as e:
+            if accelerator.is_local_main_process:
+                print(f"WARNING: Error during online stage metrics computation: {e}")
+                import traceback
+                traceback.print_exc()
+
+    if store_predictions and accelerator.is_local_main_process:
+        val_metrics["predictions"] = np.concatenate([p.numpy() for p in all_predictions], axis=0).tolist() if all_predictions else []
+
     if args.task_type == "seq2seq":
-        return avg_epoch_loss, avg_epoch_accuracy, all_accs
-    return avg_epoch_loss, avg_epoch_accuracy
+        return avg_epoch_loss, FloatDict(avg_epoch_accuracy, val_metrics), all_accs
+    return avg_epoch_loss, FloatDict(avg_epoch_accuracy, val_metrics)
 
 def _save_validation_predictions(all_predictions, all_targets, all_encoder_inputs, args, epoch_num):
     """Helper function to save predictions to disk."""
@@ -1131,6 +1366,9 @@ def main():
     args.resume_from_checkpoint = str(args.resume_from_checkpoint).lower() == "true"
     args.multi_gpu_validation = str(args.multi_gpu_validation).lower() == "true"
     args.enable_chunked_resume = str(args.enable_chunked_resume).lower() == "true"
+    args.continual = str(getattr(args, "continual", "False")).lower() == "true"
+    args.reset_optimizer = str(getattr(args, "reset_optimizer", "True")).lower() == "true"
+    args.log_continual_csv = str(getattr(args, "log_continual_csv", "True")).lower() == "true"
 
     start_epoch = 0
     best_val_loss = float('inf')
@@ -1302,6 +1540,11 @@ def main():
     args.train_data_path = os.path.join(base_path, args.train_data_path)
     args.val_data_path = os.path.join(base_path, args.val_data_path)
     args.save_dir = os.path.join(base_path, args.save_dir)
+    prefix_folder = "continual" if args.continual else "baseline"
+    if "src/saved_models/" in args.save_dir:
+        args.save_dir = args.save_dir.replace("src/saved_models/", f"src/saved_models/{prefix_folder}/")
+    else:
+        args.save_dir = os.path.join(args.save_dir, prefix_folder)
     if args.is_held_out_color_exp:
         args.save_dir = args.save_dir + args.preprocessed_dir.split('/')[-1] +"_new"
     print("Updated train data path: ", args.train_data_path)
@@ -1415,6 +1658,12 @@ def main():
     print("Filter query from support set to:", args.filter_query_from_support)
     print("Store predictions:", args.store_predictions)
     print("Use preprocessed data:", args.use_preprocessed)  # Add this line
+    print("Continual mode enabled:", args.continual)
+    print("Continual task sequence:", args.task_sequence)
+    print("Epochs per task:", args.epochs_per_task)
+    print("Reset optimizer at boundary:", args.reset_optimizer)
+    print("Continual mode type:", args.continual_mode)
+    print("Save continual run ID:", args.save_continual_run_id)
     
     # Update paths to be absolute
     args.preprocessed_dir = os.path.join(base_path, args.preprocessed_dir)  # Add this line
@@ -1685,7 +1934,8 @@ def main():
             # For cosine annealing with restarts, T_0 is the number of epochs
             t_0 = args.t0
             if accelerator.is_local_main_process:
-                wandb.log({"T_0": t_0})
+                prefix = "continual/" if getattr(args, "continual", False) else "baseline/"
+                wandb.log({f"{prefix}T_0": t_0})
             print(f"Using CosineAnnealingWarmRestarts with T_0={t_0} (called per batch but will restart after every T_0 epochs)")
             scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=t_0, eta_min=args.eta_min)
             print(f"Using CosineAnnealingWarmRestarts with T_0={t_0}")
@@ -2005,6 +2255,36 @@ def main():
                 epoch_log["val_epoch_loss"] = val_loss
                 epoch_log["val_epoch_accuracy"] = val_acc
                 current_val_acc_for_stop = float(val_acc)
+                
+                if isinstance(val_acc, FloatDict) or hasattr(val_acc, "get"):
+                    if "P_A" in val_acc:
+                        epoch_log["P_A"] = val_acc["P_A"]
+                        epoch_log["P_B_given_A"] = val_acc["P_B_given_A"]
+                        epoch_log["P_C_given_AB"] = val_acc["P_C_given_AB"]
+                        
+                        run_id = "unknown"
+                        if wandb.run is not None:
+                            run_id = wandb.run.id
+                        elif getattr(args, "wandb_run_name", None) is not None:
+                            run_id = args.wandb_run_name
+                        
+                        hop_val = getattr(args, "shop_length", 1) if getattr(args, "way", "composition") == "decomposition" else getattr(args, "qhop_length", 1)
+                        
+                        # Log to CSV in current working directory and save_dir
+                        if getattr(args, "log_continual_csv", True):
+                            for csv_dir in [".", getattr(args, "save_dir", ".")]:
+                                if csv_dir:
+                                    log_continual_metrics_csv(
+                                        os.path.join(csv_dir, "continual_metrics.csv"),
+                                        run_id=run_id,
+                                        task_idx=None,
+                                        hop_length=hop_val,
+                                        global_epoch=epoch + 1,
+                                        epoch_within_task=epoch + 1,
+                                        P_A=val_acc["P_A"],
+                                        P_B_given_A=val_acc["P_B_given_A"],
+                                        P_C_given_AB=val_acc["P_C_given_AB"]
+                                    )
 
                 if args.enable_chunked_resume and args.resume_from_checkpoint and _normalize_freeze_layers(args.freeze_layers):
                     if current_val_acc_for_stop >= float(args.auto_stop_val_acc_threshold):
@@ -2053,7 +2333,15 @@ def main():
                     'loss': val_loss,  # or train_loss
                     'args': args,
                     'src_vocab_word2idx': full_dataset.word2idx,
-                    'src_vocab_idx2word': full_dataset.idx2word
+                    'src_vocab_idx2word': full_dataset.idx2word,
+                    'continual_meta': {
+                        'run_type': 'continual' if args.continual else 'baseline',
+                        'cycle_idx': 1,
+                        'task_idx': getattr(args, "task_idx", None),
+                        'hop_length': getattr(args, "shop_length", 1) if getattr(args, "way", "composition") == "decomposition" else getattr(args, "qhop_length", 1),
+                        'epoch_within_task': epoch,
+                        'global_epoch': epoch
+                    }
                 }
                 if args.task_type == "seq2seq" or args.task_type == "seq2seq_stone_state":
                     checkpoint['tgt_vocab_word2idx'] = full_dataset.word2idx 
@@ -2110,7 +2398,15 @@ def main():
                     'loss': train_loss,
                     'args': args,
                     'src_vocab_word2idx': full_dataset.word2idx,
-                    'src_vocab_idx2word': full_dataset.idx2word
+                    'src_vocab_idx2word': full_dataset.idx2word,
+                    'continual_meta': {
+                        'run_type': 'continual' if args.continual else 'baseline',
+                        'cycle_idx': 1,
+                        'task_idx': getattr(args, "task_idx", None),
+                        'hop_length': getattr(args, "shop_length", 1) if getattr(args, "way", "composition") == "decomposition" else getattr(args, "qhop_length", 1),
+                        'epoch_within_task': epoch,
+                        'global_epoch': epoch
+                    }
                 }
                 if args.task_type == "seq2seq" or args.task_type == "seq2seq_stone_state":
                     checkpoint['tgt_vocab_word2idx'] = full_dataset.word2idx
@@ -2155,7 +2451,13 @@ def main():
         if accelerator.is_local_main_process:
             current_lr_end_epoch = scheduler.get_last_lr()[0] if scheduler else optimizer.param_groups[0]['lr']
             epoch_log["learning_rate_end_epoch"] = current_lr_end_epoch
-            wandb.log(epoch_log)
+            
+            # Apply prefixing
+            prefix = "continual/" if args.continual else "baseline/"
+            prefixed_epoch_log = {}
+            for k, v in epoch_log.items():
+                prefixed_epoch_log[f"{prefix}{k}"] = v
+            wandb.log(prefixed_epoch_log)
 
         if accelerator.is_local_main_process and torch.cuda.is_available():
             allocated = torch.cuda.memory_allocated() / 1024**3
