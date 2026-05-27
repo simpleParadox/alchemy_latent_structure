@@ -106,3 +106,4 @@ src/models/watchdog_sbatch_infer.py
 src/models/find_and_sync_remote_frozen_runs.py
 clean_agent.py
 src/models/__pycache__/
+*.html
