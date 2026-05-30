@@ -399,6 +399,8 @@ def build_parser():
                         help="Stop auto-chaining when validation accuracy stays >= this threshold for a patience window.")
     parser.add_argument("--auto_stop_val_acc_patience", type=int, default=10,
                         help="Patience window (epochs) for --auto_stop_val_acc_threshold before stopping auto-chaining.")
+    parser.add_argument("--enable_auto_stop", type=str, default="True", choices=["True", "False"],
+                        help="Enable convergence-based early stopping / auto-chaining termination.")
     
     parser.add_argument("--freeze_layers", type=str, default=None,
                         help="Comma-separated list of layer names to freeze (e.g., 'transformer_layer_0,transformer_layer_1').")
@@ -910,6 +912,32 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
     return avg_epoch_loss, avg_epoch_accuracy
 
 
+def pad_and_cat_tensors(tensors, pad_value=0):
+    """
+    Concatenates a list of tensors along dim=0. If the tensors are 2D (e.g. sequence data)
+    and have different sequence lengths (dim 1), pads them to the maximum sequence length on the RIGHT first.
+    """
+    if not tensors:
+        return torch.tensor([])
+        
+    # Check if tensors have a sequence dimension (are 2D)
+    if tensors[0].dim() > 1:
+        max_len = max(t.size(1) for t in tensors)
+        padded_tensors = []
+        for t in tensors:
+            if t.size(1) < max_len:
+                # F.pad expects padding as (padding_left, padding_right) for 2D tensors
+                # Right padding means padding_left = 0, padding_right = max_len - t.size(1)
+                padding = (0, max_len - t.size(1))
+                padded_tensors.append(torch.nn.functional.pad(t, padding, value=pad_value))
+            else:
+                padded_tensors.append(t)
+        return torch.cat(padded_tensors, dim=0)
+    else:
+        # 1D tensors (e.g., classification labels) can be directly concatenated
+        return torch.cat(tensors, dim=0)
+
+
 def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_token_id, args, ablation_type=None, task_idx=None, hop_length=None):
     if dataloader is None:
         return None, None, None if args.task_type == "seq2seq" else None
@@ -1105,7 +1133,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     if store_predictions and accelerator.is_local_main_process and args.store_predictions:
         _save_validation_predictions(
             all_predictions, all_targets, all_encoder_inputs,
-            args, epoch_num
+            args, epoch_num, pad_token_id
         )
     
     avg_epoch_loss = total_loss / len(dataloader)
@@ -1118,18 +1146,18 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     if args.task_type == "classification" and getattr(dataset, "stone_state_to_id", None) is not None:
         try:
             # Gather all predictions, targets, and inputs across ranks if sharded
-            if accelerator.num_processes > 1:
-                all_predictions_tensor = torch.cat(all_predictions, dim=0).to(accelerator.device)
-                all_targets_tensor = torch.cat(all_targets, dim=0).to(accelerator.device)
-                all_encoder_inputs_tensor = torch.cat(all_encoder_inputs, dim=0).to(accelerator.device)
+            if getattr(args, "multi_gpu_validation", "False") == "True" and accelerator.num_processes > 1: # NOTE: This checks if the condition that the attribute is set to False, is True. It does not check if the attribute itself is set to True.
+                all_predictions_tensor = pad_and_cat_tensors(all_predictions, pad_value=pad_token_id).to(accelerator.device)
+                all_targets_tensor = pad_and_cat_tensors(all_targets, pad_value=pad_token_id).to(accelerator.device)
+                all_encoder_inputs_tensor = pad_and_cat_tensors(all_encoder_inputs, pad_value=pad_token_id).to(accelerator.device)
                 
                 gathered_predictions = accelerator.gather(all_predictions_tensor).cpu().numpy()
                 gathered_targets = accelerator.gather(all_targets_tensor).cpu().numpy()
                 gathered_encoder_inputs = accelerator.gather(all_encoder_inputs_tensor).cpu().numpy()
             else:
-                gathered_predictions = torch.cat(all_predictions, dim=0).cpu().numpy()
-                gathered_targets = torch.cat(all_targets, dim=0).cpu().numpy()
-                gathered_encoder_inputs = torch.cat(all_encoder_inputs, dim=0).cpu().numpy()
+                gathered_predictions = pad_and_cat_tensors(all_predictions, pad_value=pad_token_id).cpu().numpy()
+                gathered_targets = pad_and_cat_tensors(all_targets, pad_value=pad_token_id).cpu().numpy()
+                gathered_encoder_inputs = pad_and_cat_tensors(all_encoder_inputs, pad_value=pad_token_id).cpu().numpy()
                 
             dataset_len = len(dataset)
             predictions_array = gathered_predictions[:dataset_len]
@@ -1145,28 +1173,37 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 # Determine experiment type
                 exp_typ = args.continual_mode if getattr(args, "continual", False) else getattr(args, "way", "composition")
                 
-                # Determine hop length
-                hop = hop_length if hop_length is not None else (getattr(args, "shop_length", 1) if exp_typ == "decomposition" else getattr(args, "qhop_length", 1))
-                
                 input_format = getattr(args, "input_format", "features")
                 stone_token_count = 4 if input_format == "features" else 1
-                hop_to_use = 1 if exp_typ == "decomposition" else hop
-                query_len = stone_token_count + hop_to_use
+                item_sep_id = dataset.item_sep_token_id
                 
-                # 2. Build support_to_query_mappings
+                # 2. Build support_to_query_mappings dynamically
                 support_to_query_mappings = {}
                 for i, sample in enumerate(dataset.data):
                     enc_inps = sample['encoder_input_ids']
                     tgt_cls_id = sample['target_class_id']
-                    support = enc_inps[:-query_len]
-                    support_key = tuple(support)
                     
+                    # Dynamically find where query begins (after the last item_sep_token_id)
+                    # Convert to list if it is a numpy array or torch tensor
+                    enc_inps_list = enc_inps.tolist() if hasattr(enc_inps, "tolist") else list(enc_inps)
+                    try:
+                        # Find index of last item_sep_id in sequence
+                        last_sep_idx = len(enc_inps_list) - 1 - enc_inps_list[::-1].index(item_sep_id)
+                        query = enc_inps_list[last_sep_idx + 1:]
+                        support = enc_inps_list[:last_sep_idx]
+                    except ValueError:
+                        # No separator found (empty support set)
+                        query = enc_inps_list
+                        support = []
+                    
+                    # Dynamic hop calculation for this sample
+                    hop_to_use = 1 if exp_typ == "decomposition" else (len(query) - stone_token_count)
+                    
+                    support_key = tuple(support)
                     if support_key not in support_to_query_mappings:
                         support_to_query_mappings[support_key] = {}
                         
-                    query = enc_inps[-query_len:]
                     query_potion = query[-1]
-                    
                     if exp_typ == 'composition':
                         query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query[-hop_to_use:]])
                         query_potion_key = query_potion_str
@@ -1190,14 +1227,20 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                     tgt_cls_id = sample['target_class_id']
                     predicted_class_id = predictions_array[i]
                     
-                    support = enc_inps[:-query_len]
+                    enc_inps_list = enc_inps.tolist() if hasattr(enc_inps, "tolist") else list(enc_inps)
+                    try:
+                        last_sep_idx = len(enc_inps_list) - 1 - enc_inps_list[::-1].index(item_sep_id)
+                        query = enc_inps_list[last_sep_idx + 1:]
+                        support = enc_inps_list[:last_sep_idx]
+                    except ValueError:
+                        query = enc_inps_list
+                        support = []
+                        
+                    hop_to_use = 1 if exp_typ == "decomposition" else (len(query) - stone_token_count)
                     support_key = tuple(support)
-                    
-                    query = enc_inps[-query_len:]
-                    query_potion = query[-1]
-                    
                     potions_for_support = list(support_to_query_mappings[support_key].keys())
                     
+                    query_potion = query[-1]
                     if exp_typ == 'composition':
                         query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query[-hop_to_use:]])
                         query_potion_key = query_potion_str
@@ -1252,7 +1295,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
         return avg_epoch_loss, FloatDict(avg_epoch_accuracy, val_metrics), all_accs
     return avg_epoch_loss, FloatDict(avg_epoch_accuracy, val_metrics)
 
-def _save_validation_predictions(all_predictions, all_targets, all_encoder_inputs, args, epoch_num):
+def _save_validation_predictions(all_predictions, all_targets, all_encoder_inputs, args, epoch_num, pad_token_id):
     """Helper function to save predictions to disk."""
     predictions_dir = os.path.join(args.save_dir, "predictions")
     if not os.path.exists(predictions_dir):
@@ -1268,8 +1311,8 @@ def _save_validation_predictions(all_predictions, all_targets, all_encoder_input
     input_path = os.path.join(predictions_dir, input_filename)
     
     # Convert lists to numpy arrays
-    predictions_array = np.concatenate([p.numpy() for p in all_predictions], axis=0) if all_predictions else np.array([])
-    targets_array = np.concatenate([t.numpy() for t in all_targets], axis=0) if all_targets else np.array([])
+    predictions_array = pad_and_cat_tensors(all_predictions, pad_value=pad_token_id).numpy() if all_predictions else np.array([])
+    targets_array = pad_and_cat_tensors(all_targets, pad_value=pad_token_id).numpy() if all_targets else np.array([])
     
     print(f"Shape of predictions array: {predictions_array.shape}")
     print(f"Shape of targets array: {targets_array.shape}")
@@ -1283,7 +1326,7 @@ def _save_validation_predictions(all_predictions, all_targets, all_encoder_input
     if all_encoder_inputs:
         if epoch_str == "epoch_001":
             # print(f"Shape of inputs array: {all_encoder_inputs[0].shape}")
-            inputs_array = np.concatenate([i.numpy() for i in all_encoder_inputs], axis=0)
+            inputs_array = pad_and_cat_tensors(all_encoder_inputs, pad_value=pad_token_id).numpy()
             np.savez_compressed(input_path, inputs=inputs_array)
             print(f"Saved inputs to: {input_path}")
     
@@ -1563,16 +1606,23 @@ def main():
     # Extract the 'shop' and 'qhop' length from the args.train_data_path.
     # the train_data_path is expected to be in the format:
     # src/data/generated_data/decompositional_chemistry_samples_167424_80_unique_stones_train_shop_2_qhop_1.json'
-    match = re.search(r'shop_(\d+)_qhop_(\d+)', args.train_data_path)
+    match = re.search(r'shop_(\d+)_qhop_(\d+(?:_\d+)*)', args.train_data_path)
     if match:
         args.shop_length = int(match.group(1))
-        args.qhop_length = int(match.group(2))
-        if args.shop_length < args.qhop_length:
+        qhop_str = match.group(2)
+        if '_' in qhop_str:
+            # Combined dataset (e.g., 2_3_4_5)
+            hops = [int(h) for h in qhop_str.split('_')]
+            args.qhop_length = max(hops)
             args.way = 'composition'
-        elif args.shop_length > args.qhop_length:
-            args.way = 'decomposition'
         else:
-            args.way = 'equal'
+            args.qhop_length = int(qhop_str)
+            if args.shop_length < args.qhop_length:
+                args.way = 'composition'
+            elif args.shop_length > args.qhop_length:
+                args.way = 'decomposition'
+            else:
+                args.way = 'equal'
         
 
     
@@ -2058,7 +2108,7 @@ def main():
     # Extract support and query hop values from train_data_path
     
     # Parse hop values from the filename
-    hop_pattern = r'shop_(\d+)_qhop_(\d+)'
+    hop_pattern = r'shop_(\d+)_qhop_(\d+(?:_\d+)*)'
     match = re.search(hop_pattern, args.train_data_path)
     if match:
         support_hop = match.group(1)
@@ -2293,7 +2343,7 @@ def main():
                         val_acc_streak = 0
                     epoch_log["val_acc_ge_threshold_streak"] = int(val_acc_streak)
 
-                    if val_acc_streak >= int(args.auto_stop_val_acc_patience):
+                    if getattr(args, "enable_auto_stop", "True") == "True" and val_acc_streak >= int(args.auto_stop_val_acc_patience):
                         convergence_stop_triggered_local = True
                         active_chunk_state_dir = os.path.join(args.save_dir, "chunk_state")
                         _write_autochain_stop_marker(
