@@ -42,55 +42,7 @@ from models import (
 
 def parse_continual_args():
     parser = build_parser()
-    
-    # Add new command-line arguments for continual learning
-    parser.add_argument(
-        "--continual",
-        type=str,
-        default="True",
-        choices=["True", "False"],
-        help="Enables continual learning mode."
-    )
-    parser.add_argument(
-        "--task_sequence",
-        type=int,
-        nargs="+",
-        default=[2, 3, 4, 5],
-        help="The ordered list of hop lengths to train on sequentially."
-    )
-    parser.add_argument(
-        "--epochs_per_task",
-        type=int,
-        default=None,
-        help="If set, overrides --epochs and applies this budget per task in the sequence."
-    )
-    parser.add_argument(
-        "--reset_optimizer",
-        type=str,
-        default="True",
-        choices=["True", "False"],
-        help="Whether to reset the optimizer state at each task boundary."
-    )
-    parser.add_argument(
-        "--continual_mode",
-        type=str,
-        choices=["composition", "decomposition"],
-        default="composition",
-        help="Which experiment type to use in continual mode."
-    )
-    parser.add_argument(
-        "--save_continual_run_id",
-        type=str,
-        default=None,
-        help="Optional string ID for naming continual run output directories."
-    )
-    parser.add_argument(
-        "--num_cycles",
-        type=int,
-        default=1,
-        help="Number of cycles to repeat the task sequence in continual mode."
-    )
-    
+    parser.set_defaults(continual="True")
     return parser.parse_args()
 
 def main():
@@ -108,6 +60,8 @@ def main():
     args.use_scheduler = str(args.use_scheduler) == 'True'
     args.save_checkpoints = str(args.save_checkpoints) == 'True'
     args.log_continual_csv = str(args.log_continual_csv) == 'True'
+    args.enable_auto_stop = str(args.enable_auto_stop) == 'True'
+    args.use_truncation = str(args.use_truncation) == 'True'
     
     # Multi-GPU / Precision Setup
     if args.fp16 == 'True':
@@ -292,11 +246,41 @@ def main():
                 model_architecture=args.model_architecture
             )
             
+            pad_token_id = train_dataset.pad_token_id
+            eos_token_id = train_dataset.eos_token_id if hasattr(train_dataset, 'eos_token_id') else None
+            sos_token_id = train_dataset.sos_token_id if hasattr(train_dataset, 'sos_token_id') else None
+
+            custom_collate_train = partial(
+                collate_fn,
+                pad_token_id=pad_token_id,
+                eos_token_id=eos_token_id,
+                task_type=args.task_type,
+                model_architecture=args.model_architecture,
+                sos_token_id=sos_token_id,
+                prediction_type=args.prediction_type,
+                max_seq_len=args.max_seq_len,
+                truncate=args.use_truncation,
+                padding_side=args.padding_side
+            )
+
+            custom_collate_val = partial(
+                collate_fn,
+                pad_token_id=pad_token_id,
+                eos_token_id=eos_token_id,
+                task_type=args.task_type,
+                model_architecture=args.model_architecture,
+                sos_token_id=sos_token_id,
+                prediction_type=args.prediction_type,
+                max_seq_len=args.max_seq_len,
+                truncate=args.use_truncation,
+                padding_side=args.padding_side
+            )
+
             train_dataloader = DataLoader(
                 train_dataset,
                 batch_size=args.batch_size,
                 shuffle=True,
-                collate_fn=collate_fn,
+                collate_fn=custom_collate_train,
                 num_workers=args.num_workers,
                 worker_init_fn=worker_init_fn
             )
@@ -305,39 +289,62 @@ def main():
                 val_dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
-                collate_fn=collate_fn,
+                collate_fn=custom_collate_val,
                 num_workers=args.num_workers,
                 worker_init_fn=worker_init_fn
             )
             
-            pad_token_id = train_dataset.pad_token_id
+            # Reset streak counter for early stopping
+            val_acc_streak = 0
             
             # 2. Build model if not built (built once at sequence start)
             if model is None:
+                if args.override_num_classes is not None:
+                    num_classes = args.override_num_classes
+                elif hasattr(train_dataset, "stone_state_to_id") and train_dataset.stone_state_to_id is not None:
+                    num_classes = len(train_dataset.stone_state_to_id)
+                else:
+                    num_classes = 108
+
                 if args.model_architecture == "encoder":
                     model = create_classifier_model(
-                        model_size=args.model_size,
-                        vocab_size=len(train_dataset.word2idx),
-                        num_classes=train_dataset.num_classes,
-                        task_type=args.task_type,
-                        pooling_strategy=args.pooling_strategy,
-                        use_flash_attention=(args.use_flash_attention == 'True' or args.use_flash_attention is True),
-                        include_nonlinearity=(args.include_nonlinearity == 'True' or args.include_nonlinearity is True)
+                        config_name=args.model_size,
+                        src_vocab_size=len(train_dataset.word2idx),
+                        num_classes=num_classes,
+                        device=accelerator.device,
+                        max_len=args.max_seq_len,
+                        io_sep_token_id=train_dataset.io_sep_token_id if hasattr(train_dataset, 'io_sep_token_id') else None,
+                        item_sep_token_id=train_dataset.item_sep_token_id if hasattr(train_dataset, 'item_sep_token_id') else None,
+                        pooling_strategy=args.pooling_strategy
                     )
                 elif args.model_architecture == "decoder":
                     model = create_decoder_classifier_model(
-                        model_size=args.model_size,
-                        vocab_size=len(train_dataset.word2idx),
-                        num_classes=train_dataset.num_classes,
-                        task_type=args.task_type,
+                        config_name=args.model_size,
+                        src_vocab_size=len(train_dataset.word2idx),
+                        num_classes=num_classes,
+                        device=accelerator.device,
+                        max_len=args.max_seq_len,
+                        prediction_type=args.prediction_type,
+                        padding_side=args.padding_side,
                         use_flash_attention=(args.use_flash_attention == 'True' or args.use_flash_attention is True),
-                        include_nonlinearity=(args.include_nonlinearity == 'True' or args.include_nonlinearity is True)
+                        batch_size=args.batch_size,
+                        vocab=train_dataset.input_word2idx,
+                        use_pre_norm=(args.use_pre_norm == 'True' or args.use_pre_norm is True)
                     )
                 elif args.model_architecture == "linear":
                     model = create_linear_model(
-                        vocab_size=len(train_dataset.word2idx),
-                        num_classes=train_dataset.num_classes,
-                        task_type=args.task_type,
+                        config_name=args.model_size,
+                        input_size=len(train_dataset.word2idx),
+                        num_classes=num_classes,
+                        device=accelerator.device,
+                        max_len=args.max_seq_len,
+                        io_sep_token_id=train_dataset.io_sep_token_id if hasattr(train_dataset, 'io_sep_token_id') else None,
+                        item_sep_token_id=train_dataset.item_sep_token_id if hasattr(train_dataset, 'item_sep_token_id') else None,
+                        pooling_strategy=args.pooling_strategy,
+                        batch_size=args.batch_size,
+                        use_flash_attention=(args.use_flash_attention == 'True' or args.use_flash_attention is True),
+                        padding_side=args.padding_side,
+                        include_nonlinearity=(args.include_nonlinearity == 'True' or args.include_nonlinearity is True),
                         flatten_input=(args.flatten_linear_model_input == 'True' or args.flatten_linear_model_input is True)
                     )
                 else:
@@ -509,6 +516,29 @@ def main():
                         
                 torch.cuda.empty_cache()
                 gc.collect()
+                
+                # Check early stopping convergence
+                convergence_stop_triggered_local = False
+                if args.enable_auto_stop:
+                    val_acc = val_metrics.get("accuracy", 0.0) if val_metrics is not None else 0.0
+                    if val_acc >= float(args.auto_stop_val_acc_threshold):
+                        val_acc_streak += 1
+                    else:
+                        val_acc_streak = 0
+                    
+                    if val_acc_streak >= int(args.auto_stop_val_acc_patience):
+                        convergence_stop_triggered_local = True
+
+                stop_flag = torch.tensor(
+                    1 if convergence_stop_triggered_local else 0,
+                    device=accelerator.device,
+                    dtype=torch.int32,
+                )
+                stop_flag = accelerator.reduce(stop_flag, reduction="max")
+                if int(stop_flag.item()) > 0:
+                    if accelerator.is_local_main_process:
+                        print(f"Stopping current task early due to val-accuracy convergence (streak={val_acc_streak}).")
+                    break
                 
             # End of task checkpointing
             if accelerator.is_local_main_process:
