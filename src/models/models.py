@@ -344,7 +344,7 @@ class StoneStateDecoderClassifier(nn.Module):
                  src_vocab_size: int, num_classes: int,
                  dim_feedforward: int = 512, dropout: float = 0.1,
                 max_len: int = 5000, prediction_type=None, padding_side: str = "right", use_flash_attention: bool = False,
-                batch_size: int = 32, vocab: dict = None): 
+                batch_size: int = 32, vocab: dict = None, use_pre_norm: bool = False): 
         super(StoneStateDecoderClassifier, self).__init__()
         self.emb_size = emb_size
         self.architecture = "decoder"  # Add architecture attribute
@@ -352,11 +352,13 @@ class StoneStateDecoderClassifier(nn.Module):
         self.padding_side = padding_side  # 'left' or 'right' - decoder models typically use left padding but could be right padded if predicting one token.
         self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_len)
+        print("Pre-norm:", use_pre_norm)
+        print("Pre-norm argument type:", type(use_pre_norm))
 
         # Use TransformerEncoderLayer for a more efficient decoder-only implementation
         encoder_layer = nn.TransformerEncoderLayer(d_model=emb_size, nhead=nhead,
                                                    dim_feedforward=dim_feedforward, dropout=dropout,
-                                                   batch_first=True)
+                                                   batch_first=True, norm_first=use_pre_norm) # batch_first=True is crucial, norm_first controls pre-norm vs post-norm
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_decoder_layers)
 
         self.classification_head = nn.Linear(emb_size, num_classes)
@@ -910,7 +912,7 @@ def create_classifier_model(config_name: str, src_vocab_size: int, num_classes: 
 
 def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_classes: int, device="cpu", max_len: int = 2048, 
                                     prediction_type=None, padding_side: str = "left", use_flash_attention: bool = False, batch_size: int = 32,
-                                    vocab: dict = None):
+                                    vocab: dict = None, use_pre_norm: bool = False):
     """
     Creates a StoneStateDecoderClassifier model based on a configuration name.
     
@@ -971,7 +973,8 @@ def create_decoder_classifier_model(config_name: str, src_vocab_size: int, num_c
         padding_side=padding_side,
         use_flash_attention=use_flash_attention,
         batch_size=batch_size,
-        vocab=vocab
+        vocab=vocab,
+        use_pre_norm=use_pre_norm
     )
     
     model.to(device)

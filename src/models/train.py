@@ -249,8 +249,6 @@ def build_parser():
     parser.add_argument("--optimizer", type=str, 
                         default='adamw', choices=['adam', 'adamw', 'rmsprop', 'adagrad'],
                         help="Optimizer to use: 'adam', 'adamw', 'rmsprop', or 'adafactor'. Default is 'adamw'.")
-    # NOTE: pytorch 2.4 does not have Adafactor implemented. So not adding it here.
-
 
     parser.add_argument("--seed", type=int, default=1,
                         help="Random seed for reproducibility.")
@@ -399,7 +397,7 @@ def build_parser():
                         help="Stop auto-chaining when validation accuracy stays >= this threshold for a patience window.")
     parser.add_argument("--auto_stop_val_acc_patience", type=int, default=10,
                         help="Patience window (epochs) for --auto_stop_val_acc_threshold before stopping auto-chaining.")
-    parser.add_argument("--enable_auto_stop", type=str, default="True", choices=["True", "False"],
+    parser.add_argument("--enable_auto_stop", type=str, default="False", choices=["True", "False"],
                         help="Enable convergence-based early stopping / auto-chaining termination.")
     
     parser.add_argument("--freeze_layers", type=str, default=None,
@@ -432,6 +430,9 @@ def build_parser():
         choices=["True", "False"],
         help="If True, shard validation across GPUs (prepare val_dataloader) and reduce metrics across ranks."
     )
+    
+    parser.add_argument("--use_pre_norm", type=str, default="False", choices=["True", "False"],
+                        help="Whether to use pre-layer normalization in transformer layers. Default is False (i.e., post-norm).")
     return parser
 
 def parse_args():
@@ -1446,6 +1447,7 @@ def main():
 
         # Extract the hyperparameters from the resume_checkpoint_path to correctly update the wandb args. For example, extract the lr, model_size, eta_min, seed, weight_decay etc.
         # Here's an example of a path: '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/saved_models/held_out_color_exp/held_out_edges_4/complete_graph/scheduler_cosine/wd_0.01_lr_0.0001/eta_min_9.5e-05/xsmall/decoder/classification/input_features/output_stone_states/shop_1_qhop_1/seed_0/'
+        args.use_pre_norm = str(args.use_pre_norm) == 'True'  # Convert to boolean
         args.weight_decay = float(re.search(r'wd_([0-9.eE+-]+)', resume_checkpoint_path).group(1))
         args.learning_rate = float(re.search(r'lr_([0-9.eE+-]+)', resume_checkpoint_path).group(1))
         args.eta_min = float(re.search(r'eta_min_([0-9.eE+-]+)', resume_checkpoint_path).group(1))
@@ -1644,6 +1646,7 @@ def main():
     
 
     # Initialize wandb only on main process
+    args.use_pre_norm = str(args.use_pre_norm) == 'True'  # Convert to boolean
     if accelerator.is_local_main_process:
         # REPLACE YOUR EXISTING wandb.init() with this:
         wandb_kwargs = {
@@ -1881,7 +1884,8 @@ def main():
                 padding_side=args.padding_side,
                 use_flash_attention=args.use_flash_attention,
                 batch_size=args.batch_size,
-                vocab=full_dataset.input_word2idx
+                vocab=full_dataset.input_word2idx,
+                use_pre_norm=args.use_pre_norm
             )
         elif args.model_architecture == 'linear':
             print("Using linear classifier architecture for classification task.")
