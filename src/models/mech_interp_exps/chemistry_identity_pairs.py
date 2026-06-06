@@ -115,7 +115,7 @@ def compute_patching_score(model, clean_input, corrupt_input, component_name, ta
     Returns:
         float: (f_clean(y_clean) - f_patched(y_clean)) / (f_clean(y_clean) - f_corrupt(y_clean))
     """
-    from src.models.mech_interp_exps.activation_cache import ActivationCacheManager
+    from activation_cache import ActivationCacheManager
     
     # 1. Clean run forward pass and cache activations
     with ActivationCacheManager(model) as clean_cache:
@@ -124,6 +124,7 @@ def compute_patching_score(model, clean_input, corrupt_input, component_name, ta
         
     # If y_clean is not provided, default to the class that the model predicted on clean input
     if y_clean is None:
+        print("No y_clean provided, using model's prediction on clean input. Prediction: ", f_clean.argmax(dim=-1).item())
         y_clean = f_clean.argmax(dim=-1).item()
         
     # 2. Corrupt run forward pass and cache activations
@@ -136,6 +137,7 @@ def compute_patching_score(model, clean_input, corrupt_input, component_name, ta
     
     # If the clean and corrupt outputs are virtually identical for y_clean, logit difference is zero
     denom = f_clean_y - f_corrupt_y
+    import pdb; pdb.set_trace()
     if abs(denom) < 1e-7:
         return 0.0
         
@@ -193,11 +195,17 @@ def compute_patching_score(model, clean_input, corrupt_input, component_name, ta
     try:
         # Run third forward pass (patched clean run)
         f_patched = model(clean_input)
+    except Exception as e:
+        raise Exception(f"Errored out forward pass for the third run, removing hook. Error: {e}")
     finally:
         # Ensure hook is removed even if forward pass errors out
         handle.remove()
         
     f_patched_y = f_patched[0, y_clean].item()
+    print(f"f_clean_y: {f_clean_y}, f_corrupt_y: {f_corrupt_y}, f_patched_y: {f_patched_y}")
+    import pdb; pdb.set_trace()
+    
+
     
     score = (f_clean_y - f_patched_y) / denom
     return score
@@ -234,7 +242,9 @@ def main():
     if 'input_word2idx' in vocab_data:
         input_word2idx = vocab_data['input_word2idx']
     else:
+        print("Could not load input_word2idx from the vocabulary, trying 'word2idx'.")
         input_word2idx = vocab_data.get('word2idx', None)
+        print("Loaded input_word2idx: ", input_word2idx)
         
     idx2word = {v: k for k, v in input_word2idx.items()}
     
@@ -283,7 +293,7 @@ def main():
             "dropout": 0.1,
             "src_vocab_size": detected_src_vocab_size,
             "num_classes": detected_num_classes,
-            "vocab": input_word2idx,
+            # "vocab": input_word2idx,
             "use_flash_attention": True,
             "max_len": detected_max_len
         }
@@ -296,7 +306,7 @@ def main():
         
         # Clean-on-clean calibration check
         # We hook 'embedding' and patch with clean activations (which are clean_cache['embedding'])
-        from src.models.mech_interp_exps.activation_cache import ActivationCacheManager
+        from activation_cache import ActivationCacheManager
         with ActivationCacheManager(model) as clean_cache:
             _ = model(clean_input)
             clean_acts = clean_cache.get_activations()
