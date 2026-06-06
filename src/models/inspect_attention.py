@@ -423,7 +423,8 @@ if __name__ == '__main__':
         'emb_size': 256,
         'nhead': 4,
         'src_vocab_size': 100,
-        'num_classes': 10
+        'num_classes': 10,
+        'use_flash_attention': True
     }
     
     # 1. Create a dummy StoneStateDecoderClassifier
