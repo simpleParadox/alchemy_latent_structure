@@ -19,6 +19,18 @@ import wandb
 from tqdm import tqdm
 from accelerate import Accelerator
 
+def format_time(seconds):
+    seconds = int(seconds)
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    if h > 0:
+        return f"{h}h {m}m {s}s"
+    elif m > 0:
+        return f"{m}m {s}s"
+    else:
+        return f"{s}s"
+
 # Reuse standard components directly from train.py
 from train import (
     build_parser,
@@ -220,6 +232,7 @@ def main():
     # ----------------------------------------------------
     global_epoch_counter = 0
     num_cycles = getattr(args, "num_cycles", 1)
+    start_time = time.time()
     
     for cycle_idx in range(1, num_cycles + 1):
         for task_idx, hop_length in enumerate(args.task_sequence):
@@ -484,6 +497,7 @@ def main():
                         
                 # Logging with Task and Hop prefixes
                 if accelerator.is_local_main_process:
+                    current_lr = scheduler.get_last_lr()[0] if scheduler else optimizer.param_groups[0]['lr']
                     epoch_log = {}
                     prefix = f"continual/cycle_{cycle_idx}_task_{task_idx}_hop_{hop_length}/"
                     epoch_log[f"{prefix}train_loss"] = train_loss
@@ -499,6 +513,12 @@ def main():
                     for metric_name in ["P_A", "P_B_given_A", "P_C_given_AB"]:
                         if metric_name in val_metrics:
                             epoch_log[f"continual/current_{metric_name}"] = val_metrics[metric_name]
+                            
+                    # Flat global progress tracking metrics (for single continuous curves in W&B)
+                    epoch_log["continual/global_epoch"] = global_epoch_counter
+                    epoch_log["continual/learning_rate"] = current_lr
+                    epoch_log["continual/current_train_loss"] = train_loss
+                    epoch_log["continual/current_train_accuracy"] = train_acc
                     
                     # Copy accuracy flags and other scalar evaluation metrics
                     for key, val in val_metrics.items():
@@ -541,7 +561,6 @@ def main():
                                         cycle_idx=cycle_idx
                                     )
                             
-                    current_lr = scheduler.get_last_lr()[0] if scheduler else optimizer.param_groups[0]['lr']
                     epoch_log[f"{prefix}learning_rate"] = current_lr
                     epoch_log[f"{prefix}global_epoch"] = global_epoch_counter
                     epoch_log[f"{prefix}epoch_within_task"] = epoch
@@ -550,6 +569,22 @@ def main():
                     print(f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}")
                     if "accuracy" in val_metrics:
                         print(f"Val Accuracy: {val_metrics['accuracy']:.4f}")
+                        
+                    # Calculate and print ETA and remaining epoch stats
+                    elapsed = time.time() - start_time
+                    epochs_completed = global_epoch_counter + 1
+                    
+                    # Remaining epochs calculations
+                    task_remaining = max(0, epochs_limit - (epoch + 1))
+                    cycle_tasks_remaining = len(args.task_sequence) - (task_idx + 1)
+                    cycle_remaining = max(0, cycle_tasks_remaining * epochs_limit + task_remaining)
+                    global_remaining = max(0, (num_cycles - cycle_idx) * len(args.task_sequence) * epochs_limit + cycle_remaining)
+                    
+                    avg_time_per_epoch = elapsed / epochs_completed
+                    eta = global_remaining * avg_time_per_epoch
+                    
+                    print(f"Time Elapsed: {format_time(elapsed)} | Estimated Remaining: {format_time(eta)}")
+                    print(f"Remaining Epochs -> Task: {task_remaining} | Cycle {cycle_idx}: {cycle_remaining} | Global: {global_remaining}")
                 
                 # Increment global epoch counter after logging
                 global_epoch_counter += 1
