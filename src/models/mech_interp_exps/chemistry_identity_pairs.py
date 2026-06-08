@@ -4,6 +4,7 @@ import argparse
 import torch
 import torch.nn as nn
 from src.models.models import StoneStateDecoderClassifier
+from activation_cache import ActivationCacheManager
 
 def split_support_query(encoder_input_ids, item_sep_id):
     """
@@ -21,22 +22,65 @@ def split_support_query(encoder_input_ids, item_sep_id):
         support = []
     return support, query
 
-def build_chemistry_identity_pairs(dataset, chemistry_id_1, chemistry_id_2, input_word2idx=None):
-    """
-    Returns a list of (clean_input, corrupt_input, target_class_id) tuples.
-    For each query item from chemistry_id_1, constructs a corrupt input identical in structure
-    but with support examples drawn from chemistry_id_2 instead.
+def build_chemistry_stone_sets(dataset, input_word2idx=None):
+    hardcoded_vocab = {
+        '-1': 0, '-3': 1, '1': 2, '3': 3, 'CYAN': 4, 'GREEN': 5, 'ORANGE': 6, 'PINK': 7, 'RED': 8, 'YELLOW': 9,
+        'blue': 10, 'large': 11, 'medium': 12, 'medium_round': 13, 'pointy': 14, 'purple': 15, 'red': 16,
+        'round': 17, 'small': 18, '<pad>': 19, '<sos>': 20, '<eos>': 21, '<io>': 22, '<item_sep>': 23, '<unk>': 24
+    }
+    vocab = input_word2idx if input_word2idx is not None else hardcoded_vocab
+    item_sep_id = vocab.get('<item_sep>', 23)
+
+    if hasattr(dataset, 'data'):
+        samples = dataset.data
+    else:
+        samples = dataset
+
+    stone_sets_mutable = {}
+    seen = set()
+    support_keys = []
     
-    Args:
-        dataset: List of dicts (loaded from dataset pickle) or AlchemyDataset object.
-        chemistry_id_1: Integer index in sorted unique support prefixes, or the support prefix tuple of token IDs.
-        chemistry_id_2: Integer index in sorted unique support prefixes, or the support prefix tuple of token IDs.
-        input_word2idx: Dictionary mapping token names to indices. If None, hardcoded vocabulary is used.
+    for sample in samples:
+        enc_inps = sample['encoder_input_ids']
+        support, _ = split_support_query(enc_inps, item_sep_id)
+        support_key = tuple(support)
         
-    Returns:
-        list of tuples: [(clean_tensor, corrupt_tensor, target_class_id), ...] where each tensor has shape [1, seq_len].
+        if support_key not in seen:
+            seen.add(support_key)
+            support_keys.append(support_key)
+            stone_sets_mutable[support_key] = set()
+            
+        target_class_id = sample.get('target_class_id', None)
+        if target_class_id is not None:
+            stone_sets_mutable[support_key].add(target_class_id)
+            
+    sorted_support_keys = sorted(support_keys)
+    stone_sets = {}
+    for key in sorted_support_keys:
+        t_classes = frozenset(stone_sets_mutable[key])
+        assert len(t_classes) == 8, f"Expected 8 unique target classes, found {len(t_classes)}"
+        stone_sets[key] = t_classes
+        
+    return stone_sets, sorted_support_keys
+
+def find_all_disjoint_pairs(dataset, input_word2idx=None):
+    import itertools
+    stone_sets, sorted_support_keys = build_chemistry_stone_sets(dataset, input_word2idx)
+    
+    disjoint_pairs = []
+    for i, j in itertools.combinations(range(len(sorted_support_keys)), 2):
+        sk1 = sorted_support_keys[i]
+        sk2 = sorted_support_keys[j]
+        
+        if stone_sets[sk1] & stone_sets[sk2] == frozenset():
+            disjoint_pairs.append((i, j))
+            
+    return disjoint_pairs
+
+def build_chemistry_identity_pairs(dataset, chemistry_id_1, chemistry_id_2, input_word2idx=None, require_disjoint=True):
     """
-    # Hardcoded known vocabulary as a fallback
+    Returns a list of (clean_input, corrupt_input, target_class_id, t_clean_ids, t_corrupt_ids) tuples.
+    """
     hardcoded_vocab = {
         '-1': 0, '-3': 1, '1': 2, '3': 3, 'CYAN': 4, 'GREEN': 5, 'ORANGE': 6, 'PINK': 7, 'RED': 8, 'YELLOW': 9,
         'blue': 10, 'large': 11, 'medium': 12, 'medium_round': 13, 'pointy': 14, 'purple': 15, 'red': 16,
@@ -46,27 +90,8 @@ def build_chemistry_identity_pairs(dataset, chemistry_id_1, chemistry_id_2, inpu
     vocab = input_word2idx if input_word2idx is not None else hardcoded_vocab
     item_sep_id = vocab.get('<item_sep>', 23)
     
-    # Extract actual data list
-    if hasattr(dataset, 'data'):
-        samples = dataset.data
-    else:
-        samples = dataset
-        
-    # Extract all unique support prefixes and sort them deterministically to assign integer IDs
-    support_keys = []
-    seen = set()
-    for sample in samples:
-        enc_inps = sample['encoder_input_ids']
-        support, _ = split_support_query(enc_inps, item_sep_id)
-        support_key = tuple(support)
-        if support_key not in seen:
-            seen.add(support_key)
-            support_keys.append(support_key)
-            
-    # Deterministic sorting of support keys (tuples of ints)
-    sorted_support_keys = sorted(support_keys)
+    stone_sets, sorted_support_keys = build_chemistry_stone_sets(dataset, input_word2idx)
     
-    # Helper to map chemistry_id (int or tuple) to the actual support key tuple
     def resolve_chemistry_id(chem_id, name):
         if isinstance(chem_id, int):
             if chem_id < 0 or chem_id >= len(sorted_support_keys):
@@ -74,13 +99,24 @@ def build_chemistry_identity_pairs(dataset, chemistry_id_1, chemistry_id_2, inpu
             return sorted_support_keys[chem_id]
         else:
             key_tuple = tuple(chem_id)
-            if key_tuple not in seen:
+            if key_tuple not in stone_sets:
                 raise ValueError(f"{name} tuple not found in dataset support keys.")
             return key_tuple
 
     sk1 = resolve_chemistry_id(chemistry_id_1, "chemistry_id_1")
     sk2 = resolve_chemistry_id(chemistry_id_2, "chemistry_id_2")
     
+    t_clean_ids = stone_sets[sk1]
+    t_corrupt_ids = stone_sets[sk2]
+    
+    if require_disjoint:
+        assert t_clean_ids & t_corrupt_ids == frozenset(), "Chemistries are not disjoint!"
+    
+    if hasattr(dataset, 'data'):
+        samples = dataset.data
+    else:
+        samples = dataset
+        
     pairs = []
     for sample in samples:
         enc_inps = sample['encoder_input_ids']
@@ -94,9 +130,20 @@ def build_chemistry_identity_pairs(dataset, chemistry_id_1, chemistry_id_2, inpu
             
             clean_tensor = torch.tensor([clean_input], dtype=torch.long)
             corrupt_tensor = torch.tensor([corrupt_input], dtype=torch.long)
-            pairs.append((clean_tensor, corrupt_tensor, target_class_id))
+            pairs.append((clean_tensor, corrupt_tensor, target_class_id, t_clean_ids, t_corrupt_ids))
             
     return pairs
+
+def build_all_disjoint_pairs(dataset, input_word2idx=None, max_pairs=None):
+    disjoint_pairs_idx = find_all_disjoint_pairs(dataset, input_word2idx)
+    if max_pairs is not None:
+        disjoint_pairs_idx = disjoint_pairs_idx[:max_pairs]
+        
+    all_pairs = []
+    for i, j in disjoint_pairs_idx:
+        all_pairs.extend(build_chemistry_identity_pairs(dataset, i, j, input_word2idx, require_disjoint=True))
+        
+    return all_pairs
 
 def decode_sequence(token_ids, idx2word):
     """
@@ -108,39 +155,37 @@ def decode_sequence(token_ids, idx2word):
     flat_ids = np.array(token_ids).flatten()
     return " ".join([idx2word.get(int(tid), f"<unk_{tid}>") for tid in flat_ids])
 
-def compute_patching_score(model, clean_input, corrupt_input, component_name, target_token_position, y_clean=None):
+def compute_patching_score(model, clean_input, corrupt_input, component_name, target_token_position, t_clean_ids, t_corrupt_ids):
     """
-    Computes the logit-difference score under activation patching.
-    
-    Returns:
-        float: (f_clean(y_clean) - f_patched(y_clean)) / (f_clean(y_clean) - f_corrupt(y_clean))
+    Computes the patching scores using both softmax delta and logsumexp diff metrics.
     """
-    from activation_cache import ActivationCacheManager
     
     # 1. Clean run forward pass and cache activations
     with ActivationCacheManager(model) as clean_cache:
         f_clean = model(clean_input)
         clean_acts = clean_cache.get_activations()
         
-    # If y_clean is not provided, default to the class that the model predicted on clean input
-    if y_clean is None:
-        print("No y_clean provided, using model's prediction on clean input. Prediction: ", f_clean.argmax(dim=-1).item())
-        y_clean = f_clean.argmax(dim=-1).item()
-        
     # 2. Corrupt run forward pass and cache activations
     with ActivationCacheManager(model) as corrupt_cache:
         f_corrupt = model(corrupt_input)
         corrupt_acts = corrupt_cache.get_activations()
         
-    f_clean_y = f_clean[0, y_clean].item()
-    f_corrupt_y = f_corrupt[0, y_clean].item()
+    # Helpers for the metrics
+    def softmax_delta(logits):
+        probs = torch.nn.functional.softmax(logits, dim=-1)
+        prob_clean = probs[0, list(t_clean_ids)].sum().item()
+        prob_corrupt = probs[0, list(t_corrupt_ids)].sum().item()
+        return prob_clean - prob_corrupt
+
+    def logsumexp_diff(logits):
+        lse_clean = torch.logsumexp(logits[0, list(t_clean_ids)], dim=0).item()
+        lse_corrupt = torch.logsumexp(logits[0, list(t_corrupt_ids)], dim=0).item()
+        return lse_clean - lse_corrupt
+
+    # Denominator
+    denom_softmax = softmax_delta(f_clean) - softmax_delta(f_corrupt)
+    denom_lse = logsumexp_diff(f_clean) - logsumexp_diff(f_corrupt)
     
-    # If the clean and corrupt outputs are virtually identical for y_clean, logit difference is zero
-    denom = f_clean_y - f_corrupt_y
-    import pdb; pdb.set_trace()
-    if abs(denom) < 1e-7:
-        return 0.0
-        
     # 3. Find the target module to register hook on
     if component_name == 'embedding':
         target_module = model.src_tok_emb
@@ -201,14 +246,14 @@ def compute_patching_score(model, clean_input, corrupt_input, component_name, ta
         # Ensure hook is removed even if forward pass errors out
         handle.remove()
         
-    f_patched_y = f_patched[0, y_clean].item()
-    print(f"f_clean_y: {f_clean_y}, f_corrupt_y: {f_corrupt_y}, f_patched_y: {f_patched_y}")
-    import pdb; pdb.set_trace()
-    
+    # Scores
+    softmax_score = (softmax_delta(f_clean) - softmax_delta(f_patched)) / denom_softmax if abs(denom_softmax) > 1e-7 else 0.0
+    lse_score = (logsumexp_diff(f_clean) - logsumexp_diff(f_patched)) / denom_lse if abs(denom_lse) > 1e-7 else 0.0
 
-    
-    score = (f_clean_y - f_patched_y) / denom
-    return score
+    return {
+        "softmax_score": softmax_score,
+        "lse_score": lse_score
+    }
 
 def main():
     parser = argparse.ArgumentParser(description="Chemistry Identity Pairs and Activation Patching Experiments")
@@ -249,15 +294,17 @@ def main():
     idx2word = {v: k for k, v in input_word2idx.items()}
     
     # 1. Print sample pairs and decoded sequences
-    print("\nBuilding chemistry identity pairs for chemistry_id_1=0 and chemistry_id_2=1...")
-    pairs = build_chemistry_identity_pairs(dataset, 0, 1, input_word2idx)
+    print("\nBuilding disjoint chemistry identity pairs...")
+    pairs = build_all_disjoint_pairs(dataset, input_word2idx, max_pairs=3)
     print(f"Successfully generated {len(pairs)} pairs.")
     
     num_to_print = min(3, len(pairs))
     print(f"\n--- Printing {num_to_print} sample pairs for manual inspection ---")
     for idx in range(num_to_print):
-        clean_tensor, corrupt_tensor, target_class_id = pairs[idx]
-        print(f"\nPair {idx + 1} (Target Class: {target_class_id}):")
+        clean_tensor, corrupt_tensor, target_class_id, t_clean_ids, t_corrupt_ids = pairs[idx]
+        print(f"\nPair {idx + 1}:")
+        print(f"  Target Class ID: {target_class_id}")
+        print(f"  Overlap of Stone Sets: {t_clean_ids & t_corrupt_ids}")
         print(f"  Clean Decoded:   {decode_sequence(clean_tensor, idx2word)}")
         print(f"  Corrupt Decoded: {decode_sequence(corrupt_tensor, idx2word)}")
         
@@ -293,7 +340,6 @@ def main():
             "dropout": 0.1,
             "src_vocab_size": detected_src_vocab_size,
             "num_classes": detected_num_classes,
-            # "vocab": input_word2idx,
             "use_flash_attention": True,
             "max_len": detected_max_len
         }
@@ -302,39 +348,47 @@ def main():
         model.eval()
         
         print("\n--- Running Calibration Experiment ---")
-        clean_input, corrupt_input, target_class_id = pairs[0]
         
-        # Clean-on-clean calibration check
-        # We hook 'embedding' and patch with clean activations (which are clean_cache['embedding'])
-        from activation_cache import ActivationCacheManager
-        with ActivationCacheManager(model) as clean_cache:
-            _ = model(clean_input)
-            clean_acts = clean_cache.get_activations()
+        sum_scores_clean_softmax = 0.0
+        sum_scores_clean_lse = 0.0
+        sum_scores_corrupt_softmax = 0.0
+        sum_scores_corrupt_lse = 0.0
+        
+        for idx in range(len(pairs)):
+            clean_input, corrupt_input, target_class_id, t_clean_ids, t_corrupt_ids = pairs[idx]
             
-        # Register clean-on-clean hook manually to verify compute_patching_score
-        score_clean_on_clean = compute_patching_score(
-            model=model,
-            clean_input=clean_input,
-            corrupt_input=clean_input, # clean-on-clean
-            component_name='embedding',
-            target_token_position='all',
-            y_clean=target_class_id
-        )
-        print(f"Score for Clean-on-Clean patching (should be 0.0): {score_clean_on_clean:.6f}")
-        
-        # Corrupt-on-clean calibration check on all support tokens (0 to 175)
-        # Note: clean and corrupt differ only in support examples, so patching all support tokens
-        # should copy the entire difference, resulting in a score very close to 1.0.
-        support_token_positions = list(range(176))
-        score_corrupt_on_clean = compute_patching_score(
-            model=model,
-            clean_input=clean_input,
-            corrupt_input=corrupt_input,
-            component_name='embedding',
-            target_token_position=support_token_positions,
-            y_clean=target_class_id
-        )
-        print(f"Score for Corrupt-on-Clean support patching (should be ~1.0): {score_corrupt_on_clean:.6f}")
+            # Clean-on-clean calibration check
+            scores_clean_on_clean = compute_patching_score(
+                model=model,
+                clean_input=clean_input,
+                corrupt_input=clean_input, # clean-on-clean
+                component_name='embedding',
+                target_token_position='all',
+                t_clean_ids=t_clean_ids,
+                t_corrupt_ids=t_corrupt_ids
+            )
+            sum_scores_clean_softmax += scores_clean_on_clean["softmax_score"]
+            sum_scores_clean_lse += scores_clean_on_clean["lse_score"]
+            
+            # Corrupt-on-clean calibration check
+            support_token_positions = list(range(176))
+            scores_corrupt_on_clean = compute_patching_score(
+                model=model,
+                clean_input=clean_input,
+                corrupt_input=corrupt_input,
+                component_name='embedding',
+                target_token_position=support_token_positions,
+                t_clean_ids=t_clean_ids,
+                t_corrupt_ids=t_corrupt_ids
+            )
+            sum_scores_corrupt_softmax += scores_corrupt_on_clean["softmax_score"]
+            sum_scores_corrupt_lse += scores_corrupt_on_clean["lse_score"]
+            
+        N = len(pairs)
+        print(f"Mean Score for Clean-on-Clean patching (Softmax): {sum_scores_clean_softmax/N:.6f}")
+        print(f"Mean Score for Clean-on-Clean patching (LSE): {sum_scores_clean_lse/N:.6f}")
+        print(f"Mean Score for Corrupt-on-Clean support patching (Softmax): {sum_scores_corrupt_softmax/N:.6f}")
+        print(f"Mean Score for Corrupt-on-Clean support patching (LSE): {sum_scores_corrupt_lse/N:.6f}")
 
 if __name__ == '__main__':
     main()

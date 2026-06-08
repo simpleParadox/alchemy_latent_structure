@@ -42,11 +42,40 @@ from models import (
 
 def parse_continual_args():
     parser = build_parser()
-    parser.set_defaults(continual="True")
-    return parser.parse_args()
+    parser.set_defaults(continual="True", model_architecture="decoder")
+    
+    # Override type of --task_sequence to str to prevent argparse int casting crashes on string/list sweep inputs
+    for action in parser._actions:
+        if action.dest == 'task_sequence':
+            action.type = str
+            
+    args = parser.parse_args()
+    
+    # Parse task_sequence into list of integers
+    if args.task_sequence:
+        parsed_seq = []
+        for item in args.task_sequence:
+            if isinstance(item, str):
+                cleaned = item.replace('[', '').replace(']', '').replace(',', ' ').strip()
+                for part in cleaned.split():
+                    try:
+                        parsed_seq.append(int(part))
+                    except ValueError:
+                        pass
+            else:
+                try:
+                    parsed_seq.append(int(item))
+                except (ValueError, TypeError):
+                    pass
+        args.task_sequence = parsed_seq
+        
+    return args
 
 def main():
     args = parse_continual_args()
+    
+    # Always use StoneStateDecoderClassifier (decoder architecture) for classification
+    args.model_architecture = "decoder"
     
     # ----------------------------------------------------
     # Pre-setup configuration
@@ -422,7 +451,7 @@ def main():
                     print(f"Cycle {cycle_idx} | Task {task_idx} | Epoch {epoch + 1}/{epochs_limit}")
                     
                 # Train one epoch
-                train_loss = train_epoch(
+                train_loss, train_acc = train_epoch(
                     model=model,
                     dataloader=train_dataloader,
                     optimizer=optimizer,
@@ -458,7 +487,18 @@ def main():
                     epoch_log = {}
                     prefix = f"continual/cycle_{cycle_idx}_task_{task_idx}_hop_{hop_length}/"
                     epoch_log[f"{prefix}train_loss"] = train_loss
+                    epoch_log[f"{prefix}train_accuracy"] = train_acc
                     epoch_log[f"{prefix}val_loss"] = val_loss
+                    
+                    # Log generic current task validation metrics
+                    epoch_log["continual/current_val_loss"] = val_loss
+                    if "accuracy" in val_metrics:
+                        epoch_log["continual/current_val_accuracy"] = val_metrics["accuracy"]
+                        
+                    # Also log other generic current metrics if present
+                    for metric_name in ["P_A", "P_B_given_A", "P_C_given_AB"]:
+                        if metric_name in val_metrics:
+                            epoch_log[f"continual/current_{metric_name}"] = val_metrics[metric_name]
                     
                     # Copy accuracy flags and other scalar evaluation metrics
                     for key, val in val_metrics.items():
@@ -507,7 +547,7 @@ def main():
                     epoch_log[f"{prefix}epoch_within_task"] = epoch
                     wandb.log(epoch_log)
                     
-                    print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+                    print(f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}")
                     if "accuracy" in val_metrics:
                         print(f"Val Accuracy: {val_metrics['accuracy']:.4f}")
                 

@@ -1180,6 +1180,9 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 
                 # 2. Build support_to_query_mappings dynamically
                 support_to_query_mappings = {}
+                support_to_query_stone_mappings = {}
+                support_to_all_targets = {}
+                
                 for i, sample in enumerate(dataset.data):
                     enc_inps = sample['encoder_input_ids']
                     tgt_cls_id = sample['target_class_id']
@@ -1204,10 +1207,21 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                     if support_key not in support_to_query_mappings:
                         support_to_query_mappings[support_key] = {}
                         
+                    if support_key not in support_to_all_targets:
+                        support_to_all_targets[support_key] = set()
+                    support_to_all_targets[support_key].add(tgt_cls_id)
+                    
                     query_potion = query[-1]
                     if exp_typ == 'composition':
                         query_potion_str = ' | '.join([feature_to_id_vocab[token_id] for token_id in query[-hop_to_use:]])
                         query_potion_key = query_potion_str
+                        
+                        query_stone_key = tuple(query[:-hop_to_use])
+                        if support_key not in support_to_query_stone_mappings:
+                            support_to_query_stone_mappings[support_key] = {}
+                        if query_stone_key not in support_to_query_stone_mappings[support_key]:
+                            support_to_query_stone_mappings[support_key][query_stone_key] = set()
+                        support_to_query_stone_mappings[support_key][query_stone_key].add(tgt_cls_id)
                     else:
                         query_potion_key = feature_to_id_vocab[query_potion]
                         
@@ -1248,20 +1262,24 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                     else:
                         query_potion_key = feature_to_id_vocab[query_potion]
                         
-                    correct_half_chemistry = support_to_query_mappings[support_key][query_potion_key]
-                    
-                    if exp_typ == 'decomposition':
-                        all_stones_in_support = set()
-                        for potion in potions_for_support:
-                            all_stones_in_support.update(support_to_query_mappings[support_key][potion])
-                        combined_set = all_stones_in_support
+                    if exp_typ == 'composition':
+                        query_stone_key = tuple(query[:-hop_to_use])
+                        correct_half_chemistry = list(support_to_query_stone_mappings[support_key].get(query_stone_key, {tgt_cls_id}))
+                        combined_set = support_to_all_targets.get(support_key, set())
                     else:
-                        if len(potions_for_support) >= 2:
-                            other_half_key = potions_for_support[0] if potions_for_support[1] == query_potion_key else potions_for_support[1]
-                            other_half_chemistry = support_to_query_mappings[support_key][other_half_key]
+                        correct_half_chemistry = support_to_query_mappings[support_key][query_potion_key]
+                        if exp_typ == 'decomposition':
+                            all_stones_in_support = set()
+                            for potion in potions_for_support:
+                                all_stones_in_support.update(support_to_query_mappings[support_key][potion])
+                            combined_set = all_stones_in_support
                         else:
-                            other_half_chemistry = []
-                        combined_set = set(correct_half_chemistry + other_half_chemistry)
+                            if len(potions_for_support) >= 2:
+                                other_half_key = potions_for_support[0] if potions_for_support[1] == query_potion_key else potions_for_support[1]
+                                other_half_chemistry = support_to_query_mappings[support_key][other_half_key]
+                            else:
+                                other_half_chemistry = []
+                            combined_set = set(correct_half_chemistry + other_half_chemistry)
                         
                     if predicted_class_id in combined_set:
                         predicted_in_context_count += 1
