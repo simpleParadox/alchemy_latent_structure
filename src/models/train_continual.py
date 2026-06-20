@@ -219,11 +219,14 @@ def main():
     # Weights & Biases Config
     if accelerator.is_local_main_process:
         wandb_mode = args.wandb_mode
+        wandb_config = vars(args).copy()
+        wandb_config["slurm_job_id"] = os.environ.get("SLURM_JOB_ID", "")
+        wandb_config["slurm_job_name"] = os.environ.get("SLURM_JOB_NAME", "")
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
             name=args.wandb_run_name or f"continual_{continual_folder_name}_seed_{args.seed}",
-            config=vars(args),
+            config=wandb_config,
             mode=wandb_mode
         )
         
@@ -324,7 +327,8 @@ def main():
                 shuffle=True,
                 collate_fn=custom_collate_train,
                 num_workers=args.num_workers,
-                worker_init_fn=worker_init_fn
+                worker_init_fn=worker_init_fn,
+                generator=torch.Generator().manual_seed(args.seed)
             )
             
             val_dataloader = DataLoader(
@@ -332,8 +336,9 @@ def main():
                 batch_size=args.batch_size,
                 shuffle=False,
                 collate_fn=custom_collate_val,
-                num_workers=args.num_workers,
-                worker_init_fn=worker_init_fn
+                num_workers=1,
+                worker_init_fn=worker_init_fn,
+                generator=torch.Generator().manual_seed(args.seed)
             )
             
             # Reset streak counter for early stopping
@@ -528,14 +533,14 @@ def main():
                     # Hierarchical timeline logging
                     epoch_within_task_1indexed = epoch + 1
                     if "P_A" in val_metrics:
-                        epoch_log[f"cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_A"] = val_metrics["P_A"]
-                        epoch_log[f"cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_B_given_A"] = val_metrics["P_B_given_A"]
-                        epoch_log[f"cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_C_given_AB"] = val_metrics["P_C_given_AB"]
+                        # epoch_log[f"cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_A"] = val_metrics["P_A"]
+                        # epoch_log[f"cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_B_given_A"] = val_metrics["P_B_given_A"]
+                        # epoch_log[f"cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_C_given_AB"] = val_metrics["P_C_given_AB"]
                         
-                        # Also log with prefix just in case
-                        epoch_log[f"continual/cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_A"] = val_metrics["P_A"]
-                        epoch_log[f"continual/cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_B_given_A"] = val_metrics["P_B_given_A"]
-                        epoch_log[f"continual/cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_C_given_AB"] = val_metrics["P_C_given_AB"]
+                        # # Also log with prefix just in case
+                        # epoch_log[f"continual/cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_A"] = val_metrics["P_A"]
+                        # epoch_log[f"continual/cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_B_given_A"] = val_metrics["P_B_given_A"]
+                        # epoch_log[f"continual/cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_C_given_AB"] = val_metrics["P_C_given_AB"]
                         
                         # Flat CSV Logging
                         if getattr(args, "log_continual_csv", True):
@@ -641,6 +646,22 @@ def main():
                 task_ckpt_path = os.path.join(continual_save_dir, f"model_cycle_{cycle_idx}_task_{task_idx}_hop_{hop_length}.pt")
                 torch.save(checkpoint, task_ckpt_path)
                 print(f"Saved task-specific checkpoint to {task_ckpt_path}")
+                
+            # Clear accelerator registries to prevent memory / worker process leak
+            accelerator._dataloaders.clear()
+            if args.reset_optimizer:
+                accelerator._optimizers.clear()
+                accelerator._schedulers.clear()
+            
+            # Explicitly delete dataloaders and datasets to free memory
+            del train_dataloader
+            del val_dataloader
+            del train_dataset
+            del val_dataset
+            
+            # Reclaim GPU & CPU memory
+            torch.cuda.empty_cache()
+            gc.collect()
             
     if accelerator.is_local_main_process:
         print("Continual training sequence complete.")

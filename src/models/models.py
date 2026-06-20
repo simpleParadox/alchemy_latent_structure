@@ -536,7 +536,7 @@ class StoneStateDecoderClassifier(nn.Module):
         else:
             # No padding mask, use the last token
             last_token_output = decoder_output[:, -1, :]
-            print("Warning: src_padding_mask is None. Using the last token for classification.")
+            # print("Warning: src_padding_mask is None. Using the last token for classification.")
         
         if self.prediction_type == 'autoregressive':
             # Return full sequence output for autoregressive tasks

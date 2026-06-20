@@ -60,6 +60,21 @@ class ActivationCacheManager:
             handle = layer.register_forward_hook(make_hook(idx))
             self.hooks.append(handle)
 
+            # 3. Register hook on MLP (linear2) if present
+            if hasattr(layer, 'linear2'):
+                def make_mlp_hook(layer_idx):
+                    def hook(module, inp, outp):
+                        activation = outp.detach()
+                        # Ensure shape is [batch, seq_len, d_model] even if batch_first is False
+                        batch_first = getattr(self.model.transformer_encoder.layers[layer_idx], 'batch_first', True)
+                        if not batch_first:
+                            activation = activation.transpose(0, 1)
+                        self.activations[f"layer_{layer_idx}_mlp_out"] = activation
+                    return hook
+                    
+                handle_mlp = layer.linear2.register_forward_hook(make_mlp_hook(idx))
+                self.hooks.append(handle_mlp)
+
     def get_activations(self) -> dict:
         """
         Returns dict: {layer_idx (int): activations (Tensor of shape [batch, seq_len, d_model])}

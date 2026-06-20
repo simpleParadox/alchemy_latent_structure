@@ -107,3 +107,4 @@ src/models/find_and_sync_remote_frozen_runs.py
 clean_agent.py
 src/models/__pycache__/
 *.html
+mech_interp_slurm_logs/

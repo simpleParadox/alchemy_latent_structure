@@ -1666,11 +1666,13 @@ def main():
     # Initialize wandb only on main process
     args.use_pre_norm = str(args.use_pre_norm) == 'True'  # Convert to boolean
     if accelerator.is_local_main_process:
-        # REPLACE YOUR EXISTING wandb.init() with this:
+        wandb_config = vars(args).copy()
+        wandb_config["slurm_job_id"] = os.environ.get("SLURM_JOB_ID", "")
+        wandb_config["slurm_job_name"] = os.environ.get("SLURM_JOB_NAME", "")
         wandb_kwargs = {
             "project": args.wandb_project,
             "entity": args.wandb_entity,
-            "config": vars(args),
+            "config": wandb_config,
             "mode": args.wandb_mode,
             "dir": "/home/rsaha/scratch/wandb_runs"
         }
