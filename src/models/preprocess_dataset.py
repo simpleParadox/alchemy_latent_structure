@@ -214,8 +214,11 @@ def main():
                         # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_reward_ablation_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_randomized_reward_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/baseline_generated_data_from_normalized_reward/compositional_baseline_compositional_chemistry_samples_train_shop_1_qhop_1.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/baseline_normalized_held_out_subset_of_original/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
 
-                        default="/home/rsaha/projects/dm_alchemy/src/data/baseline_normalized_held_out_subset_of_original/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+
+                        # default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/continual_data/held_out_endpoint_reward_swap/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/continual_data/held_out_same_face_reward/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
                         # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_.json",
@@ -228,7 +231,9 @@ def main():
                         # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_reward_ablation_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_randomized_reward_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/baseline_generated_data_from_normalized_reward/compositional_baseline_compositional_chemistry_samples_val_shop_1_qhop_1.json",
-                        default="/home/rsaha/projects/dm_alchemy/src/data/baseline_normalized_held_out_subset_of_original/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/baseline_normalized_held_out_subset_of_original/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        # default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/continual_data/held_out_endpoint_reward_swap/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/continual_data/held_out_same_face_reward/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
@@ -245,7 +250,9 @@ def main():
                         # default='src/data/held_out_reward_ablation_preprocessed_separate_enhanced',
                         # default='src/data/held_out_randomized_reward_preprocessed_separate_enhanced',
                         # default='src/data/baseline_preprocessed_from_normalized_reward',
-                        default='src/data/baseline_normalized_held_out_subset_of_original_preprocessed',
+                        # default='src/data/baseline_normalized_held_out_subset_of_original_preprocessed',
+                        # default='src/data/continual_data/held_out_endpoint_reward_swap_preprocessed',
+                        default='src/data/continual_data/held_out_same_face_reward_preprocessed',
                         help="Directory to save preprocessed files")
     parser.add_argument("--filter_query_from_support", action="store_true", default=True,
                         help="Filter query examples from support sets")

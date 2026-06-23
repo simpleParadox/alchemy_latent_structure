@@ -559,11 +559,14 @@ def generate_all_rotations() -> List[np.ndarray]:
 
 # --- Multiprocessing Worker Function ---
 
-def process_chemistry_chunk(chunk_data, all_potion_maps, all_stone_maps, all_graphs_with_constraints, all_rotations, save_transitions):
+def process_chemistry_chunk(chunk_data, all_potion_maps, all_stone_maps, all_graphs_with_constraints, all_rotations, save_transitions, reward_structure):
     """
     Process a chunk of (i, j, k, l) combinations and return unique chemistry data.
     Similar to data_gen_with_hash.py but for chemistry uniqueness detection.
     """
+    # Set reward structure in the worker process (required for 'spawn' mp method)
+    stones_and_potions.set_reward_structure(reward_structure)
+    
     local_seen_hashes = set()
     chunk_results = []
     
@@ -682,10 +685,23 @@ def main():
         default="true",
         help="Whether to save transition matrices (true/false)."
     )
+    parser.add_argument(
+        "--reward_structure",
+        type=str,
+        default="original",
+        help="Reward latent structure to use for chemistry generation. "
+             "Options: 'original' (standard Alchemy), "
+             "'endpoint_swap' (-3 and +3 positions swapped), "
+             "'same_face' (-3 and +3 on the same cube face, diagonally opposite)."
+    )
     args = parser.parse_args()
 
     # Convert string arguments to boolean
     save_transitions = args.save_transitions.lower() == "true"
+
+    # Set reward structure before generating components
+    stones_and_potions.set_reward_structure(args.reward_structure)
+    print(f"Using reward structure: {args.reward_structure}")
 
     print("Generating all components...")
     all_potion_maps = generate_all_potion_maps()
@@ -727,7 +743,8 @@ def main():
                          all_stone_maps=all_stone_maps, 
                          all_graphs_with_constraints=all_graphs_with_constraints,
                          all_rotations=all_rotations,
-                         save_transitions=save_transitions)
+                         save_transitions=save_transitions,
+                         reward_structure=args.reward_structure)
     
     # Process chunks in parallel
     print(f"Starting multiprocessing with {num_workers} workers...")
@@ -768,7 +785,8 @@ def main():
         },
         "includes_transitions": save_transitions,
         "includes_structural_from_transitions": True,
-        "num_workers": num_workers
+        "num_workers": num_workers,
+        "reward_structure": args.reward_structure
     }
     
     # Final save

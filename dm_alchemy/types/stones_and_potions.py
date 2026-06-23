@@ -50,6 +50,37 @@ _POSS_DIRS = (-1, 1)
 _POSS_AXES = (0, 1, 2)
 POSS_REWARDS = (-3, -1, 1, 3)
 
+# Reward structure configurations for continual learning
+REWARD_STRUCTURES = {
+    'original': {
+        (-1, -1, -1): -3, (-1, -1, 1): -1, (-1, 1, -1): -1, (1, -1, -1): -1,
+        (-1, 1, 1): 1, (1, -1, 1): 1, (1, 1, -1): 1, (1, 1, 1): 3
+    },
+    'endpoint_swap': {
+        (-1, -1, -1): 3, (-1, -1, 1): -1, (-1, 1, -1): -1, (1, -1, -1): -1,
+        (-1, 1, 1): 1, (1, -1, 1): 1, (1, 1, -1): 1, (1, 1, 1): -3
+    },
+    'same_face': {
+        (-1, -1, -1): -1, (-1, -1, 1): -3, (-1, 1, -1): -1, (1, -1, -1): -1,
+        (-1, 1, 1): 1, (1, -1, 1): 1, (1, 1, -1): 1, (1, 1, 1): 3
+    },
+}
+
+_ACTIVE_REWARD_STRUCTURE = 'original'
+
+
+def set_reward_structure(name: str) -> None:
+  global _ACTIVE_REWARD_STRUCTURE
+  if name not in REWARD_STRUCTURES:
+    raise ValueError(
+        f"Unknown reward structure: '{name}'. "
+        f"Must be one of {list(REWARD_STRUCTURES.keys())}")
+  _ACTIVE_REWARD_STRUCTURE = name
+
+
+def get_reward_structure() -> str:
+  return _ACTIVE_REWARD_STRUCTURE
+
 
 def get_num_axes() -> int:
   return len(_POSS_AXES)
@@ -331,7 +362,10 @@ class LatentStone:
     self.latent_coords = coords
 
   def reward(self) -> int:
-    return int(sum(self.latent_coords))
+    if _ACTIVE_REWARD_STRUCTURE == 'original':
+      return int(sum(self.latent_coords))
+    return REWARD_STRUCTURES[_ACTIVE_REWARD_STRUCTURE][
+        tuple(int(c) for c in self.latent_coords)]
 
   def __hash__(self) -> int:
     return hash(tuple(self.latent_coords))

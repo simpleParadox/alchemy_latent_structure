@@ -108,3 +108,17 @@ clean_agent.py
 src/models/__pycache__/
 *.html
 mech_interp_slurm_logs/
+*.pyc
+dm_alchemy/__pycache__/__init__.cpython-310.pyc
+dm_alchemy/__pycache__/_load_environment.cpython-310.pyc
+dm_alchemy/__pycache__/io.cpython-310.pyc
+dm_alchemy/__pycache__/partial_array_specs.cpython-310.pyc
+dm_alchemy/encode/__pycache__/precomputed_maps_pb2.cpython-310.pyc
+dm_alchemy/encode/__pycache__/precomputed_maps_proto_conversion.cpython-310.pyc
+dm_alchemy/ideal_observer/__pycache__/helpers.cpython-310.pyc
+dm_alchemy/ideal_observer/__pycache__/precomputed_maps.cpython-310.pyc
+dm_alchemy/protos/__pycache__/episode_info_pb2.cpython-310.pyc
+dm_alchemy/protos/__pycache__/events_pb2.cpython-310.pyc
+dm_alchemy/types/__pycache__/graphs.cpython-310.pyc
+dm_alchemy/types/__pycache__/helpers.cpython-310.pyc
+dm_alchemy/types/__pycache__/stones_and_potions.cpython-310.pyc
