@@ -63,17 +63,19 @@ def parse_continual_args():
             
     args = parser.parse_args()
     
-    # Parse task_sequence into list of integers
+    # Parse task_sequence into list of integers or strings
     if args.task_sequence:
         parsed_seq = []
         for item in args.task_sequence:
             if isinstance(item, str):
-                cleaned = item.replace('[', '').replace(']', '').replace(',', ' ').strip()
+                # Remove brackets and split by comma or space
+                cleaned = item.replace('[', '').replace(']', '').replace("'", '').replace('"', '').replace(',', ' ').strip()
                 for part in cleaned.split():
                     try:
                         parsed_seq.append(int(part))
                     except ValueError:
-                        pass
+                        if part:
+                            parsed_seq.append(part)
             else:
                 try:
                     parsed_seq.append(int(item))
@@ -238,27 +240,77 @@ def main():
     start_time = time.time()
     
     for cycle_idx in range(1, num_cycles + 1):
-        for task_idx, hop_length in enumerate(args.task_sequence):
-            # 1. Resolve path for this hop length
+        for task_idx, task_val in enumerate(args.task_sequence):
+            # 1. Resolve path for this task
             if args.continual_mode == "composition":
+                hop_length = int(task_val)
                 hop_pattern_src = f"shop_{support_hop_init}_qhop_{query_hop_init}"
                 hop_pattern_dst = f"shop_1_qhop_{hop_length}"
-            else:  # decomposition
+                current_train_data_path = re.sub(hop_pattern_src, hop_pattern_dst, train_data_path_template)
+                current_val_data_path = re.sub(hop_pattern_src, hop_pattern_dst, val_data_path_template)
+                current_preprocessed_dir = args.preprocessed_dir
+                task_identifier_str = f"hop_{hop_length}"
+            elif args.continual_mode == "decomposition":
+                hop_length = int(task_val)
                 hop_pattern_src = f"shop_{support_hop_init}_qhop_{query_hop_init}"
                 hop_pattern_dst = f"shop_{hop_length}_qhop_1"
+                current_train_data_path = re.sub(hop_pattern_src, hop_pattern_dst, train_data_path_template)
+                current_val_data_path = re.sub(hop_pattern_src, hop_pattern_dst, val_data_path_template)
+                current_preprocessed_dir = args.preprocessed_dir
+                task_identifier_str = f"hop_{hop_length}"
+            elif args.continual_mode == "reward_structure":
+                hop_length = task_val  # Keep as string for passing to metrics
+                task_id = str(task_val)
+                if task_id == 'original':
+                    dir_name = "shuffled_held_out_exps_generated_data_enhanced"
+                    prep_dir = "shuffled_held_out_exps_preprocessed_separate_enhanced"
+                elif task_id == 'endpoint_swap':
+                    dir_name = "continual_data/held_out_endpoint_reward_swap"
+                    prep_dir = "continual_data/held_out_endpoint_reward_swap_preprocessed"
+                elif task_id == 'same_face':
+                    dir_name = "continual_data/held_out_same_face_reward"
+                    prep_dir = "continual_data/held_out_same_face_reward_preprocessed"
+                else:
+                    raise ValueError(f"Unknown reward structure task: {task_id}")
                 
-            current_train_data_path = re.sub(hop_pattern_src, hop_pattern_dst, train_data_path_template)
-            current_val_data_path = re.sub(hop_pattern_src, hop_pattern_dst, val_data_path_template)
+                # Replace paths by taking the basename of the template
+                current_train_data_path = os.path.join("src/data", dir_name, os.path.basename(train_data_path_template))
+                current_val_data_path = os.path.join("src/data", dir_name, os.path.basename(val_data_path_template))
+                current_preprocessed_dir = os.path.join("src/data", prep_dir)
+                task_identifier_str = f"held_out_{task_id}"
+            elif args.continual_mode == "potion_pairing":
+                hop_length = str(task_val) # string "0", "1", etc.
+                pairing_idx = int(task_val)
+                
+                dir_name = "chemistry_pickles/original_reward_potion_remap_generated_data"
+                prep_dir = "chemistry_pickles/original_reward_potion_remap_preprocessed_data"
+                
+                base_train = os.path.basename(train_data_path_template)
+                base_val = os.path.basename(val_data_path_template)
+                
+                current_train_data_path = os.path.join("src/data", dir_name, base_train)
+                current_val_data_path = os.path.join("src/data", dir_name, base_val)
+                current_preprocessed_dir = os.path.join("src/data", prep_dir)
+                task_identifier_str = f"pairing_index_{pairing_idx}"
+            else:
+                raise ValueError(f"Unknown continual mode: {args.continual_mode}")
             
             current_train_data_path = f"{current_train_data_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
             current_val_data_path = f"{current_val_data_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
             
+            if args.continual_mode == "potion_pairing" and int(task_val) > 0:
+                current_train_data_path = current_train_data_path.replace(".json", f"_pairing_index_{task_val}.json")
+                current_val_data_path = current_val_data_path.replace(".json", f"_pairing_index_{task_val}.json")
+            
             current_train_data_path = os.path.join(base_path, current_train_data_path)
             current_val_data_path = os.path.join(base_path, current_val_data_path)
+
+            print("Current train data path: ", current_train_data_path)
+            print("Current val data path: ", current_val_data_path)
             
             if accelerator.is_local_main_process:
                 print(f"\n==========================================")
-                print(f"CYCLE {cycle_idx} | TASK {task_idx}: Hop Length = {hop_length}")
+                print(f"CYCLE {cycle_idx} | TASK {task_idx}: {task_identifier_str}")
                 print(f"Loading training data from: {current_train_data_path}")
                 print(f"Loading validation data from: {current_val_data_path}")
                 print(f"==========================================\n")
@@ -269,7 +321,7 @@ def main():
                 task_type=args.task_type,
                 filter_query_from_support=args.filter_query_from_support,
                 num_workers=args.num_workers,
-                preprocessed_dir=args.preprocessed_dir,
+                preprocessed_dir=current_preprocessed_dir,
                 use_preprocessed=args.use_preprocessed,
                 input_format=args.input_format,
                 output_format=args.output_format,
@@ -284,7 +336,7 @@ def main():
                 stone_state_to_id=train_dataset.stone_state_to_id if args.task_type == "classification" else None,
                 filter_query_from_support=args.filter_query_from_support,
                 num_workers=args.num_workers,
-                preprocessed_dir=args.preprocessed_dir,
+                preprocessed_dir=current_preprocessed_dir,
                 use_preprocessed=args.use_preprocessed,
                 input_format=args.input_format,
                 output_format=args.output_format,
@@ -457,7 +509,7 @@ def main():
             epochs_limit = args.epochs_per_task if args.epochs_per_task is not None else args.epochs
             
             # Per-task predictions output subdirectory
-            task_pred_dir = os.path.join(continual_save_dir, f"cycle_{cycle_idx}_task_{task_idx}_hop_{hop_length}", "predictions")
+            task_pred_dir = os.path.join(continual_save_dir, f"cycle_{cycle_idx}_task_{task_idx}_{task_identifier_str}", "predictions")
             if accelerator.is_local_main_process:
                 os.makedirs(task_pred_dir, exist_ok=True)
                 
@@ -504,7 +556,7 @@ def main():
                 if accelerator.is_local_main_process:
                     current_lr = scheduler.get_last_lr()[0] if scheduler else optimizer.param_groups[0]['lr']
                     epoch_log = {}
-                    prefix = f"continual/cycle_{cycle_idx}_task_{task_idx}_hop_{hop_length}/"
+                    prefix = f"continual/cycle_{cycle_idx}_task_{task_idx}_{task_identifier_str}/"
                     epoch_log[f"{prefix}train_loss"] = train_loss
                     epoch_log[f"{prefix}train_accuracy"] = train_acc
                     epoch_log[f"{prefix}val_loss"] = val_loss
@@ -643,7 +695,7 @@ def main():
                 if scheduler is not None:
                     checkpoint['scheduler_state_dict'] = scheduler.state_dict()
                     
-                task_ckpt_path = os.path.join(continual_save_dir, f"model_cycle_{cycle_idx}_task_{task_idx}_hop_{hop_length}.pt")
+                task_ckpt_path = os.path.join(continual_save_dir, f"model_cycle_{cycle_idx}_task_{task_idx}_{task_identifier_str}.pt")
                 torch.save(checkpoint, task_ckpt_path)
                 print(f"Saved task-specific checkpoint to {task_ckpt_path}")
                 

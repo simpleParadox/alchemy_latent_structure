@@ -284,7 +284,7 @@ def build_parser():
     parser.add_argument(
         "--continual_mode",
         type=str,
-        choices=["composition", "decomposition"],
+        choices=["composition", "decomposition", "reward_structure", "potion_pairing"],
         default="composition",
         help="Which experiment type to use in continual mode."
     )

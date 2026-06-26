@@ -19,7 +19,7 @@ import pickle
 from functools import partial
 from tqdm import tqdm
 from typing import Dict, Any, Tuple, List, Set
-
+import os
 # Imports from dm_alchemy
 from dm_alchemy.types import stones_and_potions, utils as type_utils, graphs
 from dm_alchemy.types.stones_and_potions import (
@@ -30,6 +30,28 @@ from dm_alchemy.ideal_observer import precomputed_maps
 
 # --- Constants ---
 POTION_INDEX_TO_COLOR_VALUE = [-1.0, -2/3, -1/3, 0.0, 1/3, 2/3]
+
+def get_pairing_mapping(index: int):
+    pairings = [
+        ['RED', 'GREEN', 'ORANGE', 'YELLOW', 'PINK', 'CYAN'],
+        ['RED', 'GREEN', 'ORANGE', 'PINK', 'YELLOW', 'CYAN'],
+        ['RED', 'GREEN', 'ORANGE', 'CYAN', 'YELLOW', 'PINK'],
+        ['RED', 'ORANGE', 'GREEN', 'YELLOW', 'PINK', 'CYAN'],
+        ['RED', 'ORANGE', 'GREEN', 'PINK', 'YELLOW', 'CYAN'],
+        ['RED', 'ORANGE', 'GREEN', 'CYAN', 'YELLOW', 'PINK'],
+        ['RED', 'YELLOW', 'GREEN', 'ORANGE', 'PINK', 'CYAN'],
+        ['RED', 'YELLOW', 'GREEN', 'PINK', 'ORANGE', 'CYAN'],
+        ['RED', 'YELLOW', 'GREEN', 'CYAN', 'ORANGE', 'PINK'],
+        ['RED', 'PINK', 'GREEN', 'ORANGE', 'YELLOW', 'CYAN'],
+        ['RED', 'PINK', 'GREEN', 'YELLOW', 'ORANGE', 'CYAN'],
+        ['RED', 'PINK', 'GREEN', 'CYAN', 'ORANGE', 'YELLOW'],
+        ['RED', 'CYAN', 'GREEN', 'ORANGE', 'YELLOW', 'PINK'],
+        ['RED', 'CYAN', 'GREEN', 'YELLOW', 'ORANGE', 'PINK'],
+        ['RED', 'CYAN', 'GREEN', 'PINK', 'ORANGE', 'YELLOW'],
+    ]
+    if index < 0 or index >= len(pairings):
+        raise ValueError(f"Invalid pairing index {index}")
+    return pairings[index]
 
 # --- Helper Functions ---
 
@@ -49,21 +71,21 @@ def get_stone_feature_name(feature_index: int, value: float) -> str:
         if np.isclose(value, 1.0): return "round"
     return "unknown"
 
-def get_potion_color_name(color_value: float) -> str:
+def get_potion_color_name(color_value: float, pairing_index: int = 0) -> str:
     """Maps the numerical potion color value from the observation to its name."""
-    if np.isclose(color_value, -1.0): return "RED"
-    if np.isclose(color_value, -2/3): return "GREEN"
-    if np.isclose(color_value, -1/3): return "ORANGE"
-    if np.isclose(color_value, 0.0): return "YELLOW"
-    if np.isclose(color_value, 1/3): return "PINK"
-    if np.isclose(color_value, 2/3): return "CYAN"
+    if np.isclose(color_value, -1.0): return get_pairing_mapping(pairing_index)[0]
+    if np.isclose(color_value, -2/3): return get_pairing_mapping(pairing_index)[1]
+    if np.isclose(color_value, -1/3): return get_pairing_mapping(pairing_index)[2]
+    if np.isclose(color_value, 0.0): return get_pairing_mapping(pairing_index)[3]
+    if np.isclose(color_value, 1/3): return get_pairing_mapping(pairing_index)[4]
+    if np.isclose(color_value, 2/3): return get_pairing_mapping(pairing_index)[5]
     return "USED/UNKNOWN"
 
-def potion_index_to_color_name(potion_idx: int) -> str:
+def potion_index_to_color_name(potion_idx: int, pairing_index: int = 0) -> str:
     """Maps a potion index (0-5) to its color name."""
     if 0 <= potion_idx < len(POTION_INDEX_TO_COLOR_VALUE):
         color_value = POTION_INDEX_TO_COLOR_VALUE[potion_idx]
-        return get_potion_color_name(color_value)
+        return get_potion_color_name(color_value, pairing_index)
     return "INVALID_INDEX"
 
 def is_graph_complete(graph) -> bool:
@@ -156,7 +178,7 @@ def generate_transitions_for_chemistry(chemistry):
 
 # --- Rolled Out Graph Generation ---
 
-def generate_rolled_out_graph(chemistry) -> Dict[str, Any]:
+def generate_rolled_out_graph(chemistry, pairing_index=0) -> Dict[str, Any]:
     """
     Generate a rolled-out graph structure similar to deterministic_chemistry_generator.py
     This creates a detailed graph representation that can be used for data generation.
@@ -199,7 +221,7 @@ def generate_rolled_out_graph(chemistry) -> Dict[str, Any]:
                         latent_potion = potion_obj.latent_potion()
                         perceived_potion = chemistry.potion_map.apply_inverse(latent_potion)
                         perceived_potion_idx = perceived_potion.index()
-                        potion_color = potion_index_to_color_name(perceived_potion_idx)
+                        potion_color = potion_index_to_color_name(perceived_potion_idx, pairing_index)
                         next_node_obj_str = str(next_node_obj)
                         
                         rolled_out_graph[node_obj_str]["transitions"].append({
@@ -219,7 +241,7 @@ def generate_rolled_out_graph(chemistry) -> Dict[str, Any]:
 
 # --- Canonical String Generation ---
 
-def generate_structural_parts_from_transitions(transitions):
+def generate_structural_parts_from_transitions(transitions, pairing_index=0):
     """
     Generate structural parts derived from transitions (actual behavior).
     This captures what transitions actually exist, potentially different from intended structure.
@@ -265,7 +287,7 @@ def generate_structural_parts_from_transitions(transitions):
         sorted_transitions = sorted(transitions_from_start, key=lambda x: (x[0], x[1], x[2]))
         
         for potion_idx, end_coords, end_reward in sorted_transitions:
-            potion_color = potion_index_to_color_name(potion_idx)
+            potion_color = potion_index_to_color_name(potion_idx, pairing_index)
             end_color = get_stone_feature_name(0, end_coords[0])
             end_size = get_stone_feature_name(1, end_coords[1])
             end_roundness = get_stone_feature_name(2, end_coords[2])
@@ -281,97 +303,7 @@ def generate_structural_parts_from_transitions(transitions):
     
     return structural_parts_from_transitions
 
-# def generate_canonical_graph_string_with_transitions(chemistry) -> str:
-#     """
-#     Enhanced canonical string that includes:
-#     1. Chemistry structure (components, graph topology)
-#     2. Structural parts derived from actual transitions (behavior-based)
-#     3. Actual transitions (what happens when you apply potions to stones)
-#     This ensures that chemistries with different transitions are treated as unique.
-#     """
-#     if not chemistry or not hasattr(chemistry, 'graph'):
-#         return ""
-    
-#     # Generate transitions first (we need them for both structural analysis and final string)
-#     transitions = generate_transitions_for_chemistry(chemistry)
-    
-#     # Get the structural canonical string (from chemistry configuration)
-#     structural_parts = []
-#     nodes = chemistry.graph.node_list.nodes
-    
-#     # Sort nodes for consistency with transition structure generation
-#     sorted_nodes = sorted(nodes, key=lambda node: str(node.coords))
-    
-#     for node in sorted_nodes:
-#         node_str = str(node)
-        
-#         try:
-#             latent_stone = LatentStone(node.coords)
-#             aligned_stone_from_map = chemistry.stone_map.apply_inverse(latent_stone)
-#             perceived_stone = unalign(aligned_stone_from_map, chemistry.rotation)
-            
-#             color = get_stone_feature_name(0, perceived_stone.perceived_coords[0])
-#             size = get_stone_feature_name(1, perceived_stone.perceived_coords[1])
-#             roundness = get_stone_feature_name(2, perceived_stone.perceived_coords[2])
-#             reward = aligned_stone_from_map.reward
-            
-#             # Remove STRUCT_START prefix for consistency
-#             structural_parts.append(
-#                 f"{tuple(perceived_stone.perceived_coords)}:DESC:{{color:{color},size:{size},roundness:{roundness},reward:{reward}}}"
-#             )
-#         except Exception as e:
-#             structural_parts.append(f"error:DESC:error")
-        
-#         if node in chemistry.graph.edge_list.edges:
-#             graph_edges = chemistry.graph.edge_list.edges[node]
-#             for next_node, edge_info in graph_edges.items():
-#                 if len(edge_info) >= 2 and isinstance(edge_info[1], Potion):
-#                     potion = edge_info[1]
-                    
-#                     # Convert latent potion to perceived potion
-#                     latent_potion = potion.latent_potion()
-#                     perceived_potion = chemistry.potion_map.apply_inverse(latent_potion)
-#                     perceived_potion_idx = perceived_potion.index()
-#                     potion_color_name = potion_index_to_color_name(perceived_potion_idx)
-                    
-#                     try:
-#                         # Get next stone description for consistency with TRANS_EDGE format
-#                         next_latent_stone = LatentStone(next_node.coords)
-#                         next_aligned_stone_from_map = chemistry.stone_map.apply_inverse(next_latent_stone)
-#                         next_perceived_stone = unalign(next_aligned_stone_from_map, chemistry.rotation)
-                        
-#                         next_color = get_stone_feature_name(0, next_perceived_stone.perceived_coords[0])
-#                         next_size = get_stone_feature_name(1, next_perceived_stone.perceived_coords[1])
-#                         next_roundness = get_stone_feature_name(2, next_perceived_stone.perceived_coords[2])
-#                         next_reward = next_aligned_stone_from_map.reward
-                        
-#                         # Use perceived potion index instead of latent potion index
-#                         structural_parts.append(
-#                             f"{tuple(next_perceived_stone.perceived_coords)}:{perceived_potion_idx}:{potion_color_name}:END_DESC:{{color:{next_color},size:{next_size},roundness:{next_roundness},reward:{next_reward}}}"
-#                         )
-#                     except Exception as e:
-#                         structural_parts.append(f"error:{perceived_potion_idx}:{potion_color_name}:END_DESC:error")
-
-#     structural_parts.append(f"POTION_MAP:{':'.join(map(str, chemistry.potion_map.dim_map))}")
-#     structural_parts.append(f"POTION_DIR:{':'.join(map(str, chemistry.potion_map.dir_map))}")
-#     structural_parts.append(f"STONE_MAP:{':'.join(map(str, chemistry.stone_map.latent_pos_dir))}")
-#     rotation_flat = chemistry.rotation.flatten()
-#     structural_parts.append(f"ROTATION:{':'.join(map(str, rotation_flat))}")
-    
-#     structural_string = "||".join(structural_parts)
-    
-#     # Get structural parts derived from actual transitions (behavior-based)
-#     structural_parts_from_transitions = generate_structural_parts_from_transitions(transitions)
-#     structural_from_transitions_string = "||".join(structural_parts_from_transitions)
-    
-#     # Generate transitions string
-#     transitions_string = "TRANSITIONS:" + "|".join([
-#         f"{t[0]},{t[1]},{t[2]},{t[3]},{t[4]}" for t in transitions
-#     ])
-    
-#     return f"STRUCT:{structural_string}||STRUCT_FROM_TRANS:{structural_from_transitions_string}||{transitions_string}"
-
-def generate_canonical_data_with_transitions(chemistry) -> Dict[str, Any]:
+def generate_canonical_data_with_transitions(chemistry, pairing_index=0) -> Dict[str, Any]:
     """
     Enhanced canonical data that separates all components into their own keys:
     1. structural_string: Chemistry structure (without prefixes)
@@ -424,7 +356,7 @@ def generate_canonical_data_with_transitions(chemistry) -> Dict[str, Any]:
                     # This is similar to the alchemy_datagen.py logic.
                     perceived_potion = chemistry.potion_map.apply_inverse(latent_potion)
                     perceived_potion_idx = perceived_potion.index()
-                    potion_color_name = potion_index_to_color_name(perceived_potion_idx)
+                    potion_color_name = potion_index_to_color_name(perceived_potion_idx, pairing_index)
                     
                     try:
                         next_latent_stone = LatentStone(next_node.coords)
@@ -474,7 +406,7 @@ def generate_canonical_data_with_transitions(chemistry) -> Dict[str, Any]:
     
     
     # Get structural parts derived from actual transitions (behavior-based)
-    structural_parts_from_transitions = generate_structural_parts_from_transitions(transitions)
+    structural_parts_from_transitions = generate_structural_parts_from_transitions(transitions, pairing_index)
     transition_structural_string = ''.join(structural_parts_from_transitions)
     
     # Generate transitions string
@@ -486,7 +418,7 @@ def generate_canonical_data_with_transitions(chemistry) -> Dict[str, Any]:
     canonical_string = f"STRUCT:{structural_string}||STRUCT_FROM_TRANS:{transition_structural_string}||{transitions_string}"
     
     # Generate rolled-out graph structure for data generation
-    rolled_out_graph = generate_rolled_out_graph(chemistry)
+    rolled_out_graph = generate_rolled_out_graph(chemistry, pairing_index)
     
     # Create separated canonical data dictionary
     canonical_data = {
@@ -559,7 +491,7 @@ def generate_all_rotations() -> List[np.ndarray]:
 
 # --- Multiprocessing Worker Function ---
 
-def process_chemistry_chunk(chunk_data, all_potion_maps, all_stone_maps, all_graphs_with_constraints, all_rotations, save_transitions, reward_structure):
+def process_chemistry_chunk(chunk_data, all_potion_maps, all_stone_maps, all_graphs_with_constraints, all_rotations, save_transitions, reward_structure, potion_pairing_index):
     """
     Process a chunk of (i, j, k, l) combinations and return unique chemistry data.
     Similar to data_gen_with_hash.py but for chemistry uniqueness detection.
@@ -588,7 +520,7 @@ def process_chemistry_chunk(chunk_data, all_potion_maps, all_stone_maps, all_gra
         )
 
         # Use the enhanced canonical data with separated components
-        canonical_data = generate_canonical_data_with_transitions(current_chemistry)
+        canonical_data = generate_canonical_data_with_transitions(current_chemistry, potion_pairing_index)
         
         if not canonical_data:
             print("Warning: Empty canonical data for combination ")
@@ -646,11 +578,14 @@ def process_chemistry_chunk(chunk_data, all_potion_maps, all_stone_maps, all_gra
     return chunk_results
 
 
-def save_pickle_data(data: Dict[str, Any], filename: str):
+def save_pickle_data(data: Dict[str, Any], filename: str, output_dir: str):
     """Save data as pickle."""
-    with open(filename, 'wb') as f:
+    output_path = os.path.expanduser(output_dir)
+    os.makedirs(output_path, exist_ok=True)
+    output_file_path = os.path.join(output_path, filename)
+    with open(output_file_path, 'wb') as f:
         pickle.dump(data, f)
-    return filename
+    return output_file_path
 
 
 def main():
@@ -660,6 +595,18 @@ def main():
         type=str,
         default="enhanced_chemistries_with_transitions.pkl",
         help="Path to save the generated chemistries pickle file."
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/data/",
+        help="Directory to save the generated chemistries pickle file."
+    )
+    parser.add_argument(
+        "--potion_pairing_index",
+        type=int,
+        default=0,
+        help="Index (0-14) representing the permutation of potion color pairings."
     )
     parser.add_argument(
         "--save_interval",
@@ -744,7 +691,8 @@ def main():
                          all_graphs_with_constraints=all_graphs_with_constraints,
                          all_rotations=all_rotations,
                          save_transitions=save_transitions,
-                         reward_structure=args.reward_structure)
+                         reward_structure=args.reward_structure,
+                         potion_pairing_index=args.potion_pairing_index)
     
     # Process chunks in parallel
     print(f"Starting multiprocessing with {num_workers} workers...")
@@ -790,7 +738,7 @@ def main():
     }
     
     # Final save
-    final_filename = save_pickle_data(generated_chemistries_data, args.output_file)
+    final_filename = save_pickle_data(generated_chemistries_data, args.output_file, args.output_dir)
     print(f"Final data saved to {final_filename}")
     print("Enhanced chemistry generation completed!")
 

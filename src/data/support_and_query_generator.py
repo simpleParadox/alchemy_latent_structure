@@ -293,15 +293,38 @@ def is_reverse_trajectory(sample1: Dict, sample2: Dict) -> bool:
     )
 
 
-def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, seed=0) -> Dict[str, Any]:
+def get_color_pairs(pairing_index: int):
+    pairings = [
+        ['RED', 'GREEN', 'ORANGE', 'YELLOW', 'PINK', 'CYAN'],
+        ['RED', 'GREEN', 'ORANGE', 'PINK', 'YELLOW', 'CYAN'],
+        ['RED', 'GREEN', 'ORANGE', 'CYAN', 'YELLOW', 'PINK'],
+        ['RED', 'ORANGE', 'GREEN', 'YELLOW', 'PINK', 'CYAN'],
+        ['RED', 'ORANGE', 'GREEN', 'PINK', 'YELLOW', 'CYAN'],
+        ['RED', 'ORANGE', 'GREEN', 'CYAN', 'YELLOW', 'PINK'],
+        ['RED', 'YELLOW', 'GREEN', 'ORANGE', 'PINK', 'CYAN'],
+        ['RED', 'YELLOW', 'GREEN', 'PINK', 'ORANGE', 'CYAN'],
+        ['RED', 'YELLOW', 'GREEN', 'CYAN', 'ORANGE', 'PINK'],
+        ['RED', 'PINK', 'GREEN', 'ORANGE', 'YELLOW', 'CYAN'],
+        ['RED', 'PINK', 'GREEN', 'YELLOW', 'ORANGE', 'CYAN'],
+        ['RED', 'PINK', 'GREEN', 'CYAN', 'ORANGE', 'YELLOW'],
+        ['RED', 'CYAN', 'GREEN', 'ORANGE', 'YELLOW', 'PINK'],
+        ['RED', 'CYAN', 'GREEN', 'YELLOW', 'ORANGE', 'PINK'],
+        ['RED', 'CYAN', 'GREEN', 'PINK', 'ORANGE', 'YELLOW'],
+    ]
+    if pairing_index < 0 or pairing_index >= len(pairings):
+        raise ValueError(f"Invalid pairing index {pairing_index}")
+    flat = pairings[pairing_index]
+    return [(flat[0], flat[1]), (flat[2], flat[3]), (flat[4], flat[5])]
+
+def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, pairing_index=0, seed=0) -> Dict[str, Any]:
     """
     Generates a support and query set by holding out one pair of colors.
     The support set contains all transitions for other color pairs, plus 'num_held_out_edges'
     example transition from the held-out pair. The query set contains the
     remaining transitions for the held-out pair.
     """
-    # Define the color pairs. This should match with the colors used in the deterministic chemistry graphs.
-    color_pairs = [('RED', 'GREEN'), ('PINK', 'CYAN'), ('ORANGE', 'YELLOW')] # They must be exactly these pairs. Capitalization matters.
+    # Define the color pairs based on the index.
+    color_pairs = get_color_pairs(pairing_index)
     
     # 1. Randomly select one color pair to hold out
     # print("Seed for held-out color pair generation:", seed)
@@ -682,7 +705,10 @@ def main():
     parser = argparse.ArgumentParser(description="Generate samples from chemistry graph")
     # parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/deterministic_chemistries_167424_80_unique_stones_aligned_stone.json.gz",
     #                     help="Path to the chemistry graph JSON file")
-    parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/enhanced_chemistries_with_transitions.pkl") # Enhanced chemistries contain the transitions that are unique in nature (all the chemistries are being operated on the perceived chemistry).
+    parser.add_argument("--input", 
+                        # default="/home/rsaha/projects/dm_alchemy/src/data/enhanced_chemistries_with_transitions.pkl",
+                        default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/chemistry_pickles/original_reward_mapping_potion_remaps/potion_remapping_1_original_reward_remapping_with_transitions.pkl"
+                        ) # Enhanced chemistries contain the transitions that are unique in nature (all the chemistries are being operated on the perceived chemistry).
     parser.add_argument("--output", default="chemistry_samples_167424_80_unique_stones.json",
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=10000,
@@ -709,6 +735,8 @@ def main():
     # Add a new argument for your experiment
     parser.add_argument("--held_out_color_exp", action="store_true",
                         help="Generate data for the held-out color pair experiment.", default=False)
+    parser.add_argument("--potion_pairing_index", type=int, default=0,
+                        help="Index (0-14) representing the permutation of potion color pairings.")
     parser.add_argument("--num_held_out_edges", type=int, default=4,
                         help="Number of edges to hold out for the held-out color pair experiment. Default is 4. Ignored if --held_out_color_exp is not set.")
 
@@ -956,11 +984,14 @@ def main():
             # Add seed to the filename
             base_train = os.path.splitext(train_output_file)[0]
             ext_train = os.path.splitext(train_output_file)[1]
+            
             if args.held_out_color_exp:
                 train_output_file = f"{base_train}_single_held_out_color_{args.num_held_out_edges}_edges_exp_seed_{seed}{ext_train}"
             else:
                 train_output_file = f"{base_train}_seed_{seed}{ext_train}"
             
+            if args.potion_pairing_index > 0:
+                train_output_file = train_output_file.replace(".json", f"_pairing_index_{args.potion_pairing_index}.json")
             
             base_val = os.path.splitext(val_output_file)[0]
             ext_val = os.path.splitext(val_output_file)[1]
@@ -969,12 +1000,15 @@ def main():
             else:
                 val_output_file = f"{base_val}_seed_{seed}{ext_val}"
             
+            if args.potion_pairing_index > 0:
+                val_output_file = val_output_file.replace(".json", f"_pairing_index_{args.potion_pairing_index}.json")
+            
             
             train_output_file, val_output_file = [os.path.join(os.path.dirname(f), prefix + os.path.basename(f)) for f in [train_output_file, val_output_file]]
             
             print(f"Creating separate training ({num_train_episodes} episodes) and validation ({num_val_episodes} episodes) sets")
             print(f"Training data will be saved to: {train_output_file}")
-            print(f"Validation data will be saved to: {output_file}")
+            print(f"Validation data will be saved to: {val_output_file}")
         else:
             # Use all episodes for training
             train_graphs = current_chemistry_graphs
@@ -986,6 +1020,10 @@ def main():
             query_hop = args.query_steps
             prefix = "compositional_" if args.support_steps <= args.query_steps else "decompositional_"
             train_output_file = os.path.splitext(output_file)[0] + f"_shop_{support_hop}_qhop_{query_hop}.json"
+            
+            if args.potion_pairing_index > 0:
+                train_output_file = train_output_file.replace(".json", f"_pairing_index_{args.potion_pairing_index}.json")
+            
             train_output_file = os.path.join(os.path.dirname(train_output_file), prefix + os.path.basename(train_output_file))
             
         
