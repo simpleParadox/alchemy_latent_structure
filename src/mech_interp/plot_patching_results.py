@@ -139,7 +139,8 @@ def get_layer_head_matrix(merged: dict, epoch: int, metric: str = "lse_mean"):
 # ---------------------------------------------------------------------------
 
 def plot_line(merged: dict, setup: str, output_dir: str, metric: str = "lse_mean",
-              clip_percentile: float = 99.0, smoothing_window: int = 25):
+              clip_percentile: float = 99.0, smoothing_window: int = 25,
+              exp_type: str = "unknown_exp", init_seed: str = "unknown_seed"):
     """
     Produces two line-plot figures:
       1. Attention heads (one line per head, faceted by layer)
@@ -223,7 +224,7 @@ def plot_line(merged: dict, setup: str, output_dir: str, metric: str = "lse_mean
         ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    out_path = os.path.join(output_dir, f"line_attn_heads_{setup}.png")
+    out_path = os.path.join(output_dir, f"line_attn_heads_{exp_type}_{init_seed}_{setup}.png")
     plt.savefig(out_path, dpi=150)
     plt.close()
     print(f"Saved: {out_path}")
@@ -244,7 +245,7 @@ def plot_line(merged: dict, setup: str, output_dir: str, metric: str = "lse_mean
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    out_path = os.path.join(output_dir, f"line_mlp_embedding_{setup}.png")
+    out_path = os.path.join(output_dir, f"line_mlp_embedding_{exp_type}_{init_seed}_{setup}.png")
     plt.savefig(out_path, dpi=150)
     plt.close()
     print(f"Saved: {out_path}")
@@ -255,7 +256,7 @@ def plot_line(merged: dict, setup: str, output_dir: str, metric: str = "lse_mean
 # ---------------------------------------------------------------------------
 
 def plot_heatmap(merged: dict, epoch: int, setup: str, output_dir: str,
-                 metric: str = "lse_mean"):
+                 metric: str = "lse_mean", exp_type: str = "unknown_exp", init_seed: str = "unknown_seed"):
     """
     Save a layer x head heatmap for the given epoch.
     """
@@ -284,7 +285,7 @@ def plot_heatmap(merged: dict, epoch: int, setup: str, output_dir: str,
             ax.text(hi, li, f"{mat[li, hi]:.3f}", ha="center", va="center",
                     fontsize=7, color="black")
     plt.tight_layout()
-    out_path = os.path.join(output_dir, f"heatmap_epoch_{epoch}_{setup}.png")
+    out_path = os.path.join(output_dir, f"heatmap_epoch_{epoch}_{exp_type}_{init_seed}_{setup}.png")
     plt.savefig(out_path, dpi=150)
     plt.close()
     print(f"Saved: {out_path}")
@@ -295,7 +296,8 @@ def plot_heatmap(merged: dict, epoch: int, setup: str, output_dir: str,
 # ---------------------------------------------------------------------------
 
 def plot_animated_heatmap(merged: dict, setup: str, output_dir: str,
-                          metric: str = "lse_mean", fps: int = 5):
+                          metric: str = "lse_mean", fps: int = 5,
+                          exp_type: str = "unknown_exp", init_seed: str = "unknown_seed"):
     """
     Produce an animated GIF sweeping through all epochs.
     """
@@ -344,10 +346,40 @@ def plot_animated_heatmap(merged: dict, setup: str, output_dir: str,
         fig, update, frames=len(epochs), interval=interval_ms, blit=False
     )
 
-    out_path = os.path.join(output_dir, f"heatmap_animated_{setup}.gif")
+    out_path = os.path.join(output_dir, f"heatmap_animated_{exp_type}_{init_seed}_{setup}.gif")
     ani.save(out_path, writer="pillow", fps=fps)
     plt.close()
     print(f"Saved: {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# Metadata extraction
+# ---------------------------------------------------------------------------
+
+def extract_run_metadata(results_dir: str):
+    """
+    Extracts exp_type and init_seed from the results_dir path.
+    """
+    parts = os.path.normpath(results_dir).split(os.sep)
+    exp_type = "unknown_exp"
+    init_seed = "unknown_seed"
+    
+    for part in reversed(parts):
+        if "init_seed_" in part or part.startswith("init_seed"):
+            init_seed = part
+            break
+    else:
+        for part in reversed(parts):
+            if part.isdigit():
+                init_seed = f"seed_{part}"
+                break
+                
+    for i, part in enumerate(parts):
+        if part in ("mech_interp_results", "saved_models") and i + 1 < len(parts):
+            exp_type = parts[i+1]
+            break
+            
+    return exp_type, init_seed
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +399,7 @@ def main():
         help="Experiment setup to visualize. Default: noising."
     )
     parser.add_argument(
-        "--metric", type=str, default="lse_mean",
+        "--metric", type=str, default="raw_lse_mean",
         choices=["lse_mean", "softmax_mean", "raw_lse_mean"],
         help="Score metric to plot. Default: lse_mean."
     )
@@ -412,19 +444,24 @@ def main():
     epochs = sorted(merged.keys())
     print(f"Loaded {len(epochs)} epochs: {epochs[0]} … {epochs[-1]}")
 
+    exp_type, init_seed = extract_run_metadata(args.results_dir)
+
     if args.line_plots:
         print("\n--- Generating line plots ---")
         plot_line(merged, args.setup, args.output_dir, metric=args.metric,
                   clip_percentile=args.clip_percentile,
-                  smoothing_window=args.smoothing_window)
+                  smoothing_window=args.smoothing_window,
+                  exp_type=exp_type, init_seed=init_seed)
 
     if args.heatmap_epoch is not None:
         print(f"\n--- Generating static heatmap for epoch {args.heatmap_epoch} ---")
-        plot_heatmap(merged, args.heatmap_epoch, args.setup, args.output_dir, metric=args.metric)
+        plot_heatmap(merged, args.heatmap_epoch, args.setup, args.output_dir, metric=args.metric,
+                     exp_type=exp_type, init_seed=init_seed)
 
     if args.animate:
         print("\n--- Generating animated heatmap GIF ---")
-        plot_animated_heatmap(merged, args.setup, args.output_dir, metric=args.metric, fps=args.fps)
+        plot_animated_heatmap(merged, args.setup, args.output_dir, metric=args.metric, fps=args.fps,
+                              exp_type=exp_type, init_seed=init_seed)
 
     if not args.line_plots and args.heatmap_epoch is None and not args.animate:
         print("Nothing to do. Use --line_plots True, --heatmap_epoch <epoch>, or --animate True.")

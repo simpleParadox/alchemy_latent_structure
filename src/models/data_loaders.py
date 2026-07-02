@@ -390,7 +390,8 @@ class AlchemyDataset(Dataset):
                  input_format: Optional[str] = None,
                  output_format: Optional[str] = None,
                  model_architecture: str = "encoder", 
-                 num_query_samples: int = None):
+                 num_query_samples: int = None,
+                 reference_order_json: Optional[str] = None):
         
         self.task_type = task_type
         self.filter_query_from_support = filter_query_from_support
@@ -459,7 +460,7 @@ class AlchemyDataset(Dataset):
                 print("Using original preprocessing (preprocessed data disabled)...")
             
             self._initialize_from_scratch(json_file_path, vocab_word2idx, vocab_idx2word, stone_state_to_id,
-                                          num_query_samples=num_query_samples) 
+                                          num_query_samples=num_query_samples, reference_order_json=reference_order_json) 
 
         # Create train/val splits if requested
         self.train_set = None
@@ -582,7 +583,7 @@ class AlchemyDataset(Dataset):
 
     def _initialize_from_scratch(self, json_file_path: str, vocab_word2idx: Dict[str, int] = None, 
                                 vocab_idx2word: Dict[int, str] = None, stone_state_to_id: Dict[str, int] = None,
-                                num_query_samples: int = None):
+                                num_query_samples: int = None, reference_order_json: Optional[str] = None):
         """Initialize dataset from scratch with separate input/output vocabularies."""
         
         if vocab_word2idx and vocab_idx2word:
@@ -669,7 +670,7 @@ class AlchemyDataset(Dataset):
 
         # If the output_format is not "features", we do not need the feature mappings.
 
-        self.data = self._load_and_preprocess_data(json_file_path, self.num_workers, self.chunk_size, num_query_samples=num_query_samples)
+        self.data = self._load_and_preprocess_data(json_file_path, self.num_workers, self.chunk_size, num_query_samples=num_query_samples, reference_order_json=reference_order_json)
 
     def _parse_stone_string_to_tokens(self, stone_str: str) -> List[int]:
         features = re.findall(r':\s*([\w-]+)', stone_str) 
@@ -1006,7 +1007,7 @@ class AlchemyDataset(Dataset):
         return filtered_support
 
     def _load_and_preprocess_data(self, json_file_path: str, num_workers: int, chunk_size: int,
-                                  num_query_samples: int = None) -> List[Dict[str, Any]]:
+                                  num_query_samples: int = None, reference_order_json: Optional[str] = None) -> List[Dict[str, Any]]:
         with open(json_file_path, 'r') as f:
             raw_data = json.load(f)
         
@@ -1019,7 +1020,23 @@ class AlchemyDataset(Dataset):
         feature_to_idx_map_arg = (self.feature_to_idx_map_input, self.feature_to_idx_map_output) if self.output_format == "features" else None
 
         episode_args = []
-        for episode_id, episode_content in raw_data["episodes"].items():
+        episodes_items = list(raw_data["episodes"].items())
+        
+        if reference_order_json is not None:
+            print(f"Reordering episodes based on reference order: {reference_order_json}")
+            with open(reference_order_json, 'r') as f:
+                reference_order = json.load(f)
+            episodes_dict = {ep_id: ep_content for ep_id, ep_content in episodes_items}
+            # Only include episodes that are both in the reference and in the current data
+            episodes_items = [(ep_id, episodes_dict[ep_id]) for ep_id in reference_order if ep_id in episodes_dict]
+            # Add any missing episodes at the end just in case (though they should perfectly match)
+            missing = set(episodes_dict.keys()) - set(reference_order) - {"_metadata"}
+            if missing:
+                print(f"Warning: {len(missing)} episodes not found in reference order! Appending them to the end.")
+                episodes_items.extend([(ep_id, episodes_dict[ep_id]) for ep_id in missing])
+
+        for episode_id, episode_content in episodes_items:
+            if episode_id == "_metadata": continue
             if episode_content:  # Skip empty episodes
                 episode_args.append((
                     episode_id, episode_content, self.task_type, 
@@ -1059,13 +1076,14 @@ class AlchemyDataset(Dataset):
                 
                 print(f"Chunk {chunk_num}/{total_chunks} completed. Total examples so far: {len(processed_data)}")
         else:
-            # Fallback to sequential processing for single worker or single episode
+        # Fallback to sequential processing for single worker or single episode
             print(f"Processing {len(episode_args)} episodes sequentially...")
             for args in tqdm(episode_args, desc=f"Processing episodes ({self.task_type})", unit="episode"):
                 episode_results = process_episode_worker(args)
                 processed_data.extend(episode_results)
         
-        print(f"Total processed examples: {len(processed_data)}")
+        self.data = processed_data
+        print(f"Total processed examples: {len(self.data)}")
         return processed_data
     
     def _create_train_val_splits(self):

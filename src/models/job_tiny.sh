@@ -1,1 +1,0 @@
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 accelerate launch train.py --batch_size= --wandb_mode='online' --epochs=100 --model_size='xsmall' --num_workers=15

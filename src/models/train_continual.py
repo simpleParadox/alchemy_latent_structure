@@ -298,7 +298,7 @@ def main():
             current_train_data_path = f"{current_train_data_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
             current_val_data_path = f"{current_val_data_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
             
-            if args.continual_mode == "potion_pairing" and int(task_val) > 0:
+            if args.continual_mode == "potion_pairing" and int(task_val) >= 0:
                 current_train_data_path = current_train_data_path.replace(".json", f"_pairing_index_{task_val}.json")
                 current_val_data_path = current_val_data_path.replace(".json", f"_pairing_index_{task_val}.json")
             
@@ -325,7 +325,8 @@ def main():
                 use_preprocessed=args.use_preprocessed,
                 input_format=args.input_format,
                 output_format=args.output_format,
-                model_architecture=args.model_architecture
+                model_architecture=args.model_architecture,
+                reference_order_json=args.reference_order_json
             )
             
             val_dataset = AlchemyDataset(
@@ -340,7 +341,8 @@ def main():
                 use_preprocessed=args.use_preprocessed,
                 input_format=args.input_format,
                 output_format=args.output_format,
-                model_architecture=args.model_architecture
+                model_architecture=args.model_architecture,
+                reference_order_json=args.reference_order_json.replace("train", "val") if args.reference_order_json else None
             )
             
             pad_token_id = train_dataset.pad_token_id
@@ -520,6 +522,7 @@ def main():
                 if accelerator.is_local_main_process:
                     print(f"Cycle {cycle_idx} | Task {task_idx} | Epoch {epoch + 1}/{epochs_limit}")
                     
+                is_new_task = (task_idx > 0 or cycle_idx > 1)
                 # Train one epoch
                 train_loss, train_acc = train_epoch(
                     model=model,
@@ -530,7 +533,8 @@ def main():
                     accelerator=accelerator,
                     epoch_num=epoch,
                     pad_token_id=pad_token_id,
-                    args=args
+                    args=args,
+                    is_new_task=is_new_task
                 )
                 
                 # Validate one epoch
@@ -576,6 +580,7 @@ def main():
                     epoch_log["continual/learning_rate"] = current_lr
                     epoch_log["continual/current_train_loss"] = train_loss
                     epoch_log["continual/current_train_accuracy"] = train_acc
+                    epoch_log["continual/task_transition"] = 1.0 if (is_new_task and epoch == 0) else 0.0
                     
                     # Copy accuracy flags and other scalar evaluation metrics
                     for key, val in val_metrics.items():

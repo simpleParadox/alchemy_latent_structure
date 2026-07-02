@@ -36,6 +36,7 @@ def preprocess_and_save_dataset(
     input_format: str = None,
     output_format: str = None,
     num_query_samples: int = None,
+    reference_order_json: str = None,
 ):
     """
     Preprocess a dataset and save it to disk.
@@ -87,6 +88,7 @@ def preprocess_and_save_dataset(
         input_format=input_format,
         output_format=output_format,
         num_query_samples=num_query_samples,
+        reference_order_json=reference_order_json,
     )
     
     # Generate output filenames based on input file and parameters
@@ -215,10 +217,9 @@ def main():
                         # default="/home/rsaha/projects/dm_alchemy/src/data/held_out_randomized_reward_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/baseline_generated_data_from_normalized_reward/compositional_baseline_compositional_chemistry_samples_train_shop_1_qhop_1.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/baseline_normalized_held_out_subset_of_original/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
-
-
                         # default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/continual_data/held_out_endpoint_reward_swap/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
-                        default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/continual_data/held_out_same_face_reward/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        # default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/continual_data/held_out_same_face_reward/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/chemistry_pickles/original_reward_potion_remap_generated_data/compositional_chemistry_samples_167424_80_unique_stones_train_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_0_pairing_index_0.json",
                         help="Path to the training JSON file")
     parser.add_argument("--val_json_file", type=str, required=False,
                         # default="/home/rsaha/projects/dm_alchemy/src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_2_seed_.json",
@@ -233,7 +234,8 @@ def main():
                         # default="/home/rsaha/projects/dm_alchemy/src/data/baseline_generated_data_from_normalized_reward/compositional_baseline_compositional_chemistry_samples_val_shop_1_qhop_1.json",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/baseline_normalized_held_out_subset_of_original/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
                         # default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/continual_data/held_out_endpoint_reward_swap/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
-                        default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/continual_data/held_out_same_face_reward/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        # default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/continual_data/held_out_same_face_reward/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_.json",
+                        default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/chemistry_pickles/original_reward_potion_remap_generated_data/compositional_chemistry_samples_167424_80_unique_stones_val_shop_1_qhop_1_single_held_out_color_4_edges_exp_seed_0_pairing_index_0.json",
                         help="Path to the validation JSON file")
     parser.add_argument("--task_type", type=str, required=False,
                         choices=["seq2seq", "classification", "classification_multi_label", "seq2seq_stone_state"],
@@ -249,15 +251,14 @@ def main():
                         # default='src/data/complete_graphs_composition_non_subsampled_grouped_by_unique_end_state_preprocessed',
                         # default='src/data/held_out_reward_ablation_preprocessed_separate_enhanced',
                         # default='src/data/held_out_randomized_reward_preprocessed_separate_enhanced',
-                        # default='src/data/baseline_preprocessed_from_normalized_reward',
-                        # default='src/data/baseline_normalized_held_out_subset_of_original_preprocessed',
-                        # default='src/data/continual_data/held_out_endpoint_reward_swap_preprocessed',
-                        default='src/data/continual_data/held_out_same_face_reward_preprocessed',
+                        default="src/data/chemistry_pickles/original_reward_potion_remap_preprocessed_data",
                         help="Directory to save preprocessed files")
     parser.add_argument("--filter_query_from_support", action="store_true", default=True,
                         help="Filter query examples from support sets")
     parser.add_argument("--num_workers", type=int, default=20,
                         help="Number of workers for multiprocessing")
+    parser.add_argument("--reference_order_json", type=str, required=False, default=None,
+                        help="Path to a JSON file containing the exact sequence of episode IDs to enforce matching order.")
     parser.add_argument("--chunk_size", type=int, default=60000,
                         help="Chunk size for processing")
     parser.add_argument("--input_format", type=str, default='features', choices=["stone_states", "features"],
@@ -283,8 +284,8 @@ def main():
     # seeds = [0,1,2,3,4]
     seeds = [0]
     for seed in seeds:
-        train_json_file = args.train_json_file.replace(f"seed_", f"seed_{seed}")
-        val_json_file = args.val_json_file.replace(f"seed_", f"seed_{seed}")
+        train_json_file = args.train_json_file.replace("seed_.", f"seed_{seed}.")
+        val_json_file = args.val_json_file.replace("seed_.", f"seed_{seed}.")
         # Preprocess training data first (this will create the vocabulary)
         train_result = preprocess_and_save_dataset(
             json_file_path=train_json_file,
@@ -299,6 +300,7 @@ def main():
             input_format=args.input_format,
             output_format=args.output_format,
             num_query_samples=args.num_query_samples,
+            reference_order_json=args.reference_order_json,
         )
         
         print("\n" + "="*60)
@@ -326,7 +328,8 @@ def main():
             chunk_size=args.chunk_size,
             input_format=args.input_format,
             output_format=args.output_format,
-            num_query_samples=args.num_query_samples
+            num_query_samples=args.num_query_samples,
+            reference_order_json=args.reference_order_json.replace("train", "val") if args.reference_order_json else None
         )
         
         print("\n" + "="*60)

@@ -230,6 +230,8 @@ def build_parser():
                         help="Seed for reproducible train/val splits.")
     parser.add_argument("--data_split_seed", type=int, default=0,
                         help="Seed value that gets appended to the data path to load the approapriate training / validation.")
+    parser.add_argument("--reference_order_json", type=str, required=False, default=None,
+                        help="Path to a JSON file containing the exact sequence of episode IDs to enforce matching order.")
 
     parser.add_argument("--model_size", type=str, default="xsmall", choices=["tiny", "xsmall", "xsmall_modified", "xsmall_wide", "xsmall_deep", "small", "medium", "large"],
                         help="Size of the transformer model.")
@@ -677,7 +679,7 @@ def load_checkpoint(
 
     return start_epoch, best_val_loss, checkpoint.get("args", None)
 
-def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator, epoch_num, pad_token_id, args):
+def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator, epoch_num, pad_token_id, args, is_new_task=False):
     model.train()
     total_loss = 0
     total_correct_preds = 0
@@ -892,13 +894,16 @@ def train_epoch(model, dataloader, optimizer, criterion, scheduler, accelerator,
             # Update tqdm description instead of printing
             pbar.set_description(f"Epoch {epoch_num+1} | Batch {batch_idx}/{len(dataloader)} | Loss: {loss.item():.4f} | Train Acc: {acc:.4f} | LR: {current_lr:.2e} | Time: {elapsed_time:.2f}s")
             prefix = "continual/" if getattr(args, "continual", False) else "baseline/"
-            wandb.log({
+            log_dict = {
                 f"{prefix}train_batch_loss": loss.item(),
                 f"{prefix}train_batch_accuracy": acc,
                 f"{prefix}learning_rate": current_lr,
                 f"{prefix}epoch": epoch_num,
                 f"{prefix}batch_idx": batch_idx
-            })
+            }
+            if getattr(args, "continual", False):
+                log_dict[f"{prefix}task_transition"] = 1.0 if (is_new_task and epoch_num == 0 and batch_idx == 0) else 0.0
+            wandb.log(log_dict)
             start_time = time.time()
         
     
@@ -1147,7 +1152,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
     if args.task_type == "classification" and getattr(dataset, "stone_state_to_id", None) is not None:
         try:
             # Gather all predictions, targets, and inputs across ranks if sharded
-            if getattr(args, "multi_gpu_validation", "False") == "True" and accelerator.num_processes > 1: # NOTE: This checks if the condition that the attribute is set to False, is True. It does not check if the attribute itself is set to True.
+            if getattr(args, "multi_gpu_validation", False) and accelerator.num_processes > 1:
                 all_predictions_tensor = pad_and_cat_tensors(all_predictions, pad_value=pad_token_id).to(accelerator.device)
                 all_targets_tensor = pad_and_cat_tensors(all_targets, pad_value=pad_token_id).to(accelerator.device)
                 all_encoder_inputs_tensor = pad_and_cat_tensors(all_encoder_inputs, pad_value=pad_token_id).to(accelerator.device)
@@ -1759,7 +1764,8 @@ def main():
             use_preprocessed=args.use_preprocessed,   # Add this line
             input_format=args.input_format,
             output_format=args.output_format,
-            model_architecture=args.model_architecture
+            model_architecture=args.model_architecture,
+            reference_order_json=args.reference_order_json
         )
 
     # Convert flash_attention flag to boolean
@@ -1813,7 +1819,8 @@ def main():
             use_preprocessed=args.use_preprocessed,   # Add this line
             input_format=args.input_format,
             output_format=args.output_format,
-            model_architecture=args.model_architecture
+            model_architecture=args.model_architecture,
+            reference_order_json=args.reference_order_json.replace("train", "val") if args.reference_order_json else None
         )
     else:
         print("No validation data specified. Skipping validation.")

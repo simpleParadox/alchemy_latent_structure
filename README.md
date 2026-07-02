@@ -1,19 +1,62 @@
-# Code for the paper:
-Understanding the staged dynamics of of transformers in latent structure learning.
+# Understanding the Staged Dynamics of Transformers in Latent Structure Learning
 
-This codebase contains the code to train and evaluate transformer based models on the DM Alchemy dataset.
+This repository contains the codebase to train and evaluate transformer-based models on the DM Alchemy dataset, investigating the staged/phasic dynamics of how models learn latent graphical chemistry structures.
+
+## Directory Structure
+
+The repository is organized as follows:
+
+```
+alchemy_latent_structure/
+├── AGENTS.md                  ← AI coding agent instructions and rules
+├── README.md                  ← Installation and usage guide
+├── research_question.md       ← Scientific goals and questions under study
+├── experiment_log.md          ← Log format for tracking runs and hyperparameter sweeps
+├── cluster.md                 ← Instruction guide for cluster/Slurm execution
+├── dataset.md                 ← Dataset topology details (hops, composition vs decomposition)
+├── evaluation.md              ← Metrics, thresholding (tau=0.95), and stage detection
+├── setup.py                   ← Package installation script
+├── slurm/                     ← Consolidates all Slurm job templates and launch scripts
+│   ├── job_small.sh
+│   ├── job_large.sh
+│   ├── job_tiny.sh
+│   └── ...
+├── configs/                   ← Consolidates Weights & Biases configs, accelerate yaml config
+│   ├── accelerate_config.yaml
+│   ├── continual_wandb_sweep.yaml
+│   └── ...
+├── src/
+│   ├── data/                  ← Shuffled json datasets and support-query generators
+│   ├── models/                ← Core training and validation scripts
+│   │   ├── train.py
+│   │   ├── train_continual.py
+│   │   ├── models.py
+│   │   ├── data_loaders.py
+│   │   └── val.py
+│   ├── mech_interp/           ← Mechanical interpretability scripts (e.g. activation caching)
+│   ├── analysis/              ← Post-hoc prediction analyzers and plotting scripts
+│   │   ├── analyze_predictions.py
+│   │   ├── plot_stages_from_pickles.py
+│   │   └── ...
+│   ├── utils/                 ← Utilities and support code
+│   └── notebooks/             ← Jupyter notebooks for interactive analysis
+├── all_images/                ← Consolidates all output figures, plots (PNG, PDF)
+├── json_files/                ← Consolidates all root-level JSON metrics and watchdog logs
+├── csv_files/                 ← Consolidates all root-level CSV tracking logs and metrics
+├── pkl_files/                 ← Consolidates all root-level PKL dataset cache/head sweep results
+├── txt_files/                 ← Consolidates all root-level TXT command logs, logs, and token configs
+└── results/                   ← Directory for local output files (gitignored)
+```
 
 ## Installation
 
-This project is built as a python package (`dm-alchemy`) along with scripts for data processing and model training.
-
-To install the environment and the required package dependencies, run:
+This project is built as a python package (`dm-alchemy`). To install the package in editable mode along with its dependencies:
 
 ```bash
 pip install -e .
 ```
 
-To run the model training scripts, you will also need the following deep learning libraries:
+To run training, you will also need:
 
 ```bash
 pip install torch accelerate wandb tqdm
@@ -22,10 +65,7 @@ pip install torch accelerate wandb tqdm
 ## Usage
 
 ### Training Models
-
-The main entry point for training is `src/models/train.py`. The script uses `argparse` to configure the dataset, model architecture, training loop, and optimizer.
-
-**Example Command (Held-out Experiment):**
+The main entry point for training is `src/models/train.py`.
 
 ```bash
 python src/models/train.py \
@@ -41,18 +81,32 @@ python src/models/train.py \
     --learning_rate 1e-4 \
     --weight_decay 0.001 \
     --eta_min 7e-5 \
-    --wandb_project <enter-your-wandb-project-name>
+    --wandb_project <your-project>
 ```
 
-> **Note:** The `held_out` experiment type (exp_typ) is enabled by setting `--is_held_out_color_exp True`. For multi-GPU training, you can use `accelerate launch`.
+For multi-GPU execution using the cluster config, run:
+```bash
+accelerate launch --config_file configs/accelerate_config.yaml src/models/train.py [args...]
+```
 
-'src/data' contains the json files for the other tasks/hops.
+### Analysis & Evaluation
+After a run completes, you can analyze validation predictions:
+```bash
+python src/analysis/analyze_predictions.py --model_dir results/checkpoints/ --val_data_path src/data/...
+```
 
-### Weights & Biases (W&B) Sweeps
+To plot the learning stages from pickles:
+```bash
+python src/analysis/plot_stages_from_pickles.py --pickle_dir results/pickle_files/ --output_dir all_images/
+```
 
-> **Note:** The `train.py` script is fully compatible with Weights & Biases sweeps.
-> Because all hyperparameters are exposed via `argparse`, you can easily set up a `sweep.yaml` configuration to search over learning rates, model sizes, architectures, and scheduler configurations. The script will automatically pick up the arguments injected by the W&B agent.
+## Documentation
 
-### Control Flow Documentation
-
-For a detailed breakdown of how the training pipeline operates and how different arguments affect the execution path (e.g., initialization, dataset building, and model selection), please refer to `control_flow.md`.
+For deep dives into specific topics, see:
+- [AGENTS.md](file:///home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/AGENTS.md): AI guidelines
+- [research_question.md](file:///home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/research_question.md): Core scientific goals
+- [experiment_log.md](file:///home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/experiment_log.md): Track runs
+- [cluster.md](file:///home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/cluster.md): Slurm execution guide
+- [dataset.md](file:///home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/dataset.md): Alchemy graph dataset structure
+- [evaluation.md](file:///home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/evaluation.md): Transition and threshold metrics
+- [control_flow.md](file:///home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/control_flow.md): Program flow documentation

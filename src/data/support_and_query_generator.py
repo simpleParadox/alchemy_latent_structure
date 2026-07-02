@@ -756,8 +756,10 @@ def main():
                              "Breaks the latent structure's reward assignment while preserving the reward distribution. "
                              "Mutually exclusive with --normalize_reward.")
 
-    parser.add_argument("--match_episodes_from_json", type=str, default=None,
-                        help="Path to an existing generated JSON. If provided, the script will ONLY process the episodes found in that JSON, and will disable train/val splitting (--create_val_from_train will be forced to False).")
+    parser.add_argument("--match_train_json", type=str, default=None,
+                        help="Path to an existing train JSON.")
+    parser.add_argument("--match_val_json", type=str, default=None,
+                        help="Path to an existing val JSON.")
 
     parser.add_argument("--subset_episodes", type=int, default=None,
                         help="Randomly subsample the total number of episodes to this exact number BEFORE train/val split. Useful for creating reduced dataset size baselines.")
@@ -778,24 +780,34 @@ def main():
     num_episodes = len(chemistry_graphs)
     print(f"Loaded data for {num_episodes} episodes")
 
-    target_data = {}
-    if args.match_episodes_from_json:
+    target_data = {'episodes': {}}
+    if args.match_train_json or args.match_val_json:
         print(f"\n{'='*60}")
-        print(f"MATCHING EPISODES FROM JSON")
-        print(f"Loading target episodes from: {args.match_episodes_from_json}")
-        with open(args.match_episodes_from_json, 'r') as f:
-            target_data = json.load(f)
-        target_episodes = set(target_data.get('episodes', {}).keys())
-        print(f"Found {len(target_episodes)} target episodes in JSON")
+        print(f"MATCHING EPISODES FROM TRAIN/VAL JSON")
+        target_episodes = set()
+        
+        if args.match_train_json:
+            print(f"Loading train target episodes from: {args.match_train_json}")
+            with open(args.match_train_json, 'r') as f:
+                train_target_data = json.load(f)
+            train_target_eps = set(train_target_data.get('episodes', {}).keys())
+            target_episodes.update(train_target_eps)
+            target_data['episodes'].update(train_target_data.get('episodes', {}))
+            print(f"Found {len(train_target_eps)} target train episodes")
+            
+        if args.match_val_json:
+            print(f"Loading val target episodes from: {args.match_val_json}")
+            with open(args.match_val_json, 'r') as f:
+                val_target_data = json.load(f)
+            val_target_eps = set(val_target_data.get('episodes', {}).keys())
+            target_episodes.update(val_target_eps)
+            target_data['episodes'].update(val_target_data.get('episodes', {}))
+            print(f"Found {len(val_target_eps)} target val episodes")
         
         # Filter chemistry_graphs to only those in the target set
         chemistry_graphs = {ep_id: ep_data for ep_id, ep_data in chemistry_graphs.items() if ep_id in target_episodes or ep_id == '_metadata'}
         num_episodes = len(chemistry_graphs) - (1 if '_metadata' in chemistry_graphs else 0)
-        print(f"Filtered down to exactly {num_episodes} matching episodes")
-        
-        # Force create_val_from_train to False since we want a 1:1 match without re-splitting
-        args.create_val_from_train = False
-        print("Forced --create_val_from_train to False for 1:1 exact mapping.")
+        print(f"Filtered down to exactly {num_episodes} matching total episodes")
         print(f"{'='*60}\n")
     
     # --- Reward normalization ablation: normalize and deduplicate BEFORE splitting ---
@@ -923,7 +935,7 @@ def main():
         current_chemistry_graphs = dict(chemistry_graphs)
 
         # Subsample episodes if requested
-        if args.subset_episodes is not None and not args.match_episodes_from_json:
+        if args.subset_episodes is not None and not (args.match_train_json or args.match_val_json):
             # Gather valid ones so we don't accidentally sample incomplete graphs 
             # if we are later going to filter incomplete graphs out.
             if args.process_complete_graph_only and not (args.normalize_reward or args.randomize_reward):
@@ -947,29 +959,50 @@ def main():
         current_num_episodes = sum(1 for k in current_chemistry_graphs.keys() if k != '_metadata')
 
         # Split episodes into training and validation sets if requested
-        if args.create_val_from_train:
-            # Determine the number of episodes for validation (10%)
-            num_val_episodes = max(1, int(current_num_episodes * 0.1))
-            num_train_episodes = current_num_episodes - num_val_episodes
+        if args.create_val_from_train or args.match_train_json or args.match_val_json:
             
-            print(f"Creating {num_train_episodes} training episodes and {num_val_episodes} validation episodes")
+            if args.match_train_json or args.match_val_json:
+                # Use lists to preserve the exact ordering from the original JSON files
+                train_episode_ids = list(train_target_eps) if args.match_train_json else []
+                val_episode_ids = list(val_target_eps) if args.match_val_json else []
+                if '_metadata' in current_chemistry_graphs:
+                    train_episode_ids.append('_metadata')
+                    val_episode_ids.append('_metadata')
+                num_train_episodes = len(train_episode_ids) - (1 if '_metadata' in train_episode_ids else 0)
+                num_val_episodes = len(val_episode_ids) - (1 if '_metadata' in val_episode_ids else 0)
+            else:
+                # Determine the number of episodes for validation (10%)
+                num_val_episodes = max(1, int(current_num_episodes * 0.1))
+                num_train_episodes = current_num_episodes - num_val_episodes
+                
+                print(f"Creating {num_train_episodes} training episodes and {num_val_episodes} validation episodes")
+                
+                # Randomly select episodes for validation
+                episode_ids = [k for k in current_chemistry_graphs.keys() if k != '_metadata']
+                episode_ids.sort()  # Sort to ensure deterministic split
+                random.shuffle(episode_ids)
+                val_episode_ids = set(episode_ids[:num_val_episodes])
+                train_episode_ids = set(episode_ids[num_val_episodes:])
+                
+                if '_metadata' in current_chemistry_graphs:
+                    train_episode_ids.add('_metadata')
+                    val_episode_ids.add('_metadata')
+                
+            if args.match_train_json and target_data and 'episodes' in target_data:
+                target_train_order = [k for k in target_data['episodes'].keys() if k != '_metadata']
+                ordered_train_episode_ids = [k for k in target_train_order if k in train_episode_ids]
+            else:
+                ordered_train_episode_ids = sorted([k for k in train_episode_ids if k != '_metadata'])
             
-            # Randomly select episodes for validation
-            episode_ids = [k for k in current_chemistry_graphs.keys() if k != '_metadata']
-            random.shuffle(episode_ids)
-            val_episode_ids = set(episode_ids[:num_val_episodes])
-            train_episode_ids = set(episode_ids[num_val_episodes:])
-            
-            if '_metadata' in current_chemistry_graphs:
-                train_episode_ids.add('_metadata')
-                val_episode_ids.add('_metadata')
-            
-            ordered_train_episode_ids = sorted([k for k in train_episode_ids if k != '_metadata'])
-            ordered_val_episode_ids = sorted([k for k in val_episode_ids if k != '_metadata'])
+            if args.match_val_json and target_data and 'episodes' in target_data:
+                target_val_order = [k for k in target_data['episodes'].keys() if k != '_metadata']
+                ordered_val_episode_ids = [k for k in target_val_order if k in val_episode_ids]
+            else:
+                ordered_val_episode_ids = sorted([k for k in val_episode_ids if k != '_metadata'])
             
             # Create separate dictionaries for training and validation
-            train_graphs = {ep_id: current_chemistry_graphs[ep_id] for ep_id in train_episode_ids}
-            val_graphs = {ep_id: current_chemistry_graphs[ep_id] for ep_id in val_episode_ids}
+            train_graphs = {ep_id: current_chemistry_graphs[ep_id] for ep_id in ordered_train_episode_ids if ep_id in current_chemistry_graphs}
+            val_graphs = {ep_id: current_chemistry_graphs[ep_id] for ep_id in ordered_val_episode_ids if ep_id in current_chemistry_graphs}
             
             # Output file names
             support_hop = args.support_steps
@@ -990,7 +1023,7 @@ def main():
             else:
                 train_output_file = f"{base_train}_seed_{seed}{ext_train}"
             
-            if args.potion_pairing_index > 0:
+            if args.potion_pairing_index >= 0:
                 train_output_file = train_output_file.replace(".json", f"_pairing_index_{args.potion_pairing_index}.json")
             
             base_val = os.path.splitext(val_output_file)[0]
@@ -1000,7 +1033,7 @@ def main():
             else:
                 val_output_file = f"{base_val}_seed_{seed}{ext_val}"
             
-            if args.potion_pairing_index > 0:
+            if args.potion_pairing_index >= 0:
                 val_output_file = val_output_file.replace(".json", f"_pairing_index_{args.potion_pairing_index}.json")
             
             
@@ -1021,7 +1054,7 @@ def main():
             prefix = "compositional_" if args.support_steps <= args.query_steps else "decompositional_"
             train_output_file = os.path.splitext(output_file)[0] + f"_shop_{support_hop}_qhop_{query_hop}.json"
             
-            if args.potion_pairing_index > 0:
+            if args.potion_pairing_index >= 0:
                 train_output_file = train_output_file.replace(".json", f"_pairing_index_{args.potion_pairing_index}.json")
             
             train_output_file = os.path.join(os.path.dirname(train_output_file), prefix + os.path.basename(train_output_file))
@@ -1077,18 +1110,37 @@ def main():
                 # if args.samples_per_episode > max_unique_query:
                     # print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
                 
-                if args.match_episodes_from_json and episode_id in target_data.get('episodes', {}):
+                if (args.match_train_json or args.match_val_json) and episode_id in target_data.get('episodes', {}):
                     target_ep = target_data['episodes'][episode_id]
                     
                     def reconstruct_samples(info_list):
                         reconstructed = []
                         for s_info in info_list:
-                            start_node = s_info["start_node"]
-                            end_node = s_info["end_node"]
-                            potions = " ".join(s_info["potions"])
-                            start_desc = get_stone_description(graph[start_node])
-                            end_desc = get_stone_description(graph[end_node])
-                            reconstructed.append(f"{start_desc} {potions} -> {end_desc}")
+                            path_nodes = s_info.get("path_nodes", [s_info["start_node"], s_info["end_node"]])
+                            
+                            new_potions = []
+                            for i in range(len(path_nodes) - 1):
+                                u = path_nodes[i]
+                                v = path_nodes[i+1]
+                                
+                                found_potion = None
+                                if u in graph and "transitions" in graph[u]:
+                                    for transition in graph[u]["transitions"]:
+                                        if transition["next_node_str"] == v:
+                                            found_potion = transition["potion_color"]
+                                            break
+                                            
+                                if found_potion is None:
+                                    raise ValueError(f"Transition from {u} to {v} is missing in the new graph topology!")
+                                    
+                                new_potions.append(found_potion)
+                            
+                            s_info["potions"] = new_potions
+                            
+                            potions_str = " ".join(new_potions)
+                            start_desc = get_stone_description(graph[path_nodes[0]])
+                            end_desc = get_stone_description(graph[path_nodes[-1]])
+                            reconstructed.append(f"{start_desc} {potions_str} -> {end_desc}")
                         return reconstructed
 
                     support_samples = reconstruct_samples(target_ep.get("support_samples_info", []))
@@ -1196,18 +1248,37 @@ def main():
                     # print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique samples.")
                 
                 
-                if args.match_episodes_from_json and episode_id in target_data.get('episodes', {}):
+                if (args.match_train_json or args.match_val_json) and episode_id in target_data.get('episodes', {}):
                     target_ep = target_data['episodes'][episode_id]
                     
                     def reconstruct_samples(info_list):
                         reconstructed = []
                         for s_info in info_list:
-                            start_node = s_info["start_node"]
-                            end_node = s_info["end_node"]
-                            potions = " ".join(s_info["potions"])
-                            start_desc = get_stone_description(graph[start_node])
-                            end_desc = get_stone_description(graph[end_node])
-                            reconstructed.append(f"{start_desc} {potions} -> {end_desc}")
+                            path_nodes = s_info.get("path_nodes", [s_info["start_node"], s_info["end_node"]])
+                            
+                            new_potions = []
+                            for i in range(len(path_nodes) - 1):
+                                u = path_nodes[i]
+                                v = path_nodes[i+1]
+                                
+                                found_potion = None
+                                if u in graph and "transitions" in graph[u]:
+                                    for transition in graph[u]["transitions"]:
+                                        if transition["next_node_str"] == v:
+                                            found_potion = transition["potion_color"]
+                                            break
+                                            
+                                if found_potion is None:
+                                    raise ValueError(f"Transition from {u} to {v} is missing in the new graph topology!")
+                                    
+                                new_potions.append(found_potion)
+                            
+                            s_info["potions"] = new_potions
+                            
+                            potions_str = " ".join(new_potions)
+                            start_desc = get_stone_description(graph[path_nodes[0]])
+                            end_desc = get_stone_description(graph[path_nodes[-1]])
+                            reconstructed.append(f"{start_desc} {potions_str} -> {end_desc}")
                         return reconstructed
 
                     support_samples = reconstruct_samples(target_ep.get("support_samples_info", []))

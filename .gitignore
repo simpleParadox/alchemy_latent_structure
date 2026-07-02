@@ -11,6 +11,7 @@ src/models/output_files/
 src/saved_models/
 src/models/cluster_profile.py
 *.yaml
+results/
 
 .eggs/*
 src/models/cluster_profile.py
@@ -106,6 +107,7 @@ src/models/watchdog_sbatch_infer.py
 src/models/find_and_sync_remote_frozen_runs.py
 clean_agent.py
 src/models/__pycache__/
+json_files/
 *.html
 mech_interp_slurm_logs/
 *.pyc
