@@ -1136,7 +1136,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             # del encoder_input_ids, loss
     
     # Save predictions and targets if requested and on main process
-    if store_predictions and accelerator.is_local_main_process and args.store_predictions:
+    if store_predictions and (accelerator.is_local_main_process or not getattr(args, "multi_gpu_validation", False)) and args.store_predictions:
         _save_validation_predictions(
             all_predictions, all_targets, all_encoder_inputs,
             args, epoch_num, pad_token_id
@@ -1170,8 +1170,8 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
             targets_array = gathered_targets[:dataset_len]
             encoder_inputs_array = gathered_encoder_inputs[:dataset_len]
             
-            # Now compute stage metrics on the main process
-            if accelerator.is_local_main_process:
+            # Now compute stage metrics on the main process (or all processes if sharded)
+            if accelerator.is_local_main_process or not getattr(args, "multi_gpu_validation", False):
                 # 1. Setup constants and vocabulary lookups
                 input_vocab = dataset.input_word2idx
                 feature_to_id_vocab = {v: k for k, v in input_vocab.items()}
@@ -1312,7 +1312,7 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
                 import traceback
                 traceback.print_exc()
 
-    if store_predictions and accelerator.is_local_main_process:
+    if store_predictions and (accelerator.is_local_main_process or not getattr(args, "multi_gpu_validation", False)):
         val_metrics["predictions"] = np.concatenate([p.numpy() for p in all_predictions], axis=0).tolist() if all_predictions else []
 
     if args.task_type == "seq2seq":

@@ -12,6 +12,7 @@ import time
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -43,6 +44,29 @@ from train import (
     cluster
 )
 
+def log_continual_eval_metrics_csv(csv_path, run_id, cycle_idx, train_task_idx, eval_task_idx, eval_task_identifier, global_epoch, epoch_within_task, val_loss, val_accuracy, P_A, P_B_given_A, P_C_given_AB):
+    import csv
+    file_exists = os.path.exists(csv_path)
+    os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
+    with open(csv_path, 'a', newline='') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(['run_id', 'cycle_idx', 'train_task_idx', 'eval_task_idx', 'eval_task_identifier', 'global_epoch', 'epoch_within_task', 'val_loss', 'val_accuracy', 'P_A', 'P_B_given_A', 'P_C_given_AB'])
+        writer.writerow([
+            run_id,
+            cycle_idx,
+            train_task_idx,
+            eval_task_idx,
+            eval_task_identifier,
+            global_epoch,
+            epoch_within_task,
+            f"{val_loss:.6f}" if isinstance(val_loss, (int, float)) else val_loss,
+            f"{val_accuracy:.6f}" if isinstance(val_accuracy, (int, float)) else val_accuracy,
+            f"{P_A:.6f}" if isinstance(P_A, (int, float)) else P_A,
+            f"{P_B_given_A:.6f}" if isinstance(P_B_given_A, (int, float)) else P_B_given_A,
+            f"{P_C_given_AB:.6f}" if isinstance(P_C_given_AB, (int, float)) else P_C_given_AB
+        ])
+
 # Sibling imports
 from data_loaders import AlchemyDataset, collate_fn
 from models import (
@@ -61,6 +85,14 @@ def parse_continual_args():
         if action.dest == 'task_sequence':
             action.type = str
             
+    parser.add_argument("--auto_stop_metric", type=str, default="accuracy",
+                        choices=["accuracy", "P_A", "P_B_given_A", "P_C_given_AB"],
+                        help="The metric to monitor for early stopping / task switching in continual learning. Default is 'accuracy'.")
+                        
+    parser.add_argument("--eval_train_stages", type=str, default="False",
+                        choices=["True", "False"],
+                        help="Whether to evaluate stages on training data. WARNING: Adds compute overhead.")
+                        
     args = parser.parse_args()
     
     # Parse task_sequence into list of integers or strings
@@ -105,12 +137,21 @@ def main():
     args.log_continual_csv = str(args.log_continual_csv) == 'True'
     args.enable_auto_stop = str(args.enable_auto_stop) == 'True'
     args.use_truncation = str(args.use_truncation) == 'True'
+    args.eval_train_stages = str(args.eval_train_stages) == 'True'
+    args.multi_gpu_validation = False
     
     # Multi-GPU / Precision Setup
     if args.fp16 == 'True':
         accelerator = Accelerator(mixed_precision='fp16')
     else:
         accelerator = Accelerator()
+        
+    num_processes = accelerator.num_processes
+    if not isinstance(num_processes, int):
+        num_processes = 1
+    process_index = accelerator.process_index
+    if not isinstance(process_index, int):
+        process_index = 0
     
     # Set seed
     set_seed(args.seed)
@@ -227,7 +268,7 @@ def main():
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
-            name=args.wandb_run_name or f"continual_{continual_folder_name}_seed_{args.seed}",
+            name=args.wandb_run_name or f"continual_{args.continual_mode}_{continual_folder_name}_seed_{args.seed}",
             config=wandb_config,
             mode=wandb_mode
         )
@@ -238,6 +279,7 @@ def main():
     global_epoch_counter = 0
     num_cycles = getattr(args, "num_cycles", 1)
     start_time = time.time()
+    all_val_dataloaders = None
     
     for cycle_idx in range(1, num_cycles + 1):
         for task_idx, task_val in enumerate(args.task_sequence):
@@ -390,11 +432,115 @@ def main():
                 batch_size=args.batch_size,
                 shuffle=False,
                 collate_fn=custom_collate_val,
-                num_workers=1,
+                num_workers=0,
                 worker_init_fn=worker_init_fn,
                 generator=torch.Generator().manual_seed(args.seed)
             )
+
+            # Calculate which process is assigned the training set validation task to avoid CPU OOM and redundant GPU runs
+            train_eval_assigned_rank = len(args.task_sequence) % num_processes
+            is_train_eval_assigned_to_me = (process_index == train_eval_assigned_rank)
+
+            if args.eval_train_stages and is_train_eval_assigned_to_me:
+                train_val_dataloader = DataLoader(
+                    train_dataset,
+                    batch_size=args.batch_size,
+                    shuffle=False,
+                    collate_fn=custom_collate_train,
+                    num_workers=0,
+                    worker_init_fn=worker_init_fn,
+                    generator=torch.Generator().manual_seed(args.seed)
+                )
+            else:
+                train_val_dataloader = None
             
+            if all_val_dataloaders is None:
+                if accelerator.is_local_main_process:
+                    print("Pre-instantiating assigned validation dataloaders for task sequence across GPUs...")
+                all_val_dataloaders = {}
+                for t_idx, t_val in enumerate(args.task_sequence):
+                    # Shard validation datasets across available GPU processes to avoid OOM
+                    if t_idx % num_processes != process_index:
+                        continue
+                        
+                    if args.continual_mode == "composition":
+                        t_hop_length = int(t_val)
+                        hop_pattern_src = f"shop_{support_hop_init}_qhop_{query_hop_init}"
+                        hop_pattern_dst = f"shop_1_qhop_{t_hop_length}"
+                        t_val_path = re.sub(hop_pattern_src, hop_pattern_dst, val_data_path_template)
+                        t_preprocessed_dir = args.preprocessed_dir
+                        t_identifier_str = f"hop_{t_hop_length}"
+                    elif args.continual_mode == "decomposition":
+                        t_hop_length = int(t_val)
+                        hop_pattern_src = f"shop_{support_hop_init}_qhop_{query_hop_init}"
+                        hop_pattern_dst = f"shop_{t_hop_length}_qhop_1"
+                        t_val_path = re.sub(hop_pattern_src, hop_pattern_dst, val_data_path_template)
+                        t_preprocessed_dir = args.preprocessed_dir
+                        t_identifier_str = f"hop_{t_hop_length}"
+                    elif args.continual_mode == "reward_structure":
+                        t_hop_length = t_val
+                        t_task_id = str(t_val)
+                        if t_task_id == 'original':
+                            dir_name = "shuffled_held_out_exps_generated_data_enhanced"
+                            prep_dir = "shuffled_held_out_exps_preprocessed_separate_enhanced"
+                        elif t_task_id == 'endpoint_swap':
+                            dir_name = "continual_data/held_out_endpoint_reward_swap"
+                            prep_dir = "continual_data/held_out_endpoint_reward_swap_preprocessed"
+                        elif t_task_id == 'same_face':
+                            dir_name = "continual_data/held_out_same_face_reward"
+                            prep_dir = "continual_data/held_out_same_face_reward_preprocessed"
+                        else:
+                            raise ValueError(f"Unknown reward structure task: {t_task_id}")
+                        t_val_path = os.path.join("src/data", dir_name, os.path.basename(val_data_path_template))
+                        t_preprocessed_dir = os.path.join("src/data", prep_dir)
+                        t_identifier_str = f"held_out_{t_task_id}"
+                    elif args.continual_mode == "potion_pairing":
+                        t_hop_length = str(t_val)
+                        pairing_idx = int(t_val)
+                        dir_name = "chemistry_pickles/original_reward_potion_remap_generated_data"
+                        prep_dir = "chemistry_pickles/original_reward_potion_remap_preprocessed_data"
+                        base_val = os.path.basename(val_data_path_template)
+                        t_val_path = os.path.join("src/data", dir_name, base_val)
+                        t_preprocessed_dir = os.path.join("src/data", prep_dir)
+                        t_identifier_str = f"pairing_index_{pairing_idx}"
+                    else:
+                        raise ValueError(f"Unknown continual mode: {args.continual_mode}")
+                    
+                    t_val_path = f"{t_val_path.split('.json')[0]}_seed_{args.data_split_seed}.json"
+                    if args.continual_mode == "potion_pairing" and int(t_val) >= 0:
+                        t_val_path = t_val_path.replace(".json", f"_pairing_index_{t_val}.json")
+                    t_val_path = os.path.join(base_path, t_val_path)
+                    
+                    t_val_dataset = AlchemyDataset(
+                        json_file_path=t_val_path,
+                        task_type=args.task_type,
+                        vocab_word2idx=train_dataset.input_word2idx,
+                        vocab_idx2word=train_dataset.input_idx2word,
+                        stone_state_to_id=train_dataset.stone_state_to_id if args.task_type == "classification" else None,
+                        filter_query_from_support=args.filter_query_from_support,
+                        num_workers=args.num_workers,
+                        preprocessed_dir=t_preprocessed_dir,
+                        use_preprocessed=args.use_preprocessed,
+                        input_format=args.input_format,
+                        output_format=args.output_format,
+                        model_architecture=args.model_architecture,
+                        reference_order_json=args.reference_order_json.replace("train", "val") if args.reference_order_json else None
+                    )
+                    
+                    t_val_loader = DataLoader(
+                        t_val_dataset,
+                        batch_size=args.batch_size,
+                        shuffle=False,
+                        collate_fn=custom_collate_val,
+                        num_workers=0,
+                        worker_init_fn=worker_init_fn,
+                        generator=torch.Generator().manual_seed(args.seed)
+                    )
+                    
+                    all_val_dataloaders[t_val] = (t_val_loader, t_identifier_str, t_hop_length)
+                    if accelerator.is_local_main_process:
+                        print(f"Loaded validation set for task {t_val} ({t_identifier_str}) from {t_val_path}")
+
             # Reset streak counter for early stopping
             val_acc_streak = 0
             
@@ -537,18 +683,118 @@ def main():
                     is_new_task=is_new_task
                 )
                 
-                # Validate one epoch
-                val_loss, val_metrics = validate_epoch(
-                    model=model,
-                    dataloader=val_dataloader,
-                    criterion=criterion,
-                    accelerator=accelerator,
-                    epoch_num=epoch,
-                    pad_token_id=pad_token_id,
-                    args=args,
-                    task_idx=task_idx,
-                    hop_length=hop_length
-                )
+                # Define a fixed ordering of evaluation tasks
+                eval_tasks_list = []
+                for t_val in args.task_sequence:
+                    eval_tasks_list.append((t_val, "val"))
+                if args.eval_train_stages:
+                    eval_tasks_list.append((task_val, "train"))
+                
+                # Each rank creates its local metrics tensor: [num_tasks, 5]
+                # Column 0: loss, Column 1: accuracy, Column 2: P_A, Column 3: P_B_given_A, Column 4: P_C_given_AB
+                local_metrics_tensor = torch.zeros(len(eval_tasks_list), 5, device=accelerator.device)
+                local_results = {}
+
+                # Evaluate assigned validation tasks
+                for t_val, (t_dl, t_id, h_len) in all_val_dataloaders.items():
+                    t_loss, t_metrics = validate_epoch(
+                        model=model,
+                        dataloader=t_dl,
+                        criterion=criterion,
+                        accelerator=accelerator,
+                        epoch_num=epoch,
+                        pad_token_id=pad_token_id,
+                        args=args,
+                        task_idx=args.task_sequence.index(t_val),
+                        hop_length=h_len
+                    )
+                    task_idx_in_list = eval_tasks_list.index((t_val, "val"))
+                    local_metrics_tensor[task_idx_in_list, 0] = t_loss
+                    local_metrics_tensor[task_idx_in_list, 1] = t_metrics.get("accuracy", 0.0)
+                    local_metrics_tensor[task_idx_in_list, 2] = t_metrics.get("P_A", 0.0)
+                    local_metrics_tensor[task_idx_in_list, 3] = t_metrics.get("P_B_given_A", 0.0)
+                    local_metrics_tensor[task_idx_in_list, 4] = t_metrics.get("P_C_given_AB", 0.0)
+                    
+                    local_results[(t_val, "val")] = {
+                        "loss": t_loss,
+                        "metrics": t_metrics,
+                        "identifier": t_id,
+                        "hop_length": h_len
+                    }
+                
+                # Optionally validate the training dataset for stages (if assigned to this rank)
+                if args.eval_train_stages and is_train_eval_assigned_to_me and train_val_dataloader is not None:
+                    train_eval_loss_local, train_eval_metrics_local = validate_epoch(
+                        model=model,
+                        dataloader=train_val_dataloader,
+                        criterion=criterion,
+                        accelerator=accelerator,
+                        epoch_num=epoch,
+                        pad_token_id=pad_token_id,
+                        args=args,
+                        task_idx=task_idx,
+                        hop_length=hop_length
+                    )
+                    task_idx_in_list = eval_tasks_list.index((task_val, "train"))
+                    local_metrics_tensor[task_idx_in_list, 0] = train_eval_loss_local
+                    local_metrics_tensor[task_idx_in_list, 1] = train_eval_metrics_local.get("accuracy", 0.0)
+                    local_metrics_tensor[task_idx_in_list, 2] = train_eval_metrics_local.get("P_A", 0.0)
+                    local_metrics_tensor[task_idx_in_list, 3] = train_eval_metrics_local.get("P_B_given_A", 0.0)
+                    local_metrics_tensor[task_idx_in_list, 4] = train_eval_metrics_local.get("P_C_given_AB", 0.0)
+                
+                # Reduce metrics across all GPU processes (summing them)
+                global_metrics_tensor = accelerator.reduce(local_metrics_tensor, reduction="sum")
+                if not isinstance(global_metrics_tensor, torch.Tensor):
+                    global_metrics_tensor = local_metrics_tensor
+                
+                # Unpack metrics on all processes
+                all_tasks_metrics = {}
+                train_eval_loss, train_eval_metrics = None, None
+                
+                for idx, (t_val, t_type) in enumerate(eval_tasks_list):
+                    t_loss = global_metrics_tensor[idx, 0].item()
+                    t_acc = global_metrics_tensor[idx, 1].item()
+                    t_pa = global_metrics_tensor[idx, 2].item()
+                    t_pb = global_metrics_tensor[idx, 3].item()
+                    t_pc = global_metrics_tensor[idx, 4].item()
+                    
+                    t_metrics = {
+                        "accuracy": t_acc,
+                        "P_A": t_pa,
+                        "P_B_given_A": t_pb,
+                        "P_C_given_AB": t_pc
+                    }
+                    
+                    if t_type == "val":
+                        if args.continual_mode == "composition":
+                            t_hop_len = int(t_val)
+                            t_id = f"hop_{t_hop_len}"
+                        elif args.continual_mode == "decomposition":
+                            t_hop_len = int(t_val)
+                            t_id = f"hop_{t_hop_len}"
+                        elif args.continual_mode == "reward_structure":
+                            t_hop_len = t_val
+                            t_id = f"held_out_{t_val}"
+                        elif args.continual_mode == "potion_pairing":
+                            t_hop_len = str(t_val)
+                            t_id = f"pairing_index_{t_val}"
+                        else:
+                            raise ValueError(f"Unknown continual mode: {args.continual_mode}")
+                        
+                        all_tasks_metrics[t_val] = {
+                            "loss": t_loss,
+                            "metrics": t_metrics,
+                            "identifier": t_id,
+                            "hop_length": t_hop_len
+                        }
+                    elif t_type == "train":
+                        train_eval_loss = t_loss
+                        train_eval_metrics = t_metrics
+                
+                # Extract current task metrics from the dictionary
+                current_task_metrics = all_tasks_metrics[task_val]
+                val_loss = current_task_metrics["loss"]
+                val_metrics = current_task_metrics["metrics"]
                 
                 # Save predictions at epoch boundary if configured
                 if args.store_predictions and accelerator.is_local_main_process:
@@ -587,18 +833,34 @@ def main():
                         if key != "predictions" and isinstance(val, (int, float)):
                             epoch_log[f"{prefix}{key}"] = val
                     
-                    # Hierarchical timeline logging
+                    # Log task-specific metrics for all tasks (for tracking forgetting & zero-shot generalization)
+                    for t_val, t_info in all_tasks_metrics.items():
+                        t_id = t_info["identifier"]
+                        t_loss = t_info["loss"]
+                        t_met = t_info["metrics"]
+                        
+                        task_prefix = f"continual/eval_task_{t_id}/"
+                        epoch_log[f"{task_prefix}val_loss"] = t_loss
+                        if "accuracy" in t_met:
+                            epoch_log[f"{task_prefix}val_accuracy"] = t_met["accuracy"]
+                        for metric_name in ["P_A", "P_B_given_A", "P_C_given_AB"]:
+                            if metric_name in t_met:
+                                epoch_log[f"{task_prefix}{metric_name}"] = t_met[metric_name]
+                    
+                    # Log training stage metrics if enabled
+                    if train_eval_metrics is not None:
+                        train_prefix = f"continual/train_eval_{task_identifier_str}/"
+                        epoch_log[f"{train_prefix}val_loss"] = train_eval_loss
+                        if "accuracy" in train_eval_metrics:
+                            epoch_log[f"{train_prefix}val_accuracy"] = train_eval_metrics["accuracy"]
+                        for metric_name in ["P_A", "P_B_given_A", "P_C_given_AB"]:
+                            if metric_name in train_eval_metrics:
+                                epoch_log[f"{train_prefix}{metric_name}"] = train_eval_metrics[metric_name]
+                                # Flat tracking as well
+                                epoch_log[f"continual/current_train_{metric_name}"] = train_eval_metrics[metric_name]
+                    
                     epoch_within_task_1indexed = epoch + 1
                     if "P_A" in val_metrics:
-                        # epoch_log[f"cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_A"] = val_metrics["P_A"]
-                        # epoch_log[f"cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_B_given_A"] = val_metrics["P_B_given_A"]
-                        # epoch_log[f"cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_C_given_AB"] = val_metrics["P_C_given_AB"]
-                        
-                        # # Also log with prefix just in case
-                        # epoch_log[f"continual/cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_A"] = val_metrics["P_A"]
-                        # epoch_log[f"continual/cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_B_given_A"] = val_metrics["P_B_given_A"]
-                        # epoch_log[f"continual/cycle{cycle_idx}_task{task_idx}_h{hop_length}/epoch{epoch_within_task_1indexed}/P_C_given_AB"] = val_metrics["P_C_given_AB"]
-                        
                         # Flat CSV Logging
                         if getattr(args, "log_continual_csv", True):
                             run_id = "unknown"
@@ -622,6 +884,45 @@ def main():
                                         P_C_given_AB=val_metrics["P_C_given_AB"],
                                         cycle_idx=cycle_idx
                                     )
+                                    
+                                    # Log evaluation metrics for all tasks to the evaluation CSV
+                                    for t_val, t_info in all_tasks_metrics.items():
+                                        t_loss = t_info["loss"]
+                                        t_met = t_info["metrics"]
+                                        t_id = t_info["identifier"]
+                                        log_continual_eval_metrics_csv(
+                                            os.path.join(csv_dir, "continual_eval_metrics.csv"),
+                                            run_id=run_id,
+                                            cycle_idx=cycle_idx,
+                                            train_task_idx=task_idx,
+                                            eval_task_idx=args.task_sequence.index(t_val),
+                                            eval_task_identifier=t_id,
+                                            global_epoch=global_epoch_counter + 1,
+                                            epoch_within_task=epoch_within_task_1indexed,
+                                            val_loss=t_loss,
+                                            val_accuracy=t_met.get("accuracy", 0.0),
+                                            P_A=t_met.get("P_A", 0.0),
+                                            P_B_given_A=t_met.get("P_B_given_A", 0.0),
+                                            P_C_given_AB=t_met.get("P_C_given_AB", 0.0)
+                                        )
+                                    
+                                    # Log evaluation metrics for training to a training evaluation CSV if enabled
+                                    if train_eval_metrics is not None:
+                                        log_continual_eval_metrics_csv(
+                                            os.path.join(csv_dir, "continual_train_eval_metrics.csv"),
+                                            run_id=run_id,
+                                            cycle_idx=cycle_idx,
+                                            train_task_idx=task_idx,
+                                            eval_task_idx=task_idx,
+                                            eval_task_identifier=task_identifier_str,
+                                            global_epoch=global_epoch_counter + 1,
+                                            epoch_within_task=epoch_within_task_1indexed,
+                                            val_loss=train_eval_loss,
+                                            val_accuracy=train_eval_metrics.get("accuracy", 0.0),
+                                            P_A=train_eval_metrics.get("P_A", 0.0),
+                                            P_B_given_A=train_eval_metrics.get("P_B_given_A", 0.0),
+                                            P_C_given_AB=train_eval_metrics.get("P_C_given_AB", 0.0)
+                                        )
                             
                     epoch_log[f"{prefix}learning_rate"] = current_lr
                     epoch_log[f"{prefix}global_epoch"] = global_epoch_counter
@@ -657,7 +958,12 @@ def main():
                 # Check early stopping convergence
                 convergence_stop_triggered_local = False
                 if args.enable_auto_stop:
-                    val_acc = val_metrics.get("accuracy", 0.0) if val_metrics is not None else 0.0
+                    metric_to_use = getattr(args, "auto_stop_metric", "accuracy")
+                    if metric_to_use != "accuracy" and val_metrics is not None and metric_to_use in val_metrics:
+                        val_acc = val_metrics[metric_to_use]
+                    else:
+                        val_acc = val_metrics.get("accuracy", 0.0) if val_metrics is not None else 0.0
+                        
                     if val_acc >= float(args.auto_stop_val_acc_threshold):
                         val_acc_streak += 1
                     else:
@@ -674,7 +980,8 @@ def main():
                 stop_flag = accelerator.reduce(stop_flag, reduction="max")
                 if int(stop_flag.item()) > 0:
                     if accelerator.is_local_main_process:
-                        print(f"Stopping current task early due to val-accuracy convergence (streak={val_acc_streak}).")
+                        metric_to_use = getattr(args, "auto_stop_metric", "accuracy")
+                        print(f"Stopping current task early due to convergence on metric '{metric_to_use}' (streak={val_acc_streak}).")
                     break
                 
             # End of task checkpointing
@@ -715,6 +1022,8 @@ def main():
             del val_dataloader
             del train_dataset
             del val_dataset
+            if args.eval_train_stages:
+                del train_val_dataloader
             
             # Reclaim GPU & CPU memory
             torch.cuda.empty_cache()

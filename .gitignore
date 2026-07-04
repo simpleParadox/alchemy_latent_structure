@@ -112,6 +112,7 @@ json_files/
 *.html
 mech_interp_slurm_logs/
 *.pyc
+*.md
 dm_alchemy/__pycache__/__init__.cpython-310.pyc
 dm_alchemy/__pycache__/_load_environment.cpython-310.pyc
 dm_alchemy/__pycache__/io.cpython-310.pyc

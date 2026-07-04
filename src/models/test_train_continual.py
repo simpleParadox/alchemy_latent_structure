@@ -25,6 +25,7 @@ class TestContinualArgsParsing(unittest.TestCase):
             self.assertEqual(args.reset_optimizer, "True")
             self.assertEqual(args.continual_mode, "composition")
             self.assertEqual(args.num_cycles, 1)
+            self.assertEqual(args.auto_stop_metric, "accuracy")
 
     def test_task_sequence_parsing_formats(self):
         """Test parsing of task_sequence when passed as string lists, comma-separated, or standard lists."""
@@ -271,6 +272,59 @@ class TestEarlyStoppingLogic(unittest.TestCase):
         # the streak did not accumulate across task boundaries to exceed patience (i.e. streak is 2, not 4).
         self.assertEqual(streak_snapshots_per_task, [2, 2])
 
+    def test_custom_metric_early_stopping(self):
+        """Test early stopping checks using a custom metric and its fallback."""
+        patience = 2
+        threshold = 0.8
+        
+        # Test Case C1: Monitoring custom metric P_A (present)
+        val_metrics_list = [
+            {"accuracy": 0.5, "P_A": 0.85},
+            {"accuracy": 0.6, "P_A": 0.90}
+        ]
+        val_acc_streak = 0
+        triggered = False
+        for val_metrics in val_metrics_list:
+            metric_to_use = "P_A"
+            if metric_to_use in val_metrics:
+                val_acc = val_metrics[metric_to_use]
+            else:
+                val_acc = val_metrics.get("accuracy", 0.0)
+            
+            if val_acc >= threshold:
+                val_acc_streak += 1
+            else:
+                val_acc_streak = 0
+            if val_acc_streak >= patience:
+                triggered = True
+                break
+        self.assertEqual(val_acc_streak, 2)
+        self.assertTrue(triggered)
+
+        # Test Case C2: Fallback to accuracy when custom metric P_A is absent
+        val_metrics_list_no_pa = [
+            {"accuracy": 0.85},
+            {"accuracy": 0.90}
+        ]
+        val_acc_streak = 0
+        triggered = False
+        for val_metrics in val_metrics_list_no_pa:
+            metric_to_use = "P_A"
+            if metric_to_use in val_metrics:
+                val_acc = val_metrics[metric_to_use]
+            else:
+                val_acc = val_metrics.get("accuracy", 0.0)
+            
+            if val_acc >= threshold:
+                val_acc_streak += 1
+            else:
+                val_acc_streak = 0
+            if val_acc_streak >= patience:
+                triggered = True
+                break
+        self.assertEqual(val_acc_streak, 2)
+        self.assertTrue(triggered)
+
 class TestIntegrationContinualTraining(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -355,6 +409,81 @@ class TestIntegrationContinualTraining(unittest.TestCase):
                 self.assertEqual(e.code, 0)
             except Exception as e:
                 self.fail(f"Integration test failed with unexpected exception: {e}")
+
+class TestDistributedEvaluation(unittest.TestCase):
+    def test_sharded_and_single_gpu_eval_equivalence(self):
+        """Verify sharded multi-GPU validation is equivalent to single-GPU validation."""
+        import torch
+        # Define tasks list
+        task_sequence = [2, 3, 4, 5]
+        num_processes = 4
+        
+        # We simulate a 4-process DDP run.
+        # For each rank, we run the sharding logic to determine which tasks are evaluated.
+        # We mock validate_epoch to return predictable metrics.
+        metrics_by_task = {
+            2: (1.5, {"accuracy": 0.5, "P_A": 0.6, "P_B_given_A": 0.7, "P_C_given_AB": 0.8}),
+            3: (1.4, {"accuracy": 0.55, "P_A": 0.65, "P_B_given_A": 0.75, "P_C_given_AB": 0.85}),
+            4: (1.3, {"accuracy": 0.6, "P_A": 0.7, "P_B_given_A": 0.8, "P_C_given_AB": 0.9}),
+            5: (1.2, {"accuracy": 0.65, "P_A": 0.75, "P_B_given_A": 0.85, "P_C_given_AB": 0.95}),
+        }
+        
+        # Simulating single-GPU (1 process):
+        # On single-GPU, process_index=0, num_processes=1.
+        # It evaluates all tasks, accumulating them in local_metrics_tensor.
+        local_metrics_tensor_single = torch.zeros(len(task_sequence), 5)
+        for idx, t_val in enumerate(task_sequence):
+            t_loss, t_metrics = metrics_by_task[t_val]
+            local_metrics_tensor_single[idx, 0] = t_loss
+            local_metrics_tensor_single[idx, 1] = t_metrics["accuracy"]
+            local_metrics_tensor_single[idx, 2] = t_metrics["P_A"]
+            local_metrics_tensor_single[idx, 3] = t_metrics["P_B_given_A"]
+            local_metrics_tensor_single[idx, 4] = t_metrics["P_C_given_AB"]
+            
+        # Simulating multi-GPU (4 processes):
+        # We construct local_metrics_tensors for all 4 processes, and sum-reduce them.
+        reduced_tensor_multi = torch.zeros(len(task_sequence), 5)
+        for rank in range(num_processes):
+            local_tensor = torch.zeros(len(task_sequence), 5)
+            for idx, t_val in enumerate(task_sequence):
+                if idx % num_processes == rank:
+                    t_loss, t_metrics = metrics_by_task[t_val]
+                    local_tensor[idx, 0] = t_loss
+                    local_tensor[idx, 1] = t_metrics["accuracy"]
+                    local_tensor[idx, 2] = t_metrics["P_A"]
+                    local_tensor[idx, 3] = t_metrics["P_B_given_A"]
+                    local_tensor[idx, 4] = t_metrics["P_C_given_AB"]
+            reduced_tensor_multi += local_tensor
+            
+        # Assert that the reduced tensor from multi-GPU simulation is identical to the single-GPU tensor.
+        self.assertTrue(torch.allclose(local_metrics_tensor_single, reduced_tensor_multi))
+        
+        # Verify the unpacking logic produces the exact same metrics dictionaries.
+        metrics_single = {}
+        metrics_multi = {}
+        
+        def unpack_metrics(global_metrics_tensor):
+            all_tasks_metrics = {}
+            for idx, t_val in enumerate(task_sequence):
+                t_loss = global_metrics_tensor[idx, 0].item()
+                t_acc = global_metrics_tensor[idx, 1].item()
+                t_pa = global_metrics_tensor[idx, 2].item()
+                t_pb = global_metrics_tensor[idx, 3].item()
+                t_pc = global_metrics_tensor[idx, 4].item()
+                all_tasks_metrics[t_val] = {
+                    "loss": t_loss,
+                    "metrics": {
+                        "accuracy": t_acc,
+                        "P_A": t_pa,
+                        "P_B_given_A": t_pb,
+                        "P_C_given_AB": t_pc
+                    }
+                }
+            return all_tasks_metrics
+
+        metrics_single = unpack_metrics(local_metrics_tensor_single)
+        metrics_multi = unpack_metrics(reduced_tensor_multi)
+        self.assertEqual(metrics_single, metrics_multi)
 
 if __name__ == "__main__":
     unittest.main()
