@@ -343,7 +343,10 @@ def main():
             print(f"Error: No checkpoints found in directory {checkpoint_dir}")
             return
         # Use the last checkpoint for the calibration check if a directory was passed
-        args.checkpoint_path = sorted(pt_files)[-1]
+        def get_epoch(f):
+            m = re.search(r'best_model_epoch_(\d+)_', os.path.basename(f))
+            return int(m.group(1)) if m else -1
+        args.checkpoint_path = sorted(pt_files, key=get_epoch)[-1]
     
     # Initialize W&B run
     wandb.init(project="mech_interp_alchemy", config=vars(args))

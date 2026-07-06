@@ -66,7 +66,8 @@ def build_last_potion_pairs(dataset, input_word2idx, max_pairs=None):
     """
     Experiment 1: Same support, same query stone, same first k-1 potions, different last potion.
     """
-    item_sep_id = input_word2idx.get('<item_sep>', 23)
+    item_sep_id = input_word2idx.get('<item_sep>', None)
+    print("Item sep id: ", item_sep_id)
     
     if hasattr(dataset, 'data'):
         samples = dataset.data
@@ -79,7 +80,7 @@ def build_last_potion_pairs(dataset, input_word2idx, max_pairs=None):
         enc_inps = sample['encoder_input_ids']
         support, query = split_support_query(enc_inps, item_sep_id)
         if len(query) < 5:
-            continue
+            assert False, f"Query length is less than 5, got {len(query)}"
         
         query_stone = tuple(query[:4])
         first_k_minus_1_potions = tuple(query[4:-1])
@@ -211,21 +212,12 @@ def run_full_sweep(model, all_pairs, input_word2idx, setup='noising', patch_mlp=
                 
                 masks.append(mask)
                 
-            from torch.nn.utils.rnn import pad_sequence
-            pad_id = input_word2idx.get('<pad>', 19)
+            seq_lengths = [t.shape[0] for t in clean_tensors]
+            assert all(l == seq_lengths[0] for l in seq_lengths), f"RuntimeError: Chemistries have different lengths! Lengths found: {set(seq_lengths)}"
             
-            clean_batch = pad_sequence(clean_tensors, batch_first=True, padding_value=pad_id)
-            corrupt_batch = pad_sequence(corrupt_tensors, batch_first=True, padding_value=pad_id)
-            mask_batch = pad_sequence(masks, batch_first=True, padding_value=False)
-            
-            max_len = max(clean_batch.shape[1], corrupt_batch.shape[1], mask_batch.shape[1])
-            
-            if clean_batch.shape[1] < max_len:
-                clean_batch = F.pad(clean_batch, (0, max_len - clean_batch.shape[1]), value=pad_id)
-            if corrupt_batch.shape[1] < max_len:
-                corrupt_batch = F.pad(corrupt_batch, (0, max_len - corrupt_batch.shape[1]), value=pad_id)
-            if mask_batch.shape[1] < max_len:
-                mask_batch = F.pad(mask_batch, (0, max_len - mask_batch.shape[1]), value=False)
+            clean_batch = torch.stack(clean_tensors, dim=0)
+            corrupt_batch = torch.stack(corrupt_tensors, dim=0)
+            mask_batch = torch.stack(masks, dim=0)
                 
             scores = compute_patching_score_batched(
                 model=model,
@@ -298,7 +290,10 @@ def main():
         if not pt_files:
             print(f"Error: No checkpoints found in directory {checkpoint_dir}")
             return
-        args.checkpoint_path = sorted(pt_files)[-1]
+        def get_epoch(f):
+            m = re.search(r'best_model_epoch_(\d+)_', os.path.basename(f))
+            return int(m.group(1)) if m else -1
+        args.checkpoint_path = sorted(pt_files, key=get_epoch)[-1]
     
     wandb.init(project="mech_interp_alchemy", config=vars(args))
 
@@ -390,10 +385,11 @@ def main():
                     mask[start_idx:start_idx+4] = True
                 masks.append(mask)
                 
-            from torch.nn.utils.rnn import pad_sequence
-            pad_id = input_word2idx.get('<pad>', 19)
-            clean_batch = pad_sequence(clean_tensors, batch_first=True, padding_value=pad_id)
-            mask_batch = pad_sequence(masks, batch_first=True, padding_value=False)
+            seq_lengths = [t.shape[0] for t in clean_tensors]
+            assert all(l == seq_lengths[0] for l in seq_lengths), f"RuntimeError: Chemistries have different lengths! Lengths found: {set(seq_lengths)}"
+            
+            clean_batch = torch.stack(clean_tensors, dim=0)
+            mask_batch = torch.stack(masks, dim=0)
             full_mask = torch.ones_like(mask_batch, dtype=torch.bool)
             
             scores = compute_patching_score_batched(
