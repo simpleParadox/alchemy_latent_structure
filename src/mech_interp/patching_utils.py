@@ -190,9 +190,10 @@ def compute_patching_score_batched(model, clean_batch, corrupt_batch, component_
             'target_token_masks': target_token_masks,
             'corrupt_activation': source_acts.get(f"layer_{layer_idx}_self_attn")
         }
-        
+        # Register forward hooks at the component where you want to patch.
         orig_forwards = patch_attention_modules(model, None, patch_config=patch_config)
         try:
+            # This is the third forward pass.
             f_patched = model(base_input)
         except Exception as e:
             raise Exception(f"Errored out forward pass for head patching. Error: {e}")

@@ -3082,7 +3082,7 @@ if __name__ == "__main__":
         elif exp_typ == 'decomposition':
             base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_decomposition/'
         elif args.cross_hop:
-            base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_cross_hop_composition/'
+            base_path = '/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/stagewise_accuracies_cross_hop_composition_20260713/'
         else:
             base_path = '/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_frozen_layer_composition/'
 

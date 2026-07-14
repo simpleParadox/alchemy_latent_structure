@@ -48,7 +48,7 @@ BASELINE_STAGEWISE_PICKLE_BASEDIR: Dict[str, str] = {
 }
 
 CROSS_HOP_STAGEWISE_PICKLE_BASEDIR: str = (
-    "/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/stagewise_accuracies_cross_hop_composition/"
+    "/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/src/stagewise_accuracies_cross_hop_composition_20260713/"
 )
 
 

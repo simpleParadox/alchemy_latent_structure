@@ -107,7 +107,7 @@ def build_last_potion_pairs(dataset, input_word2idx, max_pairs=None):
             corrupt_tensor = torch.tensor([sample_B['encoder_input_ids']], dtype=torch.long)
             
             all_pairs.append((clean_tensor, corrupt_tensor, target_A, frozenset([target_A]), frozenset([target_B])))
-            all_pairs.append((corrupt_tensor, clean_tensor, target_B, frozenset([target_B]), frozenset([target_A])))
+            # all_pairs.append((corrupt_tensor, clean_tensor, target_B, frozenset([target_B]), frozenset([target_A])))
             
     random.seed(42)
     random.shuffle(all_pairs)
@@ -432,7 +432,7 @@ def main():
     rel_match = re.search(r'saved_models/(.*?init_seed_\d+)', args.checkpoint_path)
     suffix = rel_match.group(1) if rel_match else "default_run"
             
-    base_save_dir = f"/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/mech_interp_results/composition/{suffix}/{args.experiment}"
+    base_save_dir = f"/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/mech_interp_results/composition/{suffix}/unidirectional/{args.experiment}"
     os.makedirs(base_save_dir, exist_ok=True)
     
     out_pkl_path = os.path.join(base_save_dir, f"layer_head_sweep_results_{args.setup}.pkl")

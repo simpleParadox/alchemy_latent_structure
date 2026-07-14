@@ -126,3 +126,5 @@ dm_alchemy/protos/__pycache__/events_pb2.cpython-310.pyc
 dm_alchemy/types/__pycache__/graphs.cpython-310.pyc
 dm_alchemy/types/__pycache__/helpers.cpython-310.pyc
 dm_alchemy/types/__pycache__/stones_and_potions.cpython-310.pyc
+
+scratch/

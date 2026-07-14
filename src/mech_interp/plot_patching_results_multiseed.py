@@ -187,7 +187,7 @@ def smooth(vals, window: int):
 
 def plot_attention_heads(common_epochs, means, sems, setup, metric, output_dir,
                          attn_heads, smoothing_window, clip_percentile,
-                         experiment, hop, n_seeds):
+                         experiment, hop, n_seeds, ylim_list=None, sharey=False):
     """
     One subplot per layer, each with all heads as separate colored lines.
     Mean line + SEM shaded band. Raw mean faintly behind smoothed trend.
@@ -198,17 +198,21 @@ def plot_attention_heads(common_epochs, means, sems, setup, metric, output_dir,
     n_layers = len(layer_ids)
     epochs_arr = np.array(common_epochs)
 
-    # Compute global y-limits
-    all_vals = []
-    for comp in attn_heads:
-        all_vals.extend(means[comp].tolist())
-    if clip_percentile < 100 and all_vals:
-        limit = float(np.nanpercentile(np.abs(all_vals), clip_percentile))
-    else:
-        limit = max(abs(np.nanmin(all_vals)), abs(np.nanmax(all_vals))) if all_vals else 1.0
-    ylim = (-limit, limit) if limit > 0 else None
+    # Handle ylim_list parsing and expansion
+    if ylim_list is not None:
+        if len(ylim_list) == 1:
+            # Replicate the single ylim for all layers
+            ylim_list = ylim_list * n_layers
+        elif len(ylim_list) != n_layers:
+            print(f"Warning: Length of ylim_list ({len(ylim_list)}) does not match n_layers ({n_layers}). Using default limits.")
+            ylim_list = None
 
-    fig, axes = plt.subplots(1, n_layers, figsize=(5 * n_layers, 4.5), sharey=True)
+    # If different limits are specified, sharey must be False
+    if ylim_list is not None:
+        if any(ylim_list[i] != ylim_list[0] for i in range(len(ylim_list))):
+            sharey = False
+
+    fig, axes = plt.subplots(1, n_layers, figsize=(5 * n_layers, 4.5), sharey=sharey)
     if n_layers == 1:
         axes = [axes]
     fig.suptitle(
@@ -217,8 +221,21 @@ def plot_attention_heads(common_epochs, means, sems, setup, metric, output_dir,
         fontsize=12
     )
 
+    # Compute global default y-limits if sharing y
+    if sharey and ylim_list is None:
+        all_vals = []
+        for comp in attn_heads:
+            all_vals.extend(means[comp].tolist())
+        if clip_percentile < 100 and all_vals:
+            limit = float(np.nanpercentile(np.abs(all_vals), clip_percentile))
+        else:
+            limit = max(abs(np.nanmin(all_vals)), abs(np.nanmax(all_vals))) if all_vals else 1.0
+        default_ylim = (-limit, limit) if limit > 0 else None
+    else:
+        default_ylim = None
+
     cmap = plt.get_cmap("tab10")
-    for ax, layer in zip(axes, layer_ids):
+    for li, (ax, layer) in enumerate(zip(axes, layer_ids)):
         layer_comps = [c for c in attn_heads if f"layer_{layer}_" in c]
         for i, comp in enumerate(layer_comps):
             head_id = re.search(r"head_(\d+)", comp).group(1)
@@ -243,8 +260,27 @@ def plot_attention_heads(common_epochs, means, sems, setup, metric, output_dir,
         ax.set_xlabel("Epoch")
         if layer == layer_ids[0]:
             ax.set_ylabel(metric)
-        if ylim:
-            ax.set_ylim(ylim)
+
+        # Apply y-limit for this specific subplot
+        if ylim_list is not None:
+            current_ylim = ylim_list[li]
+        elif sharey:
+            current_ylim = default_ylim
+        else:
+            # Compute independent autoscaled y-limit for this specific layer
+            all_vals = []
+            for comp in layer_comps:
+                all_vals.extend(means[comp].tolist())
+            if clip_percentile < 100 and all_vals:
+                limit = float(np.nanpercentile(np.abs(all_vals), clip_percentile))
+            else:
+                limit = max(abs(np.nanmin(all_vals)), abs(np.nanmax(all_vals))) if all_vals else 1.0
+            current_ylim = (-limit, limit) if limit > 0 else None
+
+        if current_ylim:
+            ax.set_ylim(current_ylim)
+
+
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
@@ -257,22 +293,23 @@ def plot_attention_heads(common_epochs, means, sems, setup, metric, output_dir,
 
 def plot_mlps_embedding(common_epochs, means, sems, setup, metric, output_dir,
                         mlps, embedding, smoothing_window, clip_percentile,
-                        experiment, hop, n_seeds):
+                        experiment, hop, n_seeds, ylim=None):
     """
     MLP + embedding line plot with SEM bands.
     """
     mlp_emb = embedding + mlps
     epochs_arr = np.array(common_epochs)
 
-    # Compute y-limits
-    all_vals = []
-    for comp in mlp_emb:
-        all_vals.extend(means[comp].tolist())
-    if clip_percentile < 100 and all_vals:
-        limit = float(np.nanpercentile(np.abs(all_vals), clip_percentile))
-    else:
-        limit = max(abs(np.nanmin(all_vals)), abs(np.nanmax(all_vals))) if all_vals else 1.0
-    ylim = (-limit, limit) if limit > 0 else None
+    # Compute default y-limits if not provided
+    if ylim is None:
+        all_vals = []
+        for comp in mlp_emb:
+            all_vals.extend(means[comp].tolist())
+        if clip_percentile < 100 and all_vals:
+            limit = float(np.nanpercentile(np.abs(all_vals), clip_percentile))
+        else:
+            limit = max(abs(np.nanmin(all_vals)), abs(np.nanmax(all_vals))) if all_vals else 1.0
+        ylim = (-limit, limit) if limit > 0 else None
 
     fig, ax = plt.subplots(figsize=(10, 4.5))
     fig.suptitle(
@@ -313,6 +350,180 @@ def plot_mlps_embedding(common_epochs, means, sems, setup, metric, output_dir,
     print(f"Saved: {out_path}")
 
 
+def plot_attention_heads_comparison(common_epochs, means_n, means_d, metric, output_dir,
+                                    attn_heads, smoothing_window, clip_percentile,
+                                    experiment, hop, n_seeds, ylim_list=None, sharey=False):
+    """
+    Comparison plot for noising vs denoising. 
+    Solid line = noising, dashed line = denoising. SEM is omitted.
+    """
+    layer_ids = sorted(set(
+        int(re.search(r"layer_(\d+)", c).group(1)) for c in attn_heads
+    ))
+    n_layers = len(layer_ids)
+    epochs_arr = np.array(common_epochs)
+
+    if ylim_list is not None:
+        if len(ylim_list) == 1:
+            ylim_list = ylim_list * n_layers
+        elif len(ylim_list) != n_layers:
+            print(f"Warning: Length of ylim_list ({len(ylim_list)}) does not match n_layers ({n_layers}). Using default limits.")
+            ylim_list = None
+    if ylim_list is not None and any(ylim_list[i] != ylim_list[0] for i in range(len(ylim_list))):
+        sharey = False
+
+    fig, axes = plt.subplots(1, n_layers, figsize=(5 * n_layers, 4.5), sharey=sharey)
+    if n_layers == 1:
+        axes = [axes]
+    fig.suptitle(
+        f"Attention Head Patching Comparison (Solid=Noising, Dashed=Denoising) — {experiment} | hop {hop} | {metric}\n"
+        f"Mean across {n_seeds} seeds",
+        fontsize=12
+    )
+
+    if sharey and ylim_list is None:
+        all_vals = []
+        for comp in attn_heads:
+            all_vals.extend(means_n[comp].tolist() + means_d[comp].tolist())
+        if clip_percentile < 100 and all_vals:
+            limit = float(np.nanpercentile(np.abs(all_vals), clip_percentile))
+        else:
+            limit = max(abs(np.nanmin(all_vals)), abs(np.nanmax(all_vals))) if all_vals else 1.0
+        default_ylim = (-limit, limit) if limit > 0 else None
+    else:
+        default_ylim = None
+
+    cmap = plt.get_cmap("tab10")
+    for li, (ax, layer) in enumerate(zip(axes, layer_ids)):
+        layer_comps = [c for c in attn_heads if f"layer_{layer}_" in c]
+        for i, comp in enumerate(layer_comps):
+            head_id = re.search(r"head_(\d+)", comp).group(1)
+            color = cmap(i)
+
+            mean_vals_n = means_n[comp]
+            mean_vals_d = means_d[comp]
+
+            smoothed_mean_n = smooth(mean_vals_n, smoothing_window)
+            smoothed_mean_d = smooth(mean_vals_d, smoothing_window)
+
+            # Plot noising (solid)
+            ax.plot(epochs_arr, smoothed_mean_n, color=color, linestyle='-', linewidth=1.5, label=f"head {head_id} (N)")
+            # Plot denoising (dashed)
+            ax.plot(epochs_arr, smoothed_mean_d, color=color, linestyle='--', linewidth=1.5, label=f"head {head_id} (D)")
+
+        ax.set_title(f"Layer {layer}")
+        ax.set_xlabel("Epoch")
+        if layer == layer_ids[0]:
+            ax.set_ylabel(metric)
+
+        if ylim_list is not None:
+            current_ylim = ylim_list[li]
+        elif sharey:
+            current_ylim = default_ylim
+        else:
+            all_vals = []
+            for comp in layer_comps:
+                all_vals.extend(means_n[comp].tolist() + means_d[comp].tolist())
+            if clip_percentile < 100 and all_vals:
+                limit = float(np.nanpercentile(np.abs(all_vals), clip_percentile))
+            else:
+                limit = max(abs(np.nanmin(all_vals)), abs(np.nanmax(all_vals))) if all_vals else 1.0
+            current_ylim = (-limit, limit) if limit > 0 else None
+
+        if current_ylim:
+            ax.set_ylim(current_ylim)
+
+        ax.legend(fontsize=7, ncol=2)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out_path = os.path.join(output_dir, f"multiseed_line_attn_{experiment}_hop{hop}_comparison.png")
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+    print(f"Saved: {out_path}")
+
+
+def plot_mlps_embedding_comparison(common_epochs, means_n, means_d, metric, output_dir,
+                                   mlps, embedding, smoothing_window, clip_percentile,
+                                   experiment, hop, n_seeds, ylim=None):
+    """
+    Comparison plot for MLPs and Embeddings. 
+    Solid line = noising, dashed line = denoising. SEM is omitted.
+    """
+    mlp_emb = embedding + mlps
+    epochs_arr = np.array(common_epochs)
+
+    if ylim is None:
+        all_vals = []
+        for comp in mlp_emb:
+            all_vals.extend(means_n[comp].tolist() + means_d[comp].tolist())
+        if clip_percentile < 100 and all_vals:
+            limit = float(np.nanpercentile(np.abs(all_vals), clip_percentile))
+        else:
+            limit = max(abs(np.nanmin(all_vals)), abs(np.nanmax(all_vals))) if all_vals else 1.0
+        ylim = (-limit, limit) if limit > 0 else None
+
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    fig.suptitle(
+        f"MLP & Embedding Patching Comparison (Solid=Noising, Dashed=Denoising) — {experiment} | hop {hop} | {metric}\n"
+        f"Mean across {n_seeds} seeds",
+        fontsize=12
+    )
+
+    cmap = plt.get_cmap("tab10")
+    for i, comp in enumerate(mlp_emb):
+        color = cmap(i)
+
+        mean_vals_n = means_n[comp]
+        mean_vals_d = means_d[comp]
+
+        smoothed_mean_n = smooth(mean_vals_n, smoothing_window)
+        smoothed_mean_d = smooth(mean_vals_d, smoothing_window)
+
+        ax.plot(epochs_arr, smoothed_mean_n, color=color, linestyle='-', linewidth=1.5, label=f"{comp} (N)")
+        ax.plot(epochs_arr, smoothed_mean_d, color=color, linestyle='--', linewidth=1.5, label=f"{comp} (D)")
+
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel(metric)
+    if ylim:
+        ax.set_ylim(ylim)
+    ax.legend(fontsize=7, ncol=2)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    out_path = os.path.join(output_dir, f"multiseed_line_mlp_{experiment}_hop{hop}_comparison.png")
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+    print(f"Saved: {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# Helper functions for y-limit parsing
+# ---------------------------------------------------------------------------
+
+def parse_ylim_single(val_str):
+    if not val_str:
+        return None
+    val_str = val_str.replace("[", "").replace("]", "")
+    subparts = [float(x) for x in val_str.split(",") if x.strip()]
+    if len(subparts) != 2:
+        raise argparse.ArgumentTypeError(f"y-limit must have exactly 2 numbers (ymin, ymax). Got: {val_str}")
+    return subparts
+
+
+def parse_ylim_list(val_str):
+    if not val_str:
+        return None
+    val_str = val_str.replace("[", "").replace("]", "")
+    parts = val_str.split(";")
+    result = []
+    for part in parts:
+        subparts = [float(x) for x in part.split(",") if x.strip()]
+        if len(subparts) != 2:
+            raise argparse.ArgumentTypeError(f"Each y-limit must have exactly 2 numbers (ymin, ymax). Got: {part}")
+        result.append(subparts)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -332,12 +543,25 @@ def main():
     )
     # Allow CLI overrides for common settings
     parser.add_argument("--setup", type=str, default=None,
-                        choices=["noising", "denoising"])
+                        choices=["noising", "denoising", "comparison"])
     parser.add_argument("--metric", type=str, default=None,
                         choices=["lse_mean", "softmax_mean", "raw_lse_mean"])
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--smoothing_window", type=int, default=None)
     parser.add_argument("--clip_percentile", type=float, default=None)
+    parser.add_argument(
+        "--attn_ylim", type=str, default=None,
+        help="y-limits for attention head subplots. Can be a single range like '-1,1' "
+             "or a semicolon-separated list of ranges like '-0.5,0.5;-1,1;-1.5,1.5;-2,2'."
+    )
+    parser.add_argument(
+        "--sharey", type=str, default="False", choices=["True", "False"],
+        help="Whether to share the y-axis limit/scale across all attention head subplots. Default is False."
+    )
+    parser.add_argument(
+        "--mlp_ylim", type=str, default=None,
+        help="y-limit range for MLP/embedding plot, e.g. '-1,1'."
+    )
 
     args = parser.parse_args()
 
@@ -365,6 +589,24 @@ def main():
     smoothing_window = args.smoothing_window or cfg.get("smoothing_window", 25)
     clip_percentile = args.clip_percentile if args.clip_percentile is not None else cfg.get("clip_percentile", 100.0)
 
+    # Merge y-limits from CLI / config
+    attn_ylim = None
+    if args.attn_ylim is not None:
+        attn_ylim = parse_ylim_list(args.attn_ylim)
+    elif "attn_ylim" in cfg:
+        raw_attn_ylim = cfg["attn_ylim"]
+        if isinstance(raw_attn_ylim, list):
+            if all(isinstance(x, list) for x in raw_attn_ylim):
+                attn_ylim = raw_attn_ylim
+            else:
+                attn_ylim = [raw_attn_ylim]
+
+    mlp_ylim = None
+    if args.mlp_ylim is not None:
+        mlp_ylim = parse_ylim_single(args.mlp_ylim)
+    elif "mlp_ylim" in cfg:
+        mlp_ylim = cfg["mlp_ylim"]
+
     os.makedirs(output_dir, exist_ok=True)
 
     # Print configuration
@@ -377,40 +619,77 @@ def main():
     print(f"Metric     : {metric}")
     print(f"Smoothing  : {smoothing_window}")
     print(f"Clip %ile  : {clip_percentile}")
+    print(f"Attn ylim  : {attn_ylim}")
+    print(f"MLP ylim   : {mlp_ylim}")
     print(f"Output dir : {output_dir}")
     print(f"Num seeds  : {len(results_dirs)}")
     print("-" * 70)
     print("Loading result directories:")
 
-    # Load all seeds
-    all_seeds = load_all_seeds(results_dirs, setup)
-    n_seeds = len(all_seeds)
+    if setup == "comparison":
+        print("\nLoading result directories for both noising and denoising:")
+        all_seeds_n = load_all_seeds(results_dirs, "noising")
+        all_seeds_d = load_all_seeds(results_dirs, "denoising")
+        n_seeds = len(all_seeds_n)
+        
+        # Find common epochs across both
+        common_epochs = find_common_epochs(all_seeds_n + all_seeds_d)
+        if not common_epochs:
+            print("ERROR: No common epochs found across seeds. Exiting.")
+            sys.exit(1)
+        print(f"\n  Plotting {len(common_epochs)} common epochs: {common_epochs[0]} ... {common_epochs[-1]}")
 
-    # Find common epochs
-    common_epochs = find_common_epochs(all_seeds)
-    if not common_epochs:
-        print("ERROR: No common epochs found across seeds. Exiting.")
-        sys.exit(1)
-    print(f"\n  Plotting {len(common_epochs)} common epochs: {common_epochs[0]} ... {common_epochs[-1]}")
+        print("\nComputing mean and SEM across seeds...")
+        means_n, _ = compute_mean_sem(all_seeds_n, common_epochs, metric)
+        means_d, _ = compute_mean_sem(all_seeds_d, common_epochs, metric)
 
-    # Compute mean and SEM
-    print("\nComputing mean and SEM across seeds...")
-    means, sems = compute_mean_sem(all_seeds, common_epochs, metric)
+        components = get_components(all_seeds_n)
+        attn_heads, mlps, embedding = parse_components(components)
 
-    # Parse components
-    components = get_components(all_seeds)
-    attn_heads, mlps, embedding = parse_components(components)
+        sharey = (args.sharey or cfg.get("sharey", "False")).lower() == "true"
 
-    # Plot
-    print("\n--- Generating attention head line plots ---")
-    plot_attention_heads(common_epochs, means, sems, setup, metric, output_dir,
-                         attn_heads, smoothing_window, clip_percentile,
-                         experiment, hop, n_seeds)
+        print("\n--- Generating attention head comparison plots ---")
+        plot_attention_heads_comparison(common_epochs, means_n, means_d, metric, output_dir,
+                                        attn_heads, smoothing_window, clip_percentile,
+                                        experiment, hop, n_seeds, ylim_list=attn_ylim, sharey=sharey)
 
-    print("\n--- Generating MLP & embedding line plot ---")
-    plot_mlps_embedding(common_epochs, means, sems, setup, metric, output_dir,
-                        mlps, embedding, smoothing_window, clip_percentile,
-                        experiment, hop, n_seeds)
+        print("\n--- Generating MLP & embedding comparison plot ---")
+        plot_mlps_embedding_comparison(common_epochs, means_n, means_d, metric, output_dir,
+                                       mlps, embedding, smoothing_window, clip_percentile,
+                                       experiment, hop, n_seeds, ylim=mlp_ylim)
+    else:
+        # Load all seeds
+        all_seeds = load_all_seeds(results_dirs, setup)
+        n_seeds = len(all_seeds)
+
+        # Find common epochs
+        common_epochs = find_common_epochs(all_seeds)
+        if not common_epochs:
+            print("ERROR: No common epochs found across seeds. Exiting.")
+            sys.exit(1)
+        print(f"\n  Plotting {len(common_epochs)} common epochs: {common_epochs[0]} ... {common_epochs[-1]}")
+
+        # Compute mean and SEM
+        print("\nComputing mean and SEM across seeds...")
+        means, sems = compute_mean_sem(all_seeds, common_epochs, metric)
+
+        # Parse components
+        components = get_components(all_seeds)
+        attn_heads, mlps, embedding = parse_components(components)
+
+        # Merge sharey from CLI / config
+        sharey = (args.sharey or cfg.get("sharey", "False")).lower() == "true"
+
+        # Plot
+        print("\n--- Generating attention head line plots ---")
+        plot_attention_heads(common_epochs, means, sems, setup, metric, output_dir,
+                             attn_heads, smoothing_window, clip_percentile,
+                             experiment, hop, n_seeds, ylim_list=attn_ylim, sharey=sharey)
+
+        print("\n--- Generating MLP & embedding line plot ---")
+        plot_mlps_embedding(common_epochs, means, sems, setup, metric, output_dir,
+                            mlps, embedding, smoothing_window, clip_percentile,
+                            experiment, hop, n_seeds, ylim=mlp_ylim)
 
     print("\nDone!")
 
