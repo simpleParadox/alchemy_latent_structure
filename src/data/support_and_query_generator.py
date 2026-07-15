@@ -326,10 +326,23 @@ def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, pairing_i
     # Define the color pairs based on the index.
     color_pairs = get_color_pairs(pairing_index)
     
-    # 1. Randomly select one color pair to hold out
-    # print("Seed for held-out color pair generation:", seed)
-    held_out_pair = random.choice(color_pairs)
-    support_colors = [color for pair in color_pairs if pair != held_out_pair for color in pair]
+    # 1. Select one color pair to hold out
+    if pairing_index != 0:
+        from src.data.enhanced_chemistry_generator import get_pairing_mapping
+        d1_map = get_pairing_mapping(0)
+        d2_map = get_pairing_mapping(pairing_index)
+        axis_changed = []
+        for c in d2_map:
+            if d1_map.index(c) // 2 != d2_map.index(c) // 2:
+                axis_changed.append(c)
+        if len(axis_changed) == 2:
+            held_out_pair = tuple(axis_changed)
+        else:
+            held_out_pair = random.choice(color_pairs)
+    else:
+        held_out_pair = random.choice(color_pairs)
+        
+    support_colors = [color for pair in color_pairs for color in pair if color not in held_out_pair]
     
     # print(f"Holding out color pair: {held_out_pair}")
 
@@ -739,6 +752,8 @@ def main():
                         help="Index (0-14) representing the permutation of potion color pairings.")
     parser.add_argument("--num_held_out_edges", type=int, default=4,
                         help="Number of edges to hold out for the held-out color pair experiment. Default is 4. Ignored if --held_out_color_exp is not set.")
+    parser.add_argument("--regenerate_matched_held_out", action="store_true", default=False,
+                        help="Regenerate the held-out color pair transitions even when matching episodes from target JSONs, instead of reconstructing original paths.")
 
     parser.add_argument("--max_queries_per_start_node", type=int, default=10000,
                         help="Maximum number of query samples to generate per start node. Default is 6.")
@@ -1111,52 +1126,55 @@ def main():
                     # print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
                 
                 if (args.match_train_json or args.match_val_json) and episode_id in target_data.get('episodes', {}):
-                    target_ep = target_data['episodes'][episode_id]
-                    
-                    def reconstruct_samples(info_list):
-                        reconstructed = []
-                        for s_info in info_list:
-                            path_nodes = s_info.get("path_nodes", [s_info["start_node"], s_info["end_node"]])
-                            
-                            new_potions = []
-                            for i in range(len(path_nodes) - 1):
-                                u = path_nodes[i]
-                                v = path_nodes[i+1]
+                    if args.regenerate_matched_held_out and args.held_out_color_exp:
+                        support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, pairing_index=args.potion_pairing_index, seed=seed)
+                    else:
+                        target_ep = target_data['episodes'][episode_id]
+                        
+                        def reconstruct_samples(info_list):
+                            reconstructed = []
+                            for s_info in info_list:
+                                path_nodes = s_info.get("path_nodes", [s_info["start_node"], s_info["end_node"]])
                                 
-                                found_potion = None
-                                if u in graph and "transitions" in graph[u]:
-                                    for transition in graph[u]["transitions"]:
-                                        if transition["next_node_str"] == v:
-                                            found_potion = transition["potion_color"]
-                                            break
-                                            
-                                if found_potion is None:
-                                    raise ValueError(f"Transition from {u} to {v} is missing in the new graph topology!")
+                                new_potions = []
+                                for i in range(len(path_nodes) - 1):
+                                    u = path_nodes[i]
+                                    v = path_nodes[i+1]
                                     
-                                new_potions.append(found_potion)
-                            
-                            s_info["potions"] = new_potions
-                            
-                            potions_str = " ".join(new_potions)
-                            start_desc = get_stone_description(graph[path_nodes[0]])
-                            end_desc = get_stone_description(graph[path_nodes[-1]])
-                            reconstructed.append(f"{start_desc} {potions_str} -> {end_desc}")
-                        return reconstructed
+                                    found_potion = None
+                                    if u in graph and "transitions" in graph[u]:
+                                        for transition in graph[u]["transitions"]:
+                                            if transition["next_node_str"] == v:
+                                                found_potion = transition["potion_color"]
+                                                break
+                                                
+                                    if found_potion is None:
+                                        raise ValueError(f"Transition from {u} to {v} is missing in the new graph topology!")
+                                        
+                                    new_potions.append(found_potion)
+                                
+                                s_info["potions"] = new_potions
+                                
+                                potions_str = " ".join(new_potions)
+                                start_desc = get_stone_description(graph[path_nodes[0]])
+                                end_desc = get_stone_description(graph[path_nodes[-1]])
+                                reconstructed.append(f"{start_desc} {potions_str} -> {end_desc}")
+                            return reconstructed
 
-                    support_samples = reconstruct_samples(target_ep.get("support_samples_info", []))
-                    query_samples = reconstruct_samples(target_ep.get("query_samples_info", []))
-                    
-                    support_and_query_samples = {
-                        "support": support_samples,
-                        "query": query_samples,
-                        "support_num_generated": len(support_samples),
-                        "query_num_generated": len(query_samples),
-                        "support_samples_info": target_ep.get("support_samples_info", []),
-                        "query_samples_info": target_ep.get("query_samples_info", []),
-                    }
+                        support_samples = reconstruct_samples(target_ep.get("support_samples_info", []))
+                        query_samples = reconstruct_samples(target_ep.get("query_samples_info", []))
+                        
+                        support_and_query_samples = {
+                            "support": support_samples,
+                            "query": query_samples,
+                            "support_num_generated": len(support_samples),
+                            "query_num_generated": len(query_samples),
+                            "support_samples_info": target_ep.get("support_samples_info", []),
+                            "query_samples_info": target_ep.get("query_samples_info", []),
+                        }
                 else:
                     if args.held_out_color_exp:
-                        support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=seed)
+                        support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, pairing_index=args.potion_pairing_index, seed=seed)
                     else:
                         support_and_query_samples = generate_support_and_query_examples(
                             graph, 
@@ -1249,52 +1267,55 @@ def main():
                 
                 
                 if (args.match_train_json or args.match_val_json) and episode_id in target_data.get('episodes', {}):
-                    target_ep = target_data['episodes'][episode_id]
-                    
-                    def reconstruct_samples(info_list):
-                        reconstructed = []
-                        for s_info in info_list:
-                            path_nodes = s_info.get("path_nodes", [s_info["start_node"], s_info["end_node"]])
-                            
-                            new_potions = []
-                            for i in range(len(path_nodes) - 1):
-                                u = path_nodes[i]
-                                v = path_nodes[i+1]
+                    if args.regenerate_matched_held_out and args.held_out_color_exp:
+                        support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, pairing_index=args.potion_pairing_index, seed=seed)
+                    else:
+                        target_ep = target_data['episodes'][episode_id]
+                        
+                        def reconstruct_samples(info_list):
+                            reconstructed = []
+                            for s_info in info_list:
+                                path_nodes = s_info.get("path_nodes", [s_info["start_node"], s_info["end_node"]])
                                 
-                                found_potion = None
-                                if u in graph and "transitions" in graph[u]:
-                                    for transition in graph[u]["transitions"]:
-                                        if transition["next_node_str"] == v:
-                                            found_potion = transition["potion_color"]
-                                            break
-                                            
-                                if found_potion is None:
-                                    raise ValueError(f"Transition from {u} to {v} is missing in the new graph topology!")
+                                new_potions = []
+                                for i in range(len(path_nodes) - 1):
+                                    u = path_nodes[i]
+                                    v = path_nodes[i+1]
                                     
-                                new_potions.append(found_potion)
-                            
-                            s_info["potions"] = new_potions
-                            
-                            potions_str = " ".join(new_potions)
-                            start_desc = get_stone_description(graph[path_nodes[0]])
-                            end_desc = get_stone_description(graph[path_nodes[-1]])
-                            reconstructed.append(f"{start_desc} {potions_str} -> {end_desc}")
-                        return reconstructed
+                                    found_potion = None
+                                    if u in graph and "transitions" in graph[u]:
+                                        for transition in graph[u]["transitions"]:
+                                            if transition["next_node_str"] == v:
+                                                found_potion = transition["potion_color"]
+                                                break
+                                                
+                                    if found_potion is None:
+                                        raise ValueError(f"Transition from {u} to {v} is missing in the new graph topology!")
+                                        
+                                    new_potions.append(found_potion)
+                                
+                                s_info["potions"] = new_potions
+                                
+                                potions_str = " ".join(new_potions)
+                                start_desc = get_stone_description(graph[path_nodes[0]])
+                                end_desc = get_stone_description(graph[path_nodes[-1]])
+                                reconstructed.append(f"{start_desc} {potions_str} -> {end_desc}")
+                            return reconstructed
 
-                    support_samples = reconstruct_samples(target_ep.get("support_samples_info", []))
-                    query_samples = reconstruct_samples(target_ep.get("query_samples_info", []))
-                    
-                    support_and_query_samples = {
-                        "support": support_samples,
-                        "query": query_samples,
-                        "support_num_generated": len(support_samples),
-                        "query_num_generated": len(query_samples),
-                        "support_samples_info": target_ep.get("support_samples_info", []),
-                        "query_samples_info": target_ep.get("query_samples_info", []),
-                    }
+                        support_samples = reconstruct_samples(target_ep.get("support_samples_info", []))
+                        query_samples = reconstruct_samples(target_ep.get("query_samples_info", []))
+                        
+                        support_and_query_samples = {
+                            "support": support_samples,
+                            "query": query_samples,
+                            "support_num_generated": len(support_samples),
+                            "query_num_generated": len(query_samples),
+                            "support_samples_info": target_ep.get("support_samples_info", []),
+                            "query_samples_info": target_ep.get("query_samples_info", []),
+                        }
                 else:
                     if args.held_out_color_exp:
-                        support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, seed=seed)
+                        support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, pairing_index=args.potion_pairing_index, seed=seed)
                     else:
                         support_and_query_samples = generate_support_and_query_examples(
                             graph, 

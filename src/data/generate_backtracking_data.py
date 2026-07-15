@@ -140,7 +140,7 @@ def generate_backtracking_queries(
             for i in range(1, num_backtracks + 1):
                 curr = path_nodes[forward_hops - i + 1]
                 prev = path_nodes[forward_hops - i]
-                comp_potion = find_complementary_potion(graph, prev, curr)
+                comp_potion = find_complementary_potion(graph, prev, curr) # The function returns the potion that goes from 'curr' to 'prev' node.
                 if not comp_potion:
                     valid = False
                     break
