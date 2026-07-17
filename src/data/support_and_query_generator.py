@@ -12,7 +12,7 @@ import argparse
 import os
 import gzip
 import hashlib
-from typing import Dict, List, Tuple, Set, Any, Union
+from typing import Dict, List, Tuple, Set, Any, Union, Optional
 from tqdm import tqdm
 import pickle
 
@@ -436,8 +436,120 @@ def generate_held_out_color_pair_data(graph: Dict, num_held_out_edges, pairing_i
         "query_samples_info": [q[1] for q in query_transitions],
         "held_out_pair": held_out_pair
     }
-   
-    
+
+
+def get_non_complementary_color_pairs(pairing_index: int = 0) -> List[Tuple[str, str]]:
+    """
+    Returns all 12 valid pairs of potion colors that do NOT belong to the same axis.
+    """
+    color_pairs = get_color_pairs(pairing_index)
+    non_comp = []
+    axis_pairs = [(0, 1), (0, 2), (1, 2)]
+    for a1, a2 in axis_pairs:
+        for c1 in color_pairs[a1]:
+            for c2 in color_pairs[a2]:
+                pair = tuple(sorted([c1, c2]))
+                if pair not in non_comp:
+                    non_comp.append(pair)
+    return sorted(non_comp)
+
+
+def get_held_out_colors_for_episode(episode_id: str, seed: int = 0, pairing_index: int = 0) -> Tuple[str, str]:
+    """
+    Deterministically select a pair of non-complementary potion colors for a given episode.
+    Uses md5 hashing of (seed, episode_id) for process-independent reproducibility.
+    """
+    non_comp_pairs = get_non_complementary_color_pairs(pairing_index)
+    key = f"{seed}_{episode_id}".encode('utf-8')
+    hash_int = int(hashlib.md5(key).hexdigest(), 16)
+    idx = hash_int % len(non_comp_pairs)
+    return non_comp_pairs[idx]
+
+
+def generate_half_edge_held_out_data(
+    graph: Dict,
+    episode_id: str = "0",
+    seed: int = 0,
+    stage: str = "D1",
+    pairing_index: int = 0,
+    held_out_colors: Optional[Tuple[str, str]] = None
+) -> Dict[str, Any]:
+    """
+    Withhold a pair of potion colors that do NOT form a complementary pair.
+    Deterministically selects held-out colors for each episode.
+
+    In stage 'D1': transitions are split standardly into support (4 colors) and query (2 held-out colors).
+    In stage 'D2': the transition actions for the 2 held-out colors are swapped (c1 <-> c2),
+                  simulating the swapped axis/direction configuration for this chemistry.
+    """
+    if held_out_colors is None:
+        c1, c2 = get_held_out_colors_for_episode(episode_id, seed, pairing_index)
+    else:
+        c1, c2 = tuple(held_out_colors)
+
+    held_out_colors_set = {c1, c2}
+    support_transitions, query_transitions = [], []
+
+    for node_id, node_data in graph.items():
+        if not node_data.get("transitions"):
+            continue
+        for transition in node_data["transitions"]:
+            potion = transition["potion_color"]
+            next_node_id = transition["next_node_str"]
+            if next_node_id not in graph:
+                continue
+
+            # In D2, swap the potion label mapping between c1 and c2
+            if stage.upper() == "D2":
+                if potion == c1:
+                    effective_potion = c2
+                elif potion == c2:
+                    effective_potion = c1
+                else:
+                    effective_potion = potion
+            else:
+                effective_potion = potion
+
+            start_desc = get_stone_description(graph[node_id])
+            end_desc = get_stone_description(graph[next_node_id])
+            sample_str = f"{start_desc} {effective_potion} -> {end_desc}"
+            sample_info = {
+                "start_node": node_id,
+                "end_node": next_node_id,
+                "potions": [effective_potion],
+                "original_potion": potion
+            }
+            (query_transitions if effective_potion in held_out_colors_set
+             else support_transitions).append((sample_str, sample_info))
+
+    # Assert every held-out query has its inverse edge present in support
+    support_edge_set = {(info["start_node"], info["end_node"]) for _, info in support_transitions}
+    missing_inverses = [
+        (info["start_node"], info["end_node"])
+        for _, info in query_transitions
+        if (info["end_node"], info["start_node"]) not in support_edge_set
+    ]
+    assert not missing_inverses, (
+        f"{len(missing_inverses)} held-out query edges have no inverse edge in support "
+        f"(graph not complete?): {missing_inverses[:5]}"
+    )
+
+    random.shuffle(support_transitions)
+    random.shuffle(query_transitions)
+    return {
+        "support": [s for s, _ in support_transitions],
+        "query":   [s for s, _ in query_transitions],
+        "support_num_generated": len(support_transitions),
+        "query_num_generated": len(query_transitions),
+        "support_samples_info": [i for _, i in support_transitions],
+        "query_samples_info":   [i for _, i in query_transitions],
+        "held_out_colors": sorted([c1, c2]),
+        "stage": stage,
+        "episode_id": episode_id
+    }
+
+
+
 def generate_support_and_query_examples(
     graph: Dict, 
     num_samples: int, 
@@ -754,6 +866,12 @@ def main():
                         help="Number of edges to hold out for the held-out color pair experiment. Default is 4. Ignored if --held_out_color_exp is not set.")
     parser.add_argument("--regenerate_matched_held_out", action="store_true", default=False,
                         help="Regenerate the held-out color pair transitions even when matching episodes from target JSONs, instead of reconstructing original paths.")
+    parser.add_argument("--half_edge_held_out_exp", action="store_true", default=False,
+                        help="Generate data for the per-chemistry half-edge held-out experiment: "
+                             "deterministically selects a non-complementary pair of potion colors per chemistry.")
+    parser.add_argument("--half_edge_dataset_stage", type=str, default="D1", choices=["D1", "D2", "d1", "d2"],
+                        help="Dataset stage for half-edge held-out experiment: 'D1' (baseline held-out half-edge) "
+                             "or 'D2' (swaps potion directions for held-out colors per chemistry). Default is 'D1'.")
 
     parser.add_argument("--max_queries_per_start_node", type=int, default=10000,
                         help="Maximum number of query samples to generate per start node. Default is 6.")
@@ -1033,7 +1151,10 @@ def main():
             base_train = os.path.splitext(train_output_file)[0]
             ext_train = os.path.splitext(train_output_file)[1]
             
-            if args.held_out_color_exp:
+            if args.half_edge_held_out_exp:
+                stage_tag = args.half_edge_dataset_stage.upper()
+                train_output_file = f"{base_train}_half_edge_held_out_{stage_tag}_exp_seed_{seed}{ext_train}"
+            elif args.held_out_color_exp:
                 train_output_file = f"{base_train}_single_held_out_color_{args.num_held_out_edges}_edges_exp_seed_{seed}{ext_train}"
             else:
                 train_output_file = f"{base_train}_seed_{seed}{ext_train}"
@@ -1043,7 +1164,10 @@ def main():
             
             base_val = os.path.splitext(val_output_file)[0]
             ext_val = os.path.splitext(val_output_file)[1]
-            if args.held_out_color_exp:
+            if args.half_edge_held_out_exp:
+                stage_tag = args.half_edge_dataset_stage.upper()
+                val_output_file = f"{base_val}_half_edge_held_out_{stage_tag}_exp_seed_{seed}{ext_val}"
+            elif args.held_out_color_exp:
                 val_output_file = f"{base_val}_single_held_out_color_{args.num_held_out_edges}_edges_exp_seed_{seed}{ext_val}"
             else:
                 val_output_file = f"{base_val}_seed_{seed}{ext_val}"
@@ -1126,7 +1250,12 @@ def main():
                     # print(f"  WARNING: Requested samples ({args.samples_per_episode}) may exceed maximum possible unique query samples (~{max_unique_query}) for episode {episode_id}.")
                 
                 if (args.match_train_json or args.match_val_json) and episode_id in target_data.get('episodes', {}):
-                    if args.regenerate_matched_held_out and args.held_out_color_exp:
+                    if args.half_edge_held_out_exp:
+                        support_and_query_samples = generate_half_edge_held_out_data(
+                            graph, episode_id=episode_id, seed=seed,
+                            stage=args.half_edge_dataset_stage, pairing_index=args.potion_pairing_index
+                        )
+                    elif args.regenerate_matched_held_out and args.held_out_color_exp:
                         support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, pairing_index=args.potion_pairing_index, seed=seed)
                     else:
                         target_ep = target_data['episodes'][episode_id]
@@ -1173,7 +1302,12 @@ def main():
                             "query_samples_info": target_ep.get("query_samples_info", []),
                         }
                 else:
-                    if args.held_out_color_exp:
+                    if args.half_edge_held_out_exp:
+                        support_and_query_samples = generate_half_edge_held_out_data(
+                            graph, episode_id=episode_id, seed=seed,
+                            stage=args.half_edge_dataset_stage, pairing_index=args.potion_pairing_index
+                        )
+                    elif args.held_out_color_exp:
                         support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, pairing_index=args.potion_pairing_index, seed=seed)
                     else:
                         support_and_query_samples = generate_support_and_query_examples(
@@ -1208,9 +1342,7 @@ def main():
                         
                         
             # Write training output to JSON file
-            # Ensure the output directory exists
-            # args.output_dir = os.getcwd() + '/' + args.output_dir if not args.output_dir == '.' else args.output_dir
-            # os.makedirs(os.path.dirname(args.output_dir), exist_ok=True)
+            os.makedirs(args.output_dir, exist_ok=True)
             train_output_file = os.path.join(args.output_dir, train_output_file)
             with open(train_output_file, 'w') as f:
                 json.dump(train_output_data, f)
@@ -1267,7 +1399,12 @@ def main():
                 
                 
                 if (args.match_train_json or args.match_val_json) and episode_id in target_data.get('episodes', {}):
-                    if args.regenerate_matched_held_out and args.held_out_color_exp:
+                    if args.half_edge_held_out_exp:
+                        support_and_query_samples = generate_half_edge_held_out_data(
+                            graph, episode_id=episode_id, seed=seed,
+                            stage=args.half_edge_dataset_stage, pairing_index=args.potion_pairing_index
+                        )
+                    elif args.regenerate_matched_held_out and args.held_out_color_exp:
                         support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, pairing_index=args.potion_pairing_index, seed=seed)
                     else:
                         target_ep = target_data['episodes'][episode_id]
@@ -1314,7 +1451,12 @@ def main():
                             "query_samples_info": target_ep.get("query_samples_info", []),
                         }
                 else:
-                    if args.held_out_color_exp:
+                    if args.half_edge_held_out_exp:
+                        support_and_query_samples = generate_half_edge_held_out_data(
+                            graph, episode_id=episode_id, seed=seed,
+                            stage=args.half_edge_dataset_stage, pairing_index=args.potion_pairing_index
+                        )
+                    elif args.held_out_color_exp:
                         support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, pairing_index=args.potion_pairing_index, seed=seed)
                     else:
                         support_and_query_samples = generate_support_and_query_examples(

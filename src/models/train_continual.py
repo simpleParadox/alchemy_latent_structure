@@ -92,7 +92,16 @@ def parse_continual_args():
     parser.add_argument("--eval_train_stages", type=str, default="False",
                         choices=["True", "False"],
                         help="Whether to evaluate stages on training data. WARNING: Adds compute overhead.")
-                        
+
+    parser.add_argument("--potion_pairing_data_dir", type=str,
+                        default="chemistry_pickles/original_reward_potion_remap_generated_data",
+                        help="Directory (relative to src/data) holding generated JSONs for continual_mode='potion_pairing'. "
+                             "Override to point at a different potion-pairing dataset variant, e.g. "
+                             "'chemistry_pickles/half_edge_held_out_generated_data' for the half-edge held-out experiment.")
+    parser.add_argument("--potion_pairing_preprocessed_dir", type=str,
+                        default="chemistry_pickles/original_reward_potion_remap_preprocessed_data",
+                        help="Preprocessed-data directory (relative to src/data) paired with --potion_pairing_data_dir.")
+
     args = parser.parse_args()
     
     # Parse task_sequence into list of integers or strings
@@ -206,6 +215,13 @@ def main():
         save_dir_base = save_dir_base.replace("src/saved_models/", "src/saved_models/continual/")
     else:
         save_dir_base = os.path.join(save_dir_base, "continual")
+
+    if args.continual_mode == "potion_pairing" and "half_edge_held_out" in getattr(args, "potion_pairing_data_dir", ""):
+        # Tag the half-edge potion pairing experiment (CL_experiment_handoff.md) so its
+        # checkpoints are distinguishable from the old axis-varying potion_pairing runs,
+        # which fall through to the plain all_graphs/complete_graph branch below.
+        save_dir_base = os.path.join(save_dir_base, "half_edge_held_out")
+
     if args.is_held_out_color_exp == 'True' or args.is_held_out_color_exp is True:
         held_out_edge_match = re.search(r'_held_out_color_(\d+)_edges_exp', train_data_path_template)
         held_out_edge_number = held_out_edge_match.group(1) if held_out_edge_match else "1"
@@ -324,9 +340,9 @@ def main():
                 hop_length = str(task_val) # string "0", "1", etc.
                 pairing_idx = int(task_val)
                 
-                dir_name = "chemistry_pickles/original_reward_potion_remap_generated_data"
-                prep_dir = "chemistry_pickles/original_reward_potion_remap_preprocessed_data"
-                
+                dir_name = args.potion_pairing_data_dir
+                prep_dir = args.potion_pairing_preprocessed_dir
+
                 base_train = os.path.basename(train_data_path_template)
                 base_val = os.path.basename(val_data_path_template)
                 
@@ -497,8 +513,8 @@ def main():
                     elif args.continual_mode == "potion_pairing":
                         t_hop_length = str(t_val)
                         pairing_idx = int(t_val)
-                        dir_name = "chemistry_pickles/original_reward_potion_remap_generated_data"
-                        prep_dir = "chemistry_pickles/original_reward_potion_remap_preprocessed_data"
+                        dir_name = args.potion_pairing_data_dir
+                        prep_dir = args.potion_pairing_preprocessed_dir
                         base_val = os.path.basename(val_data_path_template)
                         t_val_path = os.path.join("src/data", dir_name, base_val)
                         t_preprocessed_dir = os.path.join("src/data", prep_dir)
