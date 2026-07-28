@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from activation_cache import ActivationCacheManager
+try:
+    from activation_cache import ActivationCacheManager
+except ImportError:
+    from src.mech_interp.activation_cache import ActivationCacheManager
 
 _printed_attn_shapes = set()
 

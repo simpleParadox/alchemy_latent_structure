@@ -63,6 +63,7 @@ COMPOSITION_METRICS: Tuple[str, ...] = (
 
 HELDOUT_METRICS: Tuple[str, ...] = (
     "predicted_in_context_accuracies",
+    "predicted_in_seven_stones_accuracies",
     "predicted_in_context_correct_half_accuracies",
     "predicted_in_context_correct_half_exact_accuracies",
     "predicted_in_context_other_half_accuracies",
@@ -78,15 +79,16 @@ DECOMPOSITION_METRICS: Tuple[str, ...] = (
 
 # Custom colors per metric (used in default mode).
 METRIC_COLORS: Dict[str, str] = {
-    "predicted_in_context_accuracies": "orange",
+    "predicted_in_context_accuracies": "tab:blue",
+    "predicted_in_seven_stones_accuracies": "tab:pink",
     "predicted_in_context_correct_candidate_accuracies": "purple",
-    "correct_within_candidates": "blue",
-    "predicted_in_context_correct_half_accuracies": "orange",
-    "predicted_in_context_correct_half_exact_accuracies": "green", # Change this based on the hop length.
-    "predicted_in_context_other_half_accuracies": "red",
+    "correct_within_candidates": "tab:blue",
+    "predicted_in_context_correct_half_accuracies": "tab:orange",
+    "predicted_in_context_correct_half_exact_accuracies": "tab:green", # Change this based on the hop length.
+    "predicted_in_context_other_half_accuracies": "tab:red",
 
-    "predicted_in_adjacent_and_correct_half_accuracies": "cyan",
-    "predicted_correct_half_within_adjacent_and_correct_half_accuracies": "pink",
+    "predicted_in_adjacent_and_correct_half_accuracies": "tab:cyan",
+    "predicted_correct_half_within_adjacent_and_correct_half_accuracies": "tab:pink",
 }
 
 # Display labels
@@ -105,6 +107,7 @@ CUSTOM_METRICS: Dict[str, Dict[str, str]] = {
     },
     "held_out": {
         "predicted_in_context_accuracies": "P(A) (8 out of 108)",
+        "predicted_in_seven_stones_accuracies": "P(Z) (7 out of 108)",
         "predicted_in_context_correct_half_accuracies": "P(B | A) (4 out of 8)",
         "predicted_in_context_other_half_accuracies": "1 - P(B|A) (4 out of 8)",
         "predicted_in_context_correct_half_exact_accuracies": "P(C|A ∩ B) (1 out of 4)",

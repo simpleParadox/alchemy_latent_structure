@@ -8,6 +8,8 @@ import re
 from unittest.mock import patch, MagicMock
 from functools import partial
 
+import torch
+
 # Add project root to sys.path to allow imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
@@ -485,5 +487,60 @@ class TestDistributedEvaluation(unittest.TestCase):
         metrics_multi = unpack_metrics(reduced_tensor_multi)
         self.assertEqual(metrics_single, metrics_multi)
 
+class TestContinualPatchingAndCheckpointing(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_find_continual_checkpoints_discovery_and_sorting(self):
+        """Verify find_continual_checkpoints accurately extracts metadata, global_epoch, and sorts files chronologically."""
+        from src.mech_interp.composition_trajectory_pairs import find_continual_checkpoints
+        
+        # Create nested cycle/task checkpoint subdirectories and mock .pt files
+        task0_dir = os.path.join(self.temp_dir, "checkpoints", "cycle_1_task_0_hop_2")
+        task1_dir = os.path.join(self.temp_dir, "checkpoints", "cycle_1_task_1_hop_3")
+        cycle2_dir = os.path.join(self.temp_dir, "checkpoints", "cycle_2_task_0_hop_2")
+        
+        os.makedirs(task0_dir, exist_ok=True)
+        os.makedirs(task1_dir, exist_ok=True)
+        os.makedirs(cycle2_dir, exist_ok=True)
+        
+        # Write dummy torch checkpoints with continual_meta
+        ckpt_files = [
+            (os.path.join(task0_dir, "epoch_0.pt"), {"global_epoch": 0, "cycle_idx": 1, "task_idx": 0}),
+            (os.path.join(task0_dir, "epoch_1.pt"), {"global_epoch": 1, "cycle_idx": 1, "task_idx": 0}),
+            (os.path.join(task1_dir, "epoch_0.pt"), {"global_epoch": 2, "cycle_idx": 1, "task_idx": 1}),
+            (os.path.join(cycle2_dir, "epoch_0.pt"), {"global_epoch": 3, "cycle_idx": 2, "task_idx": 0}),
+        ]
+        
+        for path, meta in ckpt_files:
+            torch.save({"continual_meta": meta, "model_state_dict": {}}, path)
+            
+        found = find_continual_checkpoints(self.temp_dir)
+        self.assertEqual(len(found), 4)
+        # Verify chronological ordering by global epoch
+        global_epochs_found = [r[0] for r in found]
+        paths_found = [r[1] for r in found]
+        self.assertEqual(global_epochs_found, [0, 1, 2, 3])
+        self.assertEqual(paths_found[0], os.path.join(task0_dir, "epoch_0.pt"))
+        self.assertEqual(paths_found[3], os.path.join(cycle2_dir, "epoch_0.pt"))
+
+    def test_multi_hop_val_path_substitution(self):
+        """Verify that qhop regex substitution correctly resolves validation paths for hops 2, 3, 4, and 5."""
+        base_val_path = "src/data/subsampled/compositional_chemistry_samples_val_shop_1_qhop_2_seed_0_data.pkl"
+        eval_hops = [2, 3, 4, 5]
+        expected_paths = [
+            "src/data/subsampled/compositional_chemistry_samples_val_shop_1_qhop_2_seed_0_data.pkl",
+            "src/data/subsampled/compositional_chemistry_samples_val_shop_1_qhop_3_seed_0_data.pkl",
+            "src/data/subsampled/compositional_chemistry_samples_val_shop_1_qhop_4_seed_0_data.pkl",
+            "src/data/subsampled/compositional_chemistry_samples_val_shop_1_qhop_5_seed_0_data.pkl",
+        ]
+        
+        resolved_paths = [re.sub(r'qhop_\d+', f'qhop_{h}', base_val_path) for h in eval_hops]
+        self.assertEqual(resolved_paths, expected_paths)
+
 if __name__ == "__main__":
     unittest.main()
+

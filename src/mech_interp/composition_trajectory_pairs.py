@@ -6,7 +6,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from src.models.models import StoneStateDecoderClassifier
-from patching_utils import split_support_query, decode_sequence, compute_patching_score_batched
+try:
+    from patching_utils import split_support_query, decode_sequence, compute_patching_score_batched
+except ImportError:
+    from src.mech_interp.patching_utils import split_support_query, decode_sequence, compute_patching_score_batched
 from tqdm import tqdm
 from collections import defaultdict
 import itertools
@@ -263,6 +266,51 @@ def run_full_sweep(model, all_pairs, input_word2idx, setup='noising', patch_mlp=
     
     return results
 
+def find_continual_checkpoints(checkpoint_dir, epoch_range=None):
+    import glob, re
+    pt_files = glob.glob(os.path.join(checkpoint_dir, "**/*.pt"), recursive=True)
+    if not pt_files:
+        pt_files = glob.glob(os.path.join(checkpoint_dir, "*.pt"))
+        
+    records = []
+    for f in pt_files:
+        cycle_idx, task_idx, epoch_idx, global_epoch = 0, 0, 0, None
+        m_cycle = re.search(r'cycle_(\d+)', f)
+        m_task = re.search(r'task_(\d+)', f)
+        m_epoch = re.search(r'epoch_(\d+)', os.path.basename(f))
+        
+        if m_cycle:
+            cycle_idx = int(m_cycle.group(1))
+        if m_task:
+            task_idx = int(m_task.group(1))
+        if m_epoch:
+            epoch_idx = int(m_epoch.group(1))
+            
+        try:
+            cp = torch.load(f, map_location='cpu', weights_only=False)
+            meta = cp.get('continual_meta', {})
+            if 'global_epoch' in meta:
+                global_epoch = meta['global_epoch']
+            if 'cycle_idx' in meta:
+                cycle_idx = meta['cycle_idx']
+            if 'task_idx' in meta:
+                task_idx = meta['task_idx']
+        except Exception:
+            pass
+            
+        if global_epoch is None:
+            global_epoch = cycle_idx * 10000 + task_idx * 1000 + epoch_idx
+            
+        if epoch_range:
+            start_ep, end_ep = map(int, epoch_range.split('-'))
+            if not (start_ep <= global_epoch <= end_ep):
+                continue
+                
+        records.append((global_epoch, cycle_idx, task_idx, epoch_idx, f))
+        
+    records.sort(key=lambda r: (r[0], r[1], r[2], r[3]))
+    return [(r[0], r[4]) for r in records]
+
 def main():
     parser = argparse.ArgumentParser(description="Composition Task Activation Patching Experiments")
     parser.add_argument("--experiment", type=str, required=True, choices=["last_potion", "query_stone"],
@@ -277,15 +325,28 @@ def main():
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--overlap_strategy", type=str, default="subtract", choices=["disjoint", "subtract", "allow"],
                         help="How to handle overlapping reachable sets in Exp 2. Default is subtract (remove intersection).")
+    parser.add_argument("--continual", type=str, default="False", choices=["True", "False"],
+                        help="Set to True if running patching on continual learning checkpoints.")
+    parser.add_argument("--sweep_all_hops", type=str, default="False", choices=["True", "False"],
+                        help="Set to True to evaluate on all validation hop lengths (2,3,4,5) for every checkpoint.")
     
     args = parser.parse_args()
     args.calibration_exp = str(args.calibration_exp).lower() == "true"
     args.patch_mlp = str(args.patch_mlp).lower() == "true"
+    args.continual = str(args.continual).lower() == "true"
+    args.sweep_all_hops = str(args.sweep_all_hops).lower() == "true"
     
     import glob, re
     
     checkpoint_dir = args.checkpoint_path if os.path.isdir(args.checkpoint_path) else os.path.dirname(args.checkpoint_path)
-    if os.path.isdir(args.checkpoint_path):
+    
+    if args.continual:
+        epoch_files = find_continual_checkpoints(checkpoint_dir, args.epoch_range)
+        if not epoch_files:
+            print(f"Error: No continual checkpoints found in directory {checkpoint_dir}")
+            return
+        args.checkpoint_path = epoch_files[-1][1]
+    elif os.path.isdir(args.checkpoint_path):
         pt_files = glob.glob(os.path.join(checkpoint_dir, "best_model_epoch_*_classification_xsmall.pt"))
         if not pt_files:
             print(f"Error: No checkpoints found in directory {checkpoint_dir}")
@@ -303,10 +364,6 @@ def main():
         print(f"Error: Could not locate data or vocab pickle files.")
         return
         
-    print(f"Loading validation data from: {args.val_data}")
-    with open(args.val_data, 'rb') as f:
-        dataset = pickle.load(f)
-        
     print(f"Loading vocabulary from: {vocab_path}")
     with open(vocab_path, 'rb') as f:
         vocab_data = pickle.load(f)
@@ -314,18 +371,37 @@ def main():
     input_word2idx = vocab_data.get('input_word2idx', vocab_data.get('word2idx'))
     idx2word = {v: k for k, v in input_word2idx.items()}
 
-    print(f"\nBuilding {args.experiment} pairs...")
-    if args.experiment == 'last_potion':
-        pairs = build_last_potion_pairs(dataset, input_word2idx, max_pairs=args.max_pairs)
+    # Build validation datasets (single or multi-hop sweep)
+    val_datasets_by_hop = {}
+    if args.sweep_all_hops:
+        eval_hops = [2, 3, 4, 5]
+        for h in eval_hops:
+            h_data_path = re.sub(r'qhop_\d+', f'qhop_{h}', args.val_data)
+            if os.path.exists(h_data_path):
+                print(f"Loading Hop {h} validation data from: {h_data_path}")
+                with open(h_data_path, 'rb') as f:
+                    ds = pickle.load(f)
+                h_pairs = build_last_potion_pairs(ds, input_word2idx, max_pairs=args.max_pairs) if args.experiment == 'last_potion' else build_query_stone_pairs(ds, input_word2idx, max_pairs=args.max_pairs)
+                val_datasets_by_hop[h] = h_pairs
+            else:
+                print(f"Warning: Validation data path for hop {h} not found at {h_data_path}")
     else:
-        pairs = build_query_stone_pairs(dataset, input_word2idx, max_pairs=args.max_pairs)
-        
-    print(f"Successfully generated {len(pairs)} pairs.")
+        print(f"Loading validation data from: {args.val_data}")
+        with open(args.val_data, 'rb') as f:
+            dataset = pickle.load(f)
+        pairs = build_last_potion_pairs(dataset, input_word2idx, max_pairs=args.max_pairs) if args.experiment == 'last_potion' else build_query_stone_pairs(dataset, input_word2idx, max_pairs=args.max_pairs)
+        match_h = re.search(r'qhop_(\d+)', args.val_data)
+        h_idx = int(match_h.group(1)) if match_h else 2
+        val_datasets_by_hop[h_idx] = pairs
+
+    first_hop_key = list(val_datasets_by_hop.keys())[0]
+    sample_pairs = val_datasets_by_hop[first_hop_key]
+    print(f"Successfully generated pairs across {len(val_datasets_by_hop)} evaluation dataset(s).")
     
-    num_to_print = min(3, len(pairs))
-    print(f"\n--- Printing {num_to_print} sample pairs for manual inspection ---")
+    num_to_print = min(3, len(sample_pairs))
+    print(f"\n--- Printing {num_to_print} sample pairs (Hop {first_hop_key}) for manual inspection ---")
     for idx in range(num_to_print):
-        clean_tensor, corrupt_tensor, target_class_id, t_clean_ids, t_corrupt_ids = pairs[idx]
+        clean_tensor, corrupt_tensor, target_class_id, t_clean_ids, t_corrupt_ids = sample_pairs[idx]
         print(f"\nPair {idx + 1}:")
         print(f"  Target Class ID: {target_class_id}")
         print(f"  Clean Targets: {t_clean_ids}")
@@ -359,8 +435,7 @@ def main():
 
     if args.calibration_exp:
         print("\n--- Running Calibration Experiment ---")
-        # Just use a tiny subset for calibration
-        calib_pairs = pairs[:args.batch_size*2] if len(pairs) > args.batch_size*2 else pairs
+        calib_pairs = sample_pairs[:args.batch_size*2] if len(sample_pairs) > args.batch_size*2 else sample_pairs
         
         sum_scores_clean_softmax = 0.0
         sum_scores_clean_lse = 0.0
@@ -405,53 +480,61 @@ def main():
         print(f"Mean Score for Clean-on-Clean patching (Softmax): {sum_scores_clean_softmax/N:.6f}")
         print(f"Mean Score for Clean-on-Clean patching (LSE): {sum_scores_clean_lse/N:.6f}")
 
-    if args.epoch_range:
-        try:
-            start_ep, end_ep = map(int, args.epoch_range.split('-'))
-        except ValueError:
-            print("Invalid epoch_range format.")
-            return
-            
-        pt_files = glob.glob(os.path.join(checkpoint_dir, "best_model_epoch_*_classification_xsmall.pt"))
-        epoch_files = []
-        for f in pt_files:
-            m = re.search(r'best_model_epoch_(\d+)_', os.path.basename(f))
-            if m:
-                ep = int(m.group(1))
-                if start_ep <= ep <= end_ep:
-                    epoch_files.append((ep, f))
-        epoch_files.sort()
-    else:
-        m = re.search(r'best_model_epoch_(\d+)_', os.path.basename(args.checkpoint_path))
-        ep = int(m.group(1)) if m else 0
-        epoch_files = [(ep, args.checkpoint_path)]
+    if not args.continual:
+        if args.epoch_range:
+            try:
+                start_ep, end_ep = map(int, args.epoch_range.split('-'))
+            except ValueError:
+                print("Invalid epoch_range format.")
+                return
+                
+            pt_files = glob.glob(os.path.join(checkpoint_dir, "best_model_epoch_*_classification_xsmall.pt"))
+            epoch_files = []
+            for f in pt_files:
+                m = re.search(r'best_model_epoch_(\d+)_', os.path.basename(f))
+                if m:
+                    ep = int(m.group(1))
+                    if start_ep <= ep <= end_ep:
+                        epoch_files.append((ep, f))
+            epoch_files.sort()
+        else:
+            m = re.search(r'best_model_epoch_(\d+)_', os.path.basename(args.checkpoint_path))
+            ep = int(m.group(1)) if m else 0
+            epoch_files = [(ep, args.checkpoint_path)]
         
     print(f"\nFound {len(epoch_files)} checkpoints to process.")
     
-    all_epochs_results = {}
-    rel_match = re.search(r'saved_models/(.*?init_seed_\d+)', args.checkpoint_path)
+    all_hop_results = {h: {} for h in val_datasets_by_hop.keys()}
+    rel_match = re.search(r'saved_models/(.*?)(?:/init_seed_\d+|$)', args.checkpoint_path)
     suffix = rel_match.group(1) if rel_match else "default_run"
+    if rel_match and 'init_seed_' in args.checkpoint_path:
+        init_seed_match = re.search(r'(init_seed_\d+)', args.checkpoint_path)
+        if init_seed_match:
+            suffix = os.path.join(suffix, init_seed_match.group(1))
             
-    base_save_dir = f"/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/mech_interp_results/composition/{suffix}/unidirectional/{args.experiment}"
+    base_save_dir = f"/home/rsaha/projects/aip-afyshe/rsaha/dm_alchemy/mech_interp_results/{suffix}/unidirectional/{args.experiment}"
     os.makedirs(base_save_dir, exist_ok=True)
     
-    out_pkl_path = os.path.join(base_save_dir, f"layer_head_sweep_results_{args.setup}.pkl")
-    if args.epoch_range:
-        out_pkl_path = os.path.join(base_save_dir, f"layer_head_sweep_results_epochs_{args.epoch_range}_{args.setup}.pkl")
-        
     for epoch, cp_path in epoch_files:
-        print(f"\n=== Processing Epoch {epoch} ===")
-        if len(epoch_files) > 1:
-            checkpoint = torch.load(cp_path, map_location='cpu', weights_only=False)
-            model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
-            model.eval()
-            
-        sweep_results = run_full_sweep(model, pairs, input_word2idx, setup=args.setup, patch_mlp=args.patch_mlp, batch_size=args.batch_size, experiment_type=args.experiment, overlap_strategy=args.overlap_strategy)
-        all_epochs_results[epoch] = sweep_results
+        print(f"\n=== Processing Checkpoint Epoch/Global-Epoch {epoch} ({os.path.basename(cp_path)}) ===")
+        checkpoint = torch.load(cp_path, map_location='cpu', weights_only=False)
+        model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
+        model.eval()
         
-    with open(out_pkl_path, 'wb') as f:
-        pickle.dump(all_epochs_results, f)
-    print(f"\nResults saved to {out_pkl_path}")
+        for h, h_pairs in val_datasets_by_hop.items():
+            print(f"  --> Running activation patching on Hop {h} validation dataset ({len(h_pairs)} pairs)...")
+            sweep_results = run_full_sweep(model, h_pairs, input_word2idx, setup=args.setup, patch_mlp=args.patch_mlp, batch_size=args.batch_size, experiment_type=args.experiment, overlap_strategy=args.overlap_strategy)
+            all_hop_results[h][epoch] = sweep_results
+
+    for h, h_results in all_hop_results.items():
+        out_pkl_path = os.path.join(base_save_dir, f"layer_head_sweep_results_{args.setup}_eval_hop_{h}.pkl")
+        if args.epoch_range:
+            out_pkl_path = os.path.join(base_save_dir, f"layer_head_sweep_results_epochs_{args.epoch_range}_{args.setup}_eval_hop_{h}.pkl")
+            
+        with open(out_pkl_path, 'wb') as f:
+            pickle.dump(h_results, f)
+        print(f"\nSaved sweep results for evaluation hop {h} ({len(h_results)} checkpoints) to {out_pkl_path}")
 
 if __name__ == "__main__":
     main()
+

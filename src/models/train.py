@@ -362,6 +362,8 @@ def build_parser():
     
     parser.add_argument("--save_checkpoints", type=str, default="False", choices=["True", "False"],
                         help="Whether to save model checkpoints during training. Default is True.")
+    parser.add_argument("--predictions_dir_name", type=str, default="predictions",
+                        help="Subfolder under save_dir where predictions will be stored. Default is 'predictions'.")
     parser.add_argument("--is_held_out_color_exp", type=str, default="False", choices=["True", "False"],
                         help="Whether the dataset is a held-out color experiment. Default is True.")
     parser.add_argument("--prediction_type", type=str, default="default", choices=["default", "feature", "autoregressive"],
@@ -1321,7 +1323,8 @@ def validate_epoch(model, dataloader, criterion, accelerator, epoch_num, pad_tok
 
 def _save_validation_predictions(all_predictions, all_targets, all_encoder_inputs, args, epoch_num, pad_token_id):
     """Helper function to save predictions to disk."""
-    predictions_dir = os.path.join(args.save_dir, "predictions")
+    predictions_dirname = getattr(args, "predictions_dir_name", "predictions")
+    predictions_dir = os.path.join(args.save_dir, predictions_dirname)
     if not os.path.exists(predictions_dir):
         os.makedirs(predictions_dir)
     

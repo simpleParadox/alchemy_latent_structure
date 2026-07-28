@@ -1748,6 +1748,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
     # Initialize accumulators for averaging
     predicted_in_context_accuracies = []
+    predicted_in_seven_stones_accuracies = []
     predicted_in_context_correct_half_accuracies = []
     predicted_in_context_other_half_accuracies = []
     predicted_in_context_correct_half_exact_accuracies = []
@@ -1786,6 +1787,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
         within_class_total = 0
 
         predicted_in_context_count = 0
+        predicted_in_seven_stones_count = 0
         correct_half_chemistry_count = 0
 
         predicted_correct_within_context_count = 0
@@ -1937,6 +1939,11 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
                 predicted_in_context_count += 1
                 per_epoch_in_support_samples_per_reward_bin[query_start_stone_reward] += 1
 
+                if exp_typ == 'held_out':
+                    seven_stones_set = combined_set - {query_stone_id}
+                    if predicted_class_id in seven_stones_set:
+                        predicted_in_seven_stones_count += 1
+
                 if exp_typ == 'decomposition':
                     # Reward-adjacency mapping for 1-hop transitions.
                     # Reward bins use {'-3', '-1', '1', '3'} where '3' corresponds to +15.
@@ -2001,6 +2008,9 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
         predicted_in_context_accuracy = predicted_in_context_count / total if total > 0 else 0
         predicted_in_context_accuracies.append(predicted_in_context_accuracy)
+
+        predicted_in_seven_stones_accuracy = predicted_in_seven_stones_count / total if total > 0 else 0
+        predicted_in_seven_stones_accuracies.append(predicted_in_seven_stones_accuracy)
 
         predicted_in_context_correct_half_accuracy = correct_half_chemistry_count / predicted_in_context_count if predicted_in_context_count > 0 else 0
         predicted_in_context_correct_half_accuracies.append(predicted_in_context_correct_half_accuracy)
@@ -2124,6 +2134,7 @@ def analyze_half_chemistry_behaviour(data, vocab, stone_state_to_id, predictions
 
     return (
         predicted_in_context_accuracies,
+        predicted_in_seven_stones_accuracies,
         predicted_in_context_correct_half_accuracies,
         predicted_in_context_other_half_accuracies,
         predicted_in_context_correct_half_exact_accuracies,
@@ -3039,6 +3050,7 @@ if __name__ == "__main__":
         else:
             (
                 predicted_in_context_accuracies,
+                predicted_in_seven_stones_accuracies,
                 predicted_in_context_correct_half_accuracies,
                 predicted_in_context_other_half_accuracies,
                 predicted_in_context_correct_half_exact_accuracies,
@@ -3057,6 +3069,7 @@ if __name__ == "__main__":
             # Store results for this seed
             seed_results[seed] = {
                 'predicted_in_context_accuracies': predicted_in_context_accuracies,
+                'predicted_in_seven_stones_accuracies': predicted_in_seven_stones_accuracies,
                 'predicted_in_context_correct_half_accuracies': predicted_in_context_correct_half_accuracies,
                 'predicted_in_context_other_half_accuracies': predicted_in_context_other_half_accuracies,
                 'predicted_in_context_correct_half_exact_accuracies': predicted_in_context_correct_half_exact_accuracies,
@@ -3137,7 +3150,7 @@ if __name__ == "__main__":
         if args.reward_binning_analysis_only:
             metrics = ['complete_query_stone_state_per_reward_binned_accuracy', 'within_support_query_stone_state_per_reward_binned_accuracy', 'within_support_within_half_query_stone_state_per_reward_binned_accuracy']
     elif exp_typ == 'held_out':
-        metrics = ['predicted_in_context_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108']
+        metrics = ['predicted_in_context_accuracies', 'predicted_in_seven_stones_accuracies', 'predicted_in_context_correct_half_accuracies', 'predicted_in_context_other_half_accuracies', 'predicted_in_context_correct_half_exact_accuracies', 'predicted_correct_within_context', 'predicted_exact_out_of_all_108']
         if args.reward_binning_analysis_only:
             metrics = ['complete_query_stone_state_per_reward_binned_accuracy', 'within_support_query_stone_state_per_reward_binned_accuracy', 'within_support_within_half_query_stone_state_per_reward_binned_accuracy']
     else:

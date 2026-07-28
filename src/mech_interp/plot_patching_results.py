@@ -61,7 +61,7 @@ def load_all_results(results_dir: str, setup: str) -> dict:
     """
     SCALAR_KEYS = {"softmax_mean", "lse_mean", "raw_lse_mean"}
 
-    pattern = os.path.join(results_dir, f"layer_head_sweep_results_epochs_*_{setup}.pkl")
+    pattern = os.path.join(results_dir, f"*layer_head_sweep_results*{setup}*.pkl")
     pkl_files = sorted(glob.glob(pattern))
 
     if not pkl_files:

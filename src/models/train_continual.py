@@ -967,6 +967,35 @@ def main():
                 
                 # Increment global epoch counter after logging
                 global_epoch_counter += 1
+                
+                # Save epoch-wise checkpoint if enabled
+                if getattr(args, "save_checkpoints", False) and accelerator.is_local_main_process:
+                    unwrapped_model = accelerator.unwrap_model(model)
+                    epoch_checkpoint = {
+                        'task_idx': task_idx,
+                        'hop_length': hop_length,
+                        'model_state_dict': unwrapped_model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'args': args,
+                        'src_vocab_word2idx': train_dataset.word2idx,
+                        'src_vocab_idx2word': train_dataset.idx2word,
+                        'continual_meta': {
+                            'run_type': 'continual',
+                            'cycle_idx': cycle_idx,
+                            'task_idx': task_idx,
+                            'hop_length': hop_length,
+                            'epoch_within_task': epoch,
+                            'global_epoch': global_epoch_counter - 1
+                        }
+                    }
+                    if scheduler is not None:
+                        epoch_checkpoint['scheduler_state_dict'] = scheduler.state_dict()
+                    
+                    checkpoints_dir = os.path.join(continual_save_dir, "checkpoints", f"cycle_{cycle_idx}_task_{task_idx}_{task_identifier_str}")
+                    os.makedirs(checkpoints_dir, exist_ok=True)
+                    epoch_ckpt_path = os.path.join(checkpoints_dir, f"epoch_{epoch}.pt")
+                    torch.save(epoch_checkpoint, epoch_ckpt_path)
+                    print(f"Saved epoch checkpoint to {epoch_ckpt_path}")
                         
                 torch.cuda.empty_cache()
                 gc.collect()

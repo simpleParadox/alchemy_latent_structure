@@ -550,14 +550,49 @@ def generate_half_edge_held_out_data(
 
 
 
+def _round_robin_select_by_end_state(
+    trajectories: List[Tuple[str, Dict]],
+    quota: int,
+) -> List[Tuple[str, Dict]]:
+    """Select up to `quota` trajectories from a single start node's trajectory list,
+    round-robining across end-state groups (shuffled within and across groups) so the
+    selection is stratified by end state rather than biased toward whichever end state
+    happens to have the most paths."""
+    trajectories_by_end_state: Dict[str, List[Tuple[str, Dict]]] = {}
+    for s_str, s_info in trajectories:
+        trajectories_by_end_state.setdefault(s_info["end_node"], []).append((s_str, s_info))
+
+    for group in trajectories_by_end_state.values():
+        random.shuffle(group)
+
+    end_states = list(trajectories_by_end_state.keys())
+    random.shuffle(end_states)
+
+    selected: List[Tuple[str, Dict]] = []
+    idx = 0
+    while len(selected) < quota and end_states:
+        current_end_state = end_states[idx % len(end_states)]
+        group = trajectories_by_end_state[current_end_state]
+        if not group:
+            end_states.remove(current_end_state)
+            if end_states and idx >= len(end_states):
+                idx = 0
+            continue
+        selected.append(group.pop())
+        idx += 1
+
+    return selected
+
+
 def generate_support_and_query_examples(
-    graph: Dict, 
-    num_samples: int, 
-    support_hop_length: int = 1, 
+    graph: Dict,
+    num_samples: int,
+    support_hop_length: int = 1,
     query_hop_length: int = 1,
     shuffle_support: bool = False,
-    max_queries_per_start_node: int = 10000
-    
+    max_queries_per_start_node: int = 10000,
+    support_samples_per_start_node: Optional[int] = None,
+
 ) -> Dict[str, Any]:  # Corrected return type hint
     """Generate a set of random samples from a single episode's chemistry graph."""
     samples = []
@@ -592,7 +627,14 @@ def generate_support_and_query_examples(
 
         random.shuffle(potential_support_trajectories)
 
-        for s_str, s_info in potential_support_trajectories:
+        if support_samples_per_start_node is None:
+            candidate_trajectories = potential_support_trajectories
+        else:
+            candidate_trajectories = _round_robin_select_by_end_state(
+                potential_support_trajectories, support_samples_per_start_node
+            )
+
+        for s_str, s_info in candidate_trajectories:
             if len(samples) >= num_samples:
                 print("This condition is not supposed to be true but it happened here so might be worth investigating.")
                 break
@@ -608,8 +650,8 @@ def generate_support_and_query_examples(
 
             # Record the start node encountered in support
             support_start_nodes.add(s_info["start_node"])
-            
-            
+
+
     # Shuffle support samples if requested (for decompositional tasks)
     if shuffle_support:
         random.shuffle(samples)
@@ -830,14 +872,17 @@ def main():
     parser = argparse.ArgumentParser(description="Generate samples from chemistry graph")
     # parser.add_argument("--input", default="/home/rsaha/projects/dm_alchemy/src/data/deterministic_chemistries_167424_80_unique_stones_aligned_stone.json.gz",
     #                     help="Path to the chemistry graph JSON file")
-    parser.add_argument("--input", 
+    parser.add_argument("--input",
                         # default="/home/rsaha/projects/dm_alchemy/src/data/enhanced_chemistries_with_transitions.pkl",
-                        default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/chemistry_pickles/original_reward_mapping_potion_remaps/potion_remapping_1_original_reward_remapping_with_transitions.pkl"
-                        ) # Enhanced chemistries contain the transitions that are unique in nature (all the chemistries are being operated on the perceived chemistry).
+                        default="/home/rsaha/projects/def-afyshe-ab/rsaha/dm_alchemy/src/data/chemistry_pickles/original_reward_mapping_potion_remaps/potion_remapping_0_original_reward_remapping_with_transitions.pkl"
+                        ) # Enhanced chemistries contain the transitions that are unique in nature (all the chemistries are being operated on the perceived chemistry). Index 0 matches the potion pairing used by the paper's baseline composition checkpoints (RED/GREEN, ORANGE/YELLOW, PINK/CYAN).
     parser.add_argument("--output", default="chemistry_samples_167424_80_unique_stones.json",
                         help="Output JSON file path for generated samples")
     parser.add_argument("--samples_per_episode", type=int, default=10000,
                         help="Number of samples to generate for each episode")
+    parser.add_argument("--support_samples_per_start_node", type=int, default=None,
+                        help="If set, sample exactly this many support trajectories per start node "
+                             "(stratified by end state). Default None = full enumeration (current behaviour).")
     parser.add_argument("--support_steps", type=int, default=2,
                         help="Minimum number of transformation steps in each sample")
     parser.add_argument("--query_steps", type=int, default=1,
@@ -1311,12 +1356,13 @@ def main():
                         support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, pairing_index=args.potion_pairing_index, seed=seed)
                     else:
                         support_and_query_samples = generate_support_and_query_examples(
-                            graph, 
+                            graph,
                             args.samples_per_episode,
                             args.support_steps,
                             args.query_steps,
                             args.shuffle_support,
-                            args.max_queries_per_start_node
+                            args.max_queries_per_start_node,
+                            support_samples_per_start_node=args.support_samples_per_start_node
                         )
                 
                 # Store the episode samples
@@ -1460,12 +1506,13 @@ def main():
                         support_and_query_samples = generate_held_out_color_pair_data(graph, args.num_held_out_edges, pairing_index=args.potion_pairing_index, seed=seed)
                     else:
                         support_and_query_samples = generate_support_and_query_examples(
-                            graph, 
+                            graph,
                             args.samples_per_episode,
                             args.support_steps,
                             args.query_steps,
                             args.shuffle_support,
-                            max_queries_per_start_node=args.max_queries_per_start_node
+                            max_queries_per_start_node=args.max_queries_per_start_node,
+                            support_samples_per_start_node=args.support_samples_per_start_node
                         )
                 
                 # Store the episode samples
