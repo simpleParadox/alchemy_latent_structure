@@ -518,6 +518,14 @@ def main():
     val_shop = val_hop_match.group(1) if val_hop_match else "?"
     val_qhop = val_hop_match.group(2) if val_hop_match else "?"
 
+    val_filename = os.path.splitext(os.path.basename(args.val_data_path))[0]
+    val_filename = re.sub(r"_seed_\d+$", "", val_filename)
+
+    if "backtrack" in val_filename:
+        folder_name = f"val_predictions_{val_filename}"
+    else:
+        folder_name = f"val_predictions_shop_{val_shop}_qhop_{val_qhop}"
+
     ckpt_hop_match = re.search(r"shop_(\d+)_qhop_(\d+)", args.checkpoint_dir)
     ckpt_shop = ckpt_hop_match.group(1) if ckpt_hop_match else "?"
     ckpt_qhop = ckpt_hop_match.group(2) if ckpt_hop_match else "?"
@@ -525,7 +533,7 @@ def main():
     # Build a save_dir for predictions
     args.save_dir = os.path.join(
         args.checkpoint_dir,
-        f"val_predictions_shop_{val_shop}_qhop_{val_qhop}",
+        folder_name,
     )
     if args.ablation_type is not None:
         args.save_dir += f"_ablation_{args.ablation_type}"
